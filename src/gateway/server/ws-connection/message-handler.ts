@@ -1181,7 +1181,13 @@ export function attachGatewayWsMessageHandler(params: {
         return;
       }
       const req = parsed;
-      logWs("in", "req", { connId, id: req.id, method: req.method });
+      logWs("in", "req", {
+        connId,
+        id: req.id,
+        method: req.method,
+        role: client.connect.role,
+        payload: req.params,
+      });
       const respond = (
         ok: boolean,
         payload?: unknown,
@@ -1221,6 +1227,8 @@ export function attachGatewayWsMessageHandler(params: {
           id: req.id,
           ok,
           method: req.method,
+          role: client.connect.role,
+          payload: ok ? payload : undefined,
           errorCode: error?.code,
           errorMessage: error?.message,
           ...logMeta,

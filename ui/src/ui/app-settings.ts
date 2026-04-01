@@ -21,6 +21,7 @@ import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadProtocolTraces } from "./controllers/protocol-monitor.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
 import { loadUsage } from "./controllers/usage.ts";
@@ -293,6 +294,11 @@ export async function refreshActiveTab(host: SettingsHost) {
     host.logsAtBottom = true;
     await loadLogs(host as unknown as OpenClawApp, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+  }
+  if (host.tab === "protocolMonitor") {
+    await loadProtocolTraces(host as unknown as OpenClawApp);
+    // Also load usage data for the overview stats
+    await loadUsage(host as unknown as OpenClawApp);
   }
 }
 

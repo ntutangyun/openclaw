@@ -94,6 +94,7 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
+import { ProtocolTraceStore, setProtocolTraceStore } from "./protocol-trace-store.js";
 import { createChannelManager } from "./server-channels.js";
 import {
   createAgentEventHandler,
@@ -153,6 +154,7 @@ import {
   mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { registerWsTraceListener } from "./ws-log.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -954,6 +956,33 @@ export async function startGatewayServer(
           }),
         );
 
+    // Protocol trace store -- captures all WS frames for the Protocol Monitor tab
+    const protocolTraceStore = minimalTestGateway ? null : new ProtocolTraceStore();
+    if (protocolTraceStore) {
+      setProtocolTraceStore(protocolTraceStore);
+    }
+    const _protocolTraceUnsub = minimalTestGateway
+      ? null
+      : (() => {
+          protocolTraceStore!.setBroadcast((record) => {
+            // Use targeted broadcast (broadcastToConnIds) so that protocol.trace
+            // events do NOT increment the global seq counter. Incrementing seq
+            // causes sequence gap detection on clients, triggering reconnect loops.
+            const allConnIds = new Set<string>();
+            for (const c of clients) {
+              allConnIds.add(c.connId);
+            }
+            if (allConnIds.size > 0) {
+              broadcastToConnIds("protocol.trace", record, allConnIds, {
+                dropIfSlow: true,
+              });
+            }
+          });
+          return registerWsTraceListener((direction, kind, meta) => {
+            protocolTraceStore!.captureTrace(direction, kind, meta);
+          });
+        })();
+
     heartbeatUnsub = minimalTestGateway
       ? null
       : onHeartbeatEvent((evt) => {
@@ -1327,6 +1356,19 @@ export async function startGatewayServer(
         ...execApprovalHandlers,
         ...pluginApprovalHandlers,
         ...secretsHandlers,
+        ...(protocolTraceStore
+          ? {
+              "protocol-traces.list": ({ params, respond }) => {
+                const limit = typeof params.limit === "number" ? params.limit : 500;
+                const afterId = typeof params.afterId === "string" ? params.afterId : undefined;
+                respond(true, { traces: protocolTraceStore.getRecentTraces(limit, afterId) });
+              },
+              "protocol-traces.clear": ({ respond }) => {
+                protocolTraceStore.clearTraces();
+                respond(true, { ok: true });
+              },
+            }
+          : {}),
       },
       broadcast,
       context: gatewayRequestContext,

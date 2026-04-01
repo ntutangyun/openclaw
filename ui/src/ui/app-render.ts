@@ -78,6 +78,11 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import {
+  clearProtocolTraces,
+  exportProtocolTraces,
+  loadProtocolTraces,
+} from "./controllers/protocol-monitor.ts";
 import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -138,6 +143,7 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyProtocolMonitor = createLazy(() => import("./views/protocol-monitor.ts"));
 
 function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
   const mod = getter();
@@ -608,20 +614,24 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section class="content-header">
-              <div>
-                ${isChat
-                  ? renderChatSessionSelect(state)
-                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
-              </div>
-              <div class="page-meta">
-                ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
-                  : nothing}
-                ${isChat ? renderChatControls(state) : nothing}
-              </div>
-            </section>`}
+          : state.tab === "protocolMonitor"
+            ? nothing
+            : html`<section class="content-header">
+                <div>
+                  ${isChat
+                    ? renderChatSessionSelect(state)
+                    : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
+                  ${isChat
+                    ? nothing
+                    : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+                </div>
+                <div class="page-meta">
+                  ${state.lastError
+                    ? html`<div class="pill danger">${state.lastError}</div>`
+                    : nothing}
+                  ${isChat ? renderChatControls(state) : nothing}
+                </div>
+              </section>`}
         ${state.tab === "overview"
           ? renderOverview({
               connected: state.connected,
@@ -1975,6 +1985,38 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadLogs(state, { reset: true }),
                 onExport: (lines, label) => state.exportLogs(lines, label),
                 onScroll: (event) => state.handleLogsScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "protocolMonitor"
+          ? lazyRender(lazyProtocolMonitor, (m) =>
+              m.renderProtocolMonitor({
+                traces: state.protocolTraces,
+                loading: state.protocolMonitorLoading,
+                selectedTrace: state.protocolSelectedTrace,
+                autoScroll: state.protocolAutoScroll,
+                disabledTypes: state.protocolDisabledTypes,
+                subTab: state.protocolSubTab,
+                usageTotals: state.usageResult?.totals ?? null,
+                usageAggregates: state.usageResult?.aggregates ?? null,
+                usageSessions: state.usageResult?.sessions ?? [],
+                usageLoading: state.usageLoading,
+                onSubTabChange: (t) => (state.protocolSubTab = t),
+                onToggleAutoScroll: (v) => (state.protocolAutoScroll = v),
+                onSelectTrace: (t) => (state.protocolSelectedTrace = t),
+                onClearSelection: () => (state.protocolSelectedTrace = null),
+                onRefresh: () => loadProtocolTraces(state),
+                onExport: () => exportProtocolTraces(state),
+                onReset: () => clearProtocolTraces(state),
+                onToggleType: (key) => {
+                  const next = new Set(state.protocolDisabledTypes);
+                  if (next.has(key)) {
+                    next.delete(key);
+                  } else {
+                    next.add(key);
+                  }
+                  state.protocolDisabledTypes = next;
+                },
               }),
             )
           : nothing}

@@ -62,6 +62,7 @@ import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handleProtocolTracesHttpRequest } from "./protocol-trace-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -892,6 +893,16 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-history",
           run: () =>
             handleSessionHistoryHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "protocol-traces",
+          run: () =>
+            handleProtocolTracesHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,

@@ -7,7 +7,7 @@ import {
 } from "./method-scopes.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
@@ -21,6 +21,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.message": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
+  "protocol.trace": [READ_SCOPE],
 };
 
 export type GatewayBroadcastStateVersion = {
@@ -86,7 +87,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       seq: eventSeq,
       stateVersion: opts?.stateVersion,
     });
-    if (shouldLogWs()) {
+    {
       const logMeta: Record<string, unknown> = {
         event,
         seq: eventSeq ?? "targeted",
@@ -95,6 +96,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         dropIfSlow: opts?.dropIfSlow,
         presenceVersion: opts?.stateVersion?.presence,
         healthVersion: opts?.stateVersion?.health,
+        payload,
       };
       if (event === "agent") {
         Object.assign(logMeta, summarizeAgentEventForWsLog(payload));

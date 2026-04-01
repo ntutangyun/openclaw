@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>协议监控指标 — 计算方法参考</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif;
+    background: #f8f9fc;
+    color: #1a1a2e;
+    line-height: 1.7;
+    padding: 40px 20px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #1a1a2e;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: #6b7280;
+    margin-bottom: 32px;
+  }
+  h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 36px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #d4d8e8;
+    color: #1a1a2e;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 24px 0 12px;
+    color: #374151;
+  }
+  p { margin-bottom: 12px; font-size: 14px; }
+  .card {
+    background: #ffffff;
+    border: 1px solid #d4d8e8;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  .badge-throughput { background: #dbeafe; color: #1e40af; }
+  .badge-latency { background: #ede9fe; color: #5b21b6; }
+  .badge-stat { background: #dcfce7; color: #166534; }
+  .metric-name {
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .formula-box {
+    background: #f1f3f9;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 12px 0;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-x: auto;
+  }
+  .formula-box .comment { color: #6b7280; font-style: italic; }
+  .formula-box .keyword { color: #7c3aed; font-weight: 600; }
+  .formula-box .value { color: #059669; }
+  .diagram {
+    background: #f1f3f9;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 12px 0;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: pre;
+    overflow-x: auto;
+    color: #374151;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    background: #f1f3f9;
+    border: 1px solid #d4d8e8;
+    font-weight: 600;
+    color: #374151;
+  }
+  td {
+    padding: 8px 12px;
+    border: 1px solid #d4d8e8;
+    vertical-align: top;
+  }
+  code {
+    background: #eef0f6;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: #7c3aed;
+  }
+  .note {
+    background: #fffbeb;
+    border-left: 3px solid #d97706;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 13px;
+    color: #92400e;
+    border-radius: 0 6px 6px 0;
+  }
+  .separator { border: none; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+  .toc {
+    background: #ffffff;
+    border: 1px solid #d4d8e8;
+    border-radius: 8px;
+    padding: 16px 24px;
+    margin-bottom: 24px;
+  }
+  .toc h3 { margin-top: 0; }
+  .toc ul { list-style: none; padding-left: 0; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: #2563eb; text-decoration: none; font-size: 13px; }
+  .toc a:hover { text-decoration: underline; }
+  .toc .section { font-weight: 600; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>协议监控指标</h1>
+<p class="subtitle">「协议与网络」选项卡中吞吐量和延迟指标的详细计算方法参考</p>
+
+<div class="toc">
+  <h3>目录</h3>
+  <ul>
+    <li class="section">吞吐量指标</li>
+    <li><a href="#tp-overview">概述与数据流</a></li>
+    <li><a href="#tp-og">Operator ↔ Gateway 吞吐量</a></li>
+    <li><a href="#tp-al">Agent ↔ LLM 吞吐量</a></li>
+    <li><a href="#tp-gn">Gateway ↔ Node 吞吐量</a></li>
+    <li><a href="#tp-stats">吞吐量聚合统计</a></li>
+    <li class="section">延迟指标</li>
+    <li><a href="#lat-overview">概述与持久化机制</a></li>
+    <li><a href="#lat-ttft">Agent ↔ LLM 首 Token 延迟 (TTFT)</a></li>
+    <li><a href="#lat-gen">Agent ↔ LLM 生成延迟</a></li>
+    <li><a href="#lat-gn">Gateway ↔ Node 延迟</a></li>
+    <li><a href="#lat-stats">延迟聚合统计</a></li>
+    <li class="section">系统架构</li>
+    <li><a href="#arch-data">数据流管线</a></li>
+    <li><a href="#arch-persistence">持久化与缓冲区管理</a></li>
+  </ul>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="tp-overview">吞吐量指标 — 概述</h2>
+<!-- ======================================================================= -->
+
+<p>吞吐量衡量每条通信路由上<strong>单位时间内的数据量</strong>。所有吞吐量均基于每条 <code>ProtocolTraceRecord</code> 的 <code>payloadSize</code> 字段计算，该字段记录了消息载荷在<em>截断之前</em>的 JSON 序列化字节长度。</p>
+
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-throughput">吞吐量</span>
+    <span class="metric-name">时间分桶</span>
+  </div>
+  <p>Trace 记录按固定宽度的 <strong>2 秒时间桶</strong>进行分组。每个桶累加该窗口内所有匹配 trace 的总字节数。</p>
+  <div class="formula-box">
+<span class="keyword">BUCKET_WIDTH</span> = <span class="value">2000 ms</span>
+
+<span class="comment">// 对于每条 trace 记录 t：</span>
+bucket_ts = <span class="keyword">floor</span>(t.ts / 2000) × 2000
+bucket_bytes[bucket_ts] += t.payloadSize
+
+<span class="comment">// 转换为速率：</span>
+bytesPerSec = (bucket_bytes / 2000) × 1000
+  </div>
+</div>
+
+<h3>路由分类</h3>
+<p>每条 trace 根据其 <code>source</code> 和 <code>target</code> 实体字段分类到对应的路由：</p>
+
+<table>
+  <tr>
+    <th>路由</th>
+    <th>匹配条件</th>
+    <th>采集内容</th>
+  </tr>
+  <tr>
+    <td><strong>Operator ↔ Gateway</strong></td>
+    <td><code>(source=operator, target=gateway)</code> 或 <code>(source=gateway, target=operator)</code></td>
+    <td>控制 UI ↔ Gateway的 RPC 和事件</td>
+  </tr>
+  <tr>
+    <td><strong>Agent ↔ LLM</strong></td>
+    <td><code>(source=agent, target=llm)</code> 或 <code>(source=llm, target=agent)</code></td>
+    <td>LLM API 流量（生命周期、助手流式响应，通过Gateway中继）</td>
+  </tr>
+  <tr>
+    <td><strong>Gateway ↔ Node</strong></td>
+    <td><code>(source=gateway, target=node)</code> 或 <code>(source=node, target=gateway)</code></td>
+    <td>远程节点通信（工具调度、状态查询、配对）</td>
+  </tr>
+</table>
+
+<!-- 各路由吞吐量 -->
+<h3 id="tp-og">Operator ↔ Gateway 吞吐量</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-throughput">吞吐量</span>
+    <span class="metric-name">Operator ↔ Gateway</span>
+  </div>
+  <p>衡量控制 UI（Operator）与Gateway服务器之间的数据量。包括所有 WebSocket RPC 请求/响应以及广播到 Operator 连接的事件。</p>
+  <p><strong>协议：</strong>WebSocket（请求/响应为 WS/RPC，广播为 WS/Event）</p>
+</div>
+
+<h3 id="tp-al">Agent ↔ LLM 吞吐量</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-throughput">吞吐量</span>
+    <span class="metric-name">Agent ↔ LLM</span>
+  </div>
+  <p>衡量 Agent ↔ LLM 路径上的代理流式事件数据量。包括生命周期 start/end 事件和助手 token 流式事件。与 LLM 提供商的实际通信使用 HTTP/SSE 协议，但这些 trace 捕获的是经过Gateway中继后的事件。</p>
+  <p><strong>协议：</strong>HTTP/SSE（源端）→ WebSocket（中继到 UI）</p>
+</div>
+
+<h3 id="tp-gn">Gateway ↔ Node 吞吐量</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-throughput">吞吐量</span>
+    <span class="metric-name">Gateway ↔ Node</span>
+  </div>
+  <p>衡量Gateway与已连接远程节点之间的数据量。包括分发到节点的工具调用请求及其响应。</p>
+  <p><strong>协议：</strong>WebSocket (WS/RPC)</p>
+</div>
+
+<h3 id="tp-stats">吞吐量聚合统计</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-stat">统计量</span>
+    <span class="metric-name">各路由吞吐量统计</span>
+  </div>
+  <p>对于每条路由，以下统计量从时间分桶采样中导出：</p>
+  <div class="formula-box">
+<span class="keyword">Peak（峰值）</span> = max(sample.bytesPerSec，所有采样)
+<span class="keyword">Avg（均值）</span>  = mean(sample.bytesPerSec，所有采样)
+<span class="keyword">Total（总量）</span> = sum(sample.rawBytes，所有采样)
+<span class="keyword">Count（计数）</span> = 有流量的 2 秒桶的数量
+  </div>
+  <p>吞吐量图表以 <code>bytesPerSec</code> 为 Y 轴、时间为 X 轴绘制，虚线表示平均值。</p>
+</div>
+
+<hr class="separator">
+
+<!-- ======================================================================= -->
+<h2 id="lat-overview">延迟指标 — 概述</h2>
+<!-- ======================================================================= -->
+
+<p>延迟指标衡量关联事件之间的<strong>时间间隔</strong>。与吞吐量（按时间分桶）不同，延迟在每个离散事件对产生一个采样（例如每次 LLM 调用产生一个 TTFT 采样）。</p>
+
+<div class="note">
+  <strong>持久化机制：</strong>延迟采样存储在模块级缓存中，在 trace 缓冲区被淘汰后仍然保留。每条 trace 仅处理一次（通过 trace ID 跟踪），以防止重复扫描滑动缓冲窗口时损坏状态机。用户点击「重置」时清空缓存。
+</div>
+
+<!-- TTFT -->
+<h3 id="lat-ttft">Agent ↔ LLM — 首 Token 延迟 (TTFT)</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-latency">延迟</span>
+    <span class="metric-name">TTFT（首 Token 时间）</span>
+  </div>
+  <p><strong>定义：</strong>从代理向 LLM 发送请求到收到第一个响应 token 的时间间隔。在一个 agent 运行中，按每次独立的 LLM 调用分别计量。</p>
+
+  <h3>调用边界检测</h3>
+  <p>单个 agent 运行（<code>runId</code>）中可能包含多次由工具调用分隔的 LLM 调用。事件模式如下：</p>
+  <div class="diagram">
+lifecycle start  ─────────────── 边界 #0
+  assistant 事件 (LLM 调用 1)    ← TTFT = first_assistant.ts - boundary.ts
+  tool start → tool end  ──────── 边界 #1
+  assistant 事件 (LLM 调用 2)    ← TTFT = first_assistant.ts - boundary.ts
+  tool start → tool end  ──────── 边界 #2
+  assistant 事件 (LLM 调用 3)    ← TTFT = first_assistant.ts - boundary.ts
+lifecycle end</div>
+
+  <h3>状态机</h3>
+  <div class="formula-box">
+<span class="comment">// 对于每条 trace（仅处理一次，通过 trace ID 追踪）：</span>
+
+<span class="keyword">IF</span> stream="lifecycle" AND phase="start":
+    → 设置 boundary_ts = t.ts, hasBoundary = true, inBurst = false
+
+<span class="keyword">IF</span> stream="tool" AND phase="end":
+    → 设置 boundary_ts = t.ts, hasBoundary = true, inBurst = false
+
+<span class="keyword">IF</span> stream="assistant" AND NOT inBurst AND hasBoundary:
+    → <span class="value">TTFT = t.ts − boundary_ts</span>
+    → 输出采样，设置 inBurst = true
+
+<span class="keyword">IF</span> stream="lifecycle" AND phase="end"/"complete"/"error":
+    → 删除该运行状态
+  </div>
+
+  <h3>边界情况</h3>
+  <table>
+    <tr><th>场景</th><th>处理方式</th></tr>
+    <tr><td>lifecycle start 已从缓冲区淘汰</td><td>在首次遇到 tool-end 或 assistant 事件时自动初始化状态；从下一个可用边界开始计算 TTFT</td></tr>
+    <tr><td>tool-end 已淘汰但 assistant 仍在缓冲区</td><td>无已知边界 → 该次调用不计算 TTFT（0ms 的结果会被过滤）</td></tr>
+    <tr><td>多个运行同时活跃</td><td>按 <code>runId</code> 独立追踪</td></tr>
+  </table>
+</div>
+
+<!-- 生成延迟 -->
+<h3 id="lat-gen">Agent ↔ LLM — 生成延迟</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-latency">延迟</span>
+    <span class="metric-name">生成延迟</span>
+  </div>
+  <p><strong>定义：</strong>每次 LLM 响应的持续时间 — 从第一个 assistant 流式事件到工具调用或生命周期结束前的最后一个 assistant 流式事件。在一个 agent 运行中按每次 LLM 调用分别计量。</p>
+
+  <div class="formula-box">
+<span class="keyword">生成延迟</span> = last_assistant_event.ts − first_assistant_event.ts
+              <span class="comment">（在单次 burst 内，即工具调用或生命周期结束之前）</span>
+  </div>
+
+  <h3>状态机</h3>
+  <div class="formula-box">
+<span class="comment">// 对于每条 trace（仅处理一次，通过 trace ID 追踪）：</span>
+
+<span class="keyword">IF</span> stream="lifecycle" AND phase="start":
+    → 初始化运行状态（无活跃 burst）
+
+<span class="keyword">IF</span> stream="assistant":
+    → 若无活跃 burst：开始新 burst（burstStart = t.ts, callIndex++）
+    → 延伸 burst：burstLast = t.ts
+
+<span class="keyword">IF</span> stream="tool" OR stream="lifecycle":
+    → <span class="value">刷新 burst：duration = burstLast − burstStart</span>
+    → 若 duration > 0，输出采样
+    → 重置 burst 状态
+
+<span class="comment">// 进行中的 burst 以 "gen #N (live)" 标签显示，不持久化</span>
+  </div>
+
+  <div class="note">
+    <strong>实时显示：</strong>活跃的（尚未刷新的）burst 会以"(live)"标签包含在统计中。其持续时间随每个新 assistant 事件实时更新。直到工具调用或生命周期结束刷新时才会持久化到缓存。
+  </div>
+</div>
+
+<!-- Gateway-Node 延迟 -->
+<h3 id="lat-gn">Gateway ↔ Node 延迟</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-latency">延迟</span>
+    <span class="metric-name">Gateway ↔ Node 请求-响应延迟</span>
+  </div>
+  <p><strong>定义：</strong>Gateway与远程节点之间 WebSocket RPC 调用的往返时间。从发送请求到收到匹配响应的时间间隔。</p>
+
+  <div class="formula-box">
+<span class="keyword">延迟</span> = response.ts − request.ts
+
+<span class="comment">// 关联键：</span>
+key = <span class="value">"${connId}:${reqId}"</span>
+
+<span class="comment">// reqId 是协议层的请求 ID，</span>
+<span class="comment">// 在同一 WebSocket 连接上的匹配 req 和 res 帧之间共享</span>
+  </div>
+
+  <h3>匹配算法</h3>
+  <div class="formula-box">
+<span class="keyword">FOR EACH</span> trace，其中 (source,target) ∈ {(gateway,node), (node,gateway)}
+    且 reqId 已定义：
+
+  <span class="keyword">IF</span> kind="req":
+      → 存入 inflight 映射：key → { ts, method }
+
+  <span class="keyword">IF</span> kind="res":
+      → 在 inflight 映射中查找 key
+      → <span class="value">latency = t.ts − inflight[key].ts</span>
+      → 输出采样，label = 方法名
+      → 从 inflight 映射中移除
+
+<span class="comment">// 超过 60 秒未收到响应的过期条目会被清理</span>
+  </div>
+
+  <div class="note">
+    <strong>时钟来源：</strong>两个时间戳均来自Gateway服务器在 trace 捕获时的 <code>Date.now()</code>。这意味着延迟包含Gateway侧的处理时间，但避免了跨机器时钟偏差问题。
+  </div>
+</div>
+
+<!-- 延迟统计 -->
+<h3 id="lat-stats">延迟聚合统计</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="badge badge-stat">统计量</span>
+    <span class="metric-name">百分位数与汇总</span>
+  </div>
+  <p>对于每个延迟指标，以下统计量从累积的采样数组中计算：</p>
+  <div class="formula-box">
+<span class="keyword">sorted</span> = samples.map(s → s.latencyMs).sort(升序)
+
+<span class="keyword">Avg（均值）</span> = round(sum(sorted) / sorted.length)
+<span class="keyword">P50（中位数）</span> = sorted[floor(N × 0.50)]
+<span class="keyword">P95（95 百分位）</span> = sorted[floor(N × 0.95)]
+<span class="keyword">Peak（峰值）</span> = sorted[N − 1]              <span class="comment">// 最大值</span>
+<span class="keyword">N（样本数）</span>    = sorted.length
+  </div>
+  <p>延迟图表使用<strong>散点图</strong>（而非折线图），因为延迟采样是事件驱动的，而非按时间分桶。每个点代表一次测量。虚线表示平均值。悬停可查看精确值、标签和时间戳。</p>
+</div>
+
+<hr class="separator">
+
+<!-- ======================================================================= -->
+<h2 id="arch-data">数据流管线</h2>
+<!-- ======================================================================= -->
+
+<div class="card">
+  <div class="diagram">
+┌───────────────────────┐
+│  Gateway后端              │
+│                       │
+│  WebSocket 处理器      │──── logWs("in"/"out", kind, meta) ────┐
+│  HTTP 处理器           │                                        │
+│  事件广播器            │                                        ▼
+│                       │                              ┌──────────────────┐
+│                       │                              │  WS Trace        │
+│                       │                              │  监听器           │
+│                       │                              └────────┬─────────┘
+└───────────────────────┘                                       │
+                                                                ▼
+                                                    ┌───────────────────────┐
+                                                    │  ProtocolTraceStore   │
+                                                    │                       │
+                                                    │  • captureTrace()     │
+                                                    │  • resolveEntities()  │
+                                                    │  • 估算载荷大小       │
+                                                    │  • 环形缓冲区 (5000)  │
+                                                    │  • JSONL 持久化       │
+                                                    │  • 广播到 UI          │
+                                                    └──────────┬────────────┘
+                                                               │
+                                          WebSocket "protocol.trace" 事件
+                                                               │
+                                                               ▼
+                                                    ┌───────────────────────┐
+                                                    │  UI（浏览器）          │
+                                                    │                       │
+                                                    │  • protocolTraces[]   │
+                                                    │    （最多 5000 条）    │
+                                                    │  • computeNetworkStats│
+                                                    │    → 吞吐量           │
+                                                    │    → 延迟             │
+                                                    │  • 持久化缓存         │
+                                                    │    （TTFT / 生成延迟） │
+                                                    │  • Lit HTML 渲染      │
+                                                    └───────────────────────┘</div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="arch-persistence">持久化与缓冲区管理</h2>
+<!-- ======================================================================= -->
+
+<div class="card">
+  <table>
+    <tr>
+      <th>层级</th>
+      <th>缓冲区大小</th>
+      <th>持久化方式</th>
+      <th>备注</th>
+    </tr>
+    <tr>
+      <td><strong>Gateway环形缓冲区</strong></td>
+      <td>5,000 条 trace</td>
+      <td>内存（重启后丢失）</td>
+      <td>保留完整载荷；服务于 <code>protocol-traces.list</code> 请求</td>
+    </tr>
+    <tr>
+      <td><strong>Gateway JSONL 文件</strong></td>
+      <td>无限制（按天分文件）</td>
+      <td>磁盘：<code>~/.openclaw/protocol-traces/trace-YYYY-MM-DD.jsonl</code></td>
+      <td>完整载荷；可通过导出按钮访问</td>
+    </tr>
+    <tr>
+      <td><strong>UI trace 缓冲区</strong></td>
+      <td>5,000 条 trace</td>
+      <td>内存（滑动窗口）</td>
+      <td>由 WebSocket 事件 + 初始加载填充</td>
+    </tr>
+    <tr>
+      <td><strong>TTFT 延迟缓存</strong></td>
+      <td>2,000 个采样</td>
+      <td>模块级（缓冲区淘汰后仍保留）</td>
+      <td>通过已处理 trace ID 追踪避免重复处理</td>
+    </tr>
+    <tr>
+      <td><strong>生成延迟缓存</strong></td>
+      <td>2,000 个采样</td>
+      <td>模块级（缓冲区淘汰后仍保留）</td>
+      <td>相同机制；进行中的 burst 以 live 标签显示</td>
+    </tr>
+    <tr>
+      <td><strong>已处理 ID 集合</strong></td>
+      <td>最多 8,000 个 ID</td>
+      <td>模块级</td>
+      <td>超出限制时清空；最多有少量 trace 被重复处理</td>
+    </tr>
+  </table>
+</div>
+
+<hr class="separator">
+
+<p style="text-align:center;color:#9ca3af;font-size:12px;margin-top:24px;">
+  源码参考：<code>ui/src/ui/controllers/protocol-monitor.ts</code> · <code>src/gateway/protocol-trace-store.ts</code>
+</p>
+
+</div>
+</body>
+</html>
