@@ -41,6 +41,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
+import { handleProtocolTraceEvent } from "./controllers/protocol-monitor.ts";
 import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -95,6 +96,15 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  protocolTraces: import("./controllers/protocol-monitor.js").ProtocolTraceRecord[];
+  protocolMonitorLoading: boolean;
+  protocolSelectedTrace:
+    | import("./controllers/protocol-monitor.js").ProtocolTraceRecord
+    | import("./controllers/protocol-monitor.js").CoalescedGroup
+    | null;
+  protocolAutoScroll: boolean;
+  protocolDisabledTypes: Set<string>;
+  protocolSubTab: "usage" | "protocol";
 };
 
 type SessionDefaultsSnapshot = {
@@ -400,6 +410,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   ].slice(0, 250);
   if (host.tab === "debug" || host.tab === "overview") {
     host.eventLog = host.eventLogBuffer;
+  }
+
+  if (evt.event === "protocol.trace") {
+    handleProtocolTraceEvent(host, evt.payload);
+    return;
   }
 
   if (evt.event === "agent") {

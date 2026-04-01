@@ -92,6 +92,11 @@ import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
+  clearProtocolTraces,
+  exportProtocolTraces,
+  loadProtocolTraces,
+} from "./controllers/protocol-monitor.ts";
+import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
   loadSessions,
@@ -164,6 +169,7 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyProtocolMonitor = createLazy(() => import("./views/protocol-monitor.ts"));
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -1034,7 +1040,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config"
+        ${state.tab === "config" || state.tab === "protocolMonitor"
           ? nothing
           : html`<section class="content-header">
               <div>
@@ -2004,6 +2010,38 @@ export function renderApp(state: AppViewState) {
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
               onRequestUpdate: requestHostUpdate,
             })
+          : nothing}
+        ${state.tab === "protocolMonitor"
+          ? lazyRender(lazyProtocolMonitor, (m) =>
+              m.renderProtocolMonitor({
+                traces: state.protocolTraces,
+                loading: state.protocolMonitorLoading,
+                selectedTrace: state.protocolSelectedTrace,
+                autoScroll: state.protocolAutoScroll,
+                disabledTypes: state.protocolDisabledTypes,
+                subTab: state.protocolSubTab,
+                usageTotals: state.usageResult?.totals ?? null,
+                usageAggregates: state.usageResult?.aggregates ?? null,
+                usageSessions: state.usageResult?.sessions ?? [],
+                usageLoading: state.usageLoading,
+                onSubTabChange: (t) => (state.protocolSubTab = t),
+                onToggleAutoScroll: (v) => (state.protocolAutoScroll = v),
+                onSelectTrace: (t) => (state.protocolSelectedTrace = t),
+                onClearSelection: () => (state.protocolSelectedTrace = null),
+                onRefresh: () => loadProtocolTraces(state),
+                onExport: () => exportProtocolTraces(state),
+                onReset: () => clearProtocolTraces(state),
+                onToggleType: (key) => {
+                  const next = new Set(state.protocolDisabledTypes);
+                  if (next.has(key)) {
+                    next.delete(key);
+                  } else {
+                    next.add(key);
+                  }
+                  state.protocolDisabledTypes = next;
+                },
+              }),
+            )
           : nothing}
       </main>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}

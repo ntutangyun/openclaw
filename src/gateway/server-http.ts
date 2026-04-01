@@ -91,6 +91,7 @@ let sessionHistoryHttpModulePromise:
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
+let protocolTraceHttpModulePromise: Promise<typeof import("./protocol-trace-http.js")> | undefined;
 
 function getBundledChannelsModule() {
   bundledChannelsModulePromise ??= import("../channels/plugins/bundled.js");
@@ -140,6 +141,11 @@ function getSessionKillHttpModule() {
 function getToolsInvokeHttpModule() {
   toolsInvokeHttpModulePromise ??= import("./tools-invoke-http.js");
   return toolsInvokeHttpModulePromise;
+}
+
+function getProtocolTraceHttpModule() {
+  protocolTraceHttpModulePromise ??= import("./protocol-trace-http.js");
+  return protocolTraceHttpModulePromise;
 }
 
 type HookDispatchers = {
@@ -231,6 +237,10 @@ function isSessionKillPath(pathname: string): boolean {
 
 function isSessionHistoryPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/history$/.test(pathname);
+}
+
+function isProtocolTracesPath(pathname: string): boolean {
+  return pathname === "/protocol-traces" || pathname === "/protocol-traces/export";
 }
 
 function isA2uiPath(pathname: string): boolean {
@@ -955,6 +965,18 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-history",
           run: async () =>
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (isProtocolTracesPath(requestPath)) {
+        requestStages.push({
+          name: "protocol-traces",
+          run: async () =>
+            (await getProtocolTraceHttpModule()).handleProtocolTracesHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,

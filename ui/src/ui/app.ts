@@ -69,6 +69,7 @@ import type {
 } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { CoalescedGroup, ProtocolTraceRecord } from "./controllers/protocol-monitor.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -489,6 +490,13 @@ export class OpenClawApp extends LitElement {
   @state() logsLimit = 500;
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
+
+  @state() protocolTraces: ProtocolTraceRecord[] = [];
+  @state() protocolMonitorLoading = false;
+  @state() protocolSelectedTrace: ProtocolTraceRecord | CoalescedGroup | null = null;
+  @state() protocolAutoScroll = true;
+  @state() protocolDisabledTypes: Set<string> = new Set();
+  @state() protocolSubTab: "usage" | "protocol" = "protocol";
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;

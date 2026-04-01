@@ -39,6 +39,7 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { ProtocolTraceStore, setProtocolTraceStore } from "./protocol-trace-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
@@ -85,6 +86,7 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { registerWsTraceListener } from "./ws-log.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -584,6 +586,36 @@ export async function startGatewayServer(
       runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
     }
 
+    // Protocol trace store -- captures all WS frames for the Protocol Monitor tab
+    const protocolTraceStore = minimalTestGateway ? null : new ProtocolTraceStore();
+    if (protocolTraceStore) {
+      setProtocolTraceStore(protocolTraceStore);
+      protocolTraceStore.setBroadcast((record) => {
+        const allConnIds = new Set<string>();
+        for (const c of clients) {
+          allConnIds.add(c.connId);
+        }
+        if (allConnIds.size > 0) {
+          broadcastToConnIds("protocol.trace", record, allConnIds, { dropIfSlow: true });
+        }
+      });
+      registerWsTraceListener((direction, kind, meta) => {
+        protocolTraceStore.captureTrace(direction, kind, meta);
+      });
+    }
+      },
+      loadConfig,
+    });
+    runtimeState.mcpServer = earlyRuntime.mcpServer;
+    runtimeState.bonjourStop = earlyRuntime.bonjourStop;
+    runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
+    if (earlyRuntime.maintenance) {
+      runtimeState.tickInterval = earlyRuntime.maintenance.tickInterval;
+      runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
+      runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
+      runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
+    }
+
     Object.assign(
       runtimeState,
       startGatewayEventSubscriptions({
@@ -722,7 +754,23 @@ export async function startGatewayServer(
       logGateway: log,
       logHealth,
       logWsControl,
-      extraHandlers: { ...pluginRegistry.gatewayHandlers, ...extraHandlers },
+      extraHandlers: {
+        ...pluginRegistry.gatewayHandlers,
+        ...extraHandlers,
+        ...(protocolTraceStore
+          ? {
+              "protocol-traces.list": ({ params, respond }) => {
+                const limit = typeof params.limit === "number" ? params.limit : 500;
+                const afterId = typeof params.afterId === "string" ? params.afterId : undefined;
+                respond(true, { traces: protocolTraceStore.getRecentTraces(limit, afterId) });
+              },
+              "protocol-traces.clear": ({ respond }) => {
+                protocolTraceStore.clearTraces();
+                respond(true, { ok: true });
+              },
+            }
+          : {}),
+      },
       broadcast,
       context: gatewayRequestContext,
     });

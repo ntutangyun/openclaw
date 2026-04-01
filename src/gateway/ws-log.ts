@@ -29,6 +29,42 @@ const wsLog = createSubsystemLogger("gateway/ws");
 
 const WS_META_SKIP_KEYS = new Set(["connId", "id", "method", "ok", "event"]);
 
+// ---------------------------------------------------------------------------
+// Trace listener hooks -- protocol monitor taps in here
+// ---------------------------------------------------------------------------
+
+export type WsTraceListener = (
+  direction: "in" | "out",
+  kind: string,
+  meta: Record<string, unknown>,
+) => void;
+
+const wsTraceListeners = new Set<WsTraceListener>();
+
+export function registerWsTraceListener(fn: WsTraceListener): () => void {
+  wsTraceListeners.add(fn);
+  return () => {
+    wsTraceListeners.delete(fn);
+  };
+}
+
+function notifyTraceListeners(
+  direction: "in" | "out",
+  kind: string,
+  meta?: Record<string, unknown>,
+) {
+  if (wsTraceListeners.size === 0 || !meta) {
+    return;
+  }
+  for (const listener of wsTraceListeners) {
+    try {
+      listener(direction, kind, meta);
+    } catch {
+      // trace listeners must not break WS handling
+    }
+  }
+}
+
 function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
   const restMeta: string[] = [];
   if (!meta) {
@@ -258,6 +294,9 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 }
 
 export function logWs(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
+  // Always notify trace listeners regardless of console log settings
+  notifyTraceListeners(direction, kind, meta);
+
   if (!shouldLogSubsystemToConsole("gateway/ws")) {
     return;
   }

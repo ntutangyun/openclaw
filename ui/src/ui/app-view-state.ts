@@ -348,6 +348,15 @@ export type AppViewState = {
     logsLimit: number;
     logsMaxBytes: number;
     logsAtBottom: boolean;
+    protocolTraces: import("./controllers/protocol-monitor.js").ProtocolTraceRecord[];
+    protocolMonitorLoading: boolean;
+    protocolSelectedTrace:
+      | import("./controllers/protocol-monitor.js").ProtocolTraceRecord
+      | import("./controllers/protocol-monitor.js").CoalescedGroup
+      | null;
+    protocolAutoScroll: boolean;
+    protocolDisabledTypes: Set<string>;
+    protocolSubTab: "usage" | "protocol";
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;

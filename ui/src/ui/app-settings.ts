@@ -1,5 +1,6 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { refreshChat } from "./app-chat.ts";
+import type { OpenClawApp } from "./app.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
@@ -36,6 +37,7 @@ import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-a
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
+import { loadProtocolTraces } from "./controllers/protocol-monitor.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
@@ -359,6 +361,11 @@ export async function refreshActiveTab(host: SettingsHost) {
       await loadLogs(app, { reset: true });
       scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
       return;
+  }
+  if (host.tab === "protocolMonitor") {
+    await loadProtocolTraces(host as unknown as OpenClawApp);
+    // Also load usage data for the overview stats
+    await loadUsage(host as unknown as OpenClawApp);
   }
 }
 

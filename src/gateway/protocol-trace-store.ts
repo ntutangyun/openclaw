@@ -1,0 +1,285 @@
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
+
+// ---------------------------------------------------------------------------
+// Singleton access -- used by HTTP handler and WS methods
+// ---------------------------------------------------------------------------
+
+let globalTraceStore: ProtocolTraceStore | null = null;
+
+export function getProtocolTraceStore(): ProtocolTraceStore | null {
+  return globalTraceStore;
+}
+
+export function setProtocolTraceStore(store: ProtocolTraceStore): void {
+  globalTraceStore = store;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type TraceEntity = "operator" | "gateway" | "node" | "agent" | "llm";
+export type TraceKind = "req" | "res" | "event";
+
+export type ProtocolTraceRecord = {
+  id: string;
+  ts: number;
+  direction: "in" | "out";
+  kind: TraceKind;
+  source: TraceEntity;
+  target: TraceEntity;
+  method?: string;
+  event?: string;
+  connId?: string;
+  role?: string;
+  ok?: boolean;
+  payload?: unknown;
+  runId?: string;
+  seq?: number;
+  stream?: string;
+  payloadSize?: number;
+  /** Protocol-level request id (shared between matching req and res). */
+  reqId?: string | number;
+};
+
+export type TraceBroadcastFn = (record: ProtocolTraceRecord) => void;
+
+// ---------------------------------------------------------------------------
+// Entity resolution
+// ---------------------------------------------------------------------------
+
+const AGENT_EVENTS = new Set(["agent", "chat", "session.message", "session.tool"]);
+
+function resolveEntities(
+  direction: "in" | "out",
+  kind: string,
+  meta: Record<string, unknown>,
+): { source: TraceEntity; target: TraceEntity } {
+  const role = meta.role as string | undefined;
+
+  if (kind === "req" && direction === "in") {
+    return {
+      source: role === "node" ? "node" : "operator",
+      target: "gateway",
+    };
+  }
+
+  if (kind === "res" && direction === "out") {
+    return {
+      source: "gateway",
+      target: role === "node" ? "node" : "operator",
+    };
+  }
+
+  // Events (direction === "out")
+  const eventName = meta.event as string | undefined;
+  if (eventName && AGENT_EVENTS.has(eventName)) {
+    const stream = meta.stream as string | undefined;
+    const data =
+      meta.payload && typeof meta.payload === "object"
+        ? (meta.payload as Record<string, unknown>)
+        : undefined;
+    // LLM response streaming back to agent
+    if (stream === "assistant") {
+      return { source: "llm", target: "agent" };
+    }
+    // Agent invoking a tool (agent-side action)
+    if (stream === "tool") {
+      return { source: "agent", target: "gateway" };
+    }
+    // Lifecycle: start = agent calling LLM, end = LLM done
+    if (stream === "lifecycle") {
+      const phase = typeof data?.phase === "string" ? data.phase : undefined;
+      if (phase === "start") {
+        return { source: "agent", target: "llm" };
+      }
+      if (phase === "end" || phase === "error") {
+        return { source: "llm", target: "agent" };
+      }
+    }
+    return { source: "agent", target: "gateway" };
+  }
+  return { source: "gateway", target: "operator" };
+}
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
+function estimatePayloadSize(payload: unknown): number {
+  if (payload === undefined || payload === null) {
+    return 0;
+  }
+  try {
+    return JSON.stringify(payload).length;
+  } catch {
+    return 0;
+  }
+}
+
+const RING_BUFFER_CAP = 5000;
+
+export class ProtocolTraceStore {
+  private buffer: ProtocolTraceRecord[] = [];
+  private broadcastFn: TraceBroadcastFn | null = null;
+  private traceDir: string;
+  private currentFile: string | null = null;
+  private currentDate: string | null = null;
+  private writeStream: fs.WriteStream | null = null;
+
+  constructor(stateDir?: string) {
+    const base = stateDir ?? resolveStateDir();
+    this.traceDir = path.join(base, "protocol-traces");
+    fs.mkdirSync(this.traceDir, { recursive: true });
+  }
+
+  setBroadcast(fn: TraceBroadcastFn) {
+    this.broadcastFn = fn;
+  }
+
+  /** Called by the ws-log trace listener. */
+  captureTrace(direction: "in" | "out", kind: string, meta: Record<string, unknown>) {
+    // Skip protocol.trace events to avoid infinite recursion.
+    if (kind === "event" && meta.event === "protocol.trace") {
+      return;
+    }
+
+    const { source, target } = resolveEntities(direction, kind, meta);
+
+    const payloadSize = estimatePayloadSize(meta.payload);
+
+    // Resolve runId: prefer top-level meta, fall back to payload.runId (agent events)
+    let runId = meta.runId as string | undefined;
+    if (!runId && meta.payload && typeof meta.payload === "object") {
+      const p = meta.payload as Record<string, unknown>;
+      if (typeof p.runId === "string") {
+        runId = p.runId;
+      }
+    }
+
+    // Resolve reqId: protocol-level request id for req/res correlation
+    const rawReqId = meta.id;
+    const reqId =
+      typeof rawReqId === "string" || typeof rawReqId === "number" ? rawReqId : undefined;
+
+    // Full record for JSONL persistence
+    const fullRecord: ProtocolTraceRecord = {
+      id: randomUUID(),
+      ts: Date.now(),
+      direction,
+      kind: kind as TraceKind,
+      source,
+      target,
+      method: meta.method as string | undefined,
+      event: meta.event as string | undefined,
+      connId: meta.connId as string | undefined,
+      role: meta.role as string | undefined,
+      ok: typeof meta.ok === "boolean" ? meta.ok : undefined,
+      payload: meta.payload,
+      runId,
+      seq: typeof meta.seq === "number" ? meta.seq : undefined,
+      stream: meta.stream as string | undefined,
+      payloadSize,
+      reqId,
+    };
+
+    const record = fullRecord;
+
+    // In-memory ring buffer
+    this.buffer.push(record);
+    if (this.buffer.length > RING_BUFFER_CAP) {
+      this.buffer.splice(0, this.buffer.length - RING_BUFFER_CAP);
+    }
+
+    // JSONL persistence (full payload)
+    this.appendToFile(fullRecord);
+
+    // Broadcast to UI
+    if (this.broadcastFn) {
+      this.broadcastFn(record);
+    }
+  }
+
+  getRecentTraces(limit = 500, afterId?: string): ProtocolTraceRecord[] {
+    if (!afterId) {
+      return this.buffer.slice(-limit);
+    }
+    const idx = this.buffer.findIndex((r) => r.id === afterId);
+    if (idx === -1) {
+      return this.buffer.slice(-limit);
+    }
+    return this.buffer.slice(idx + 1, idx + 1 + limit);
+  }
+
+  clearTraces() {
+    this.buffer = [];
+    // Close current write stream
+    if (this.writeStream) {
+      this.writeStream.end();
+      this.writeStream = null;
+    }
+    // Archive existing files
+    try {
+      const files = fs.readdirSync(this.traceDir).filter((f) => f.endsWith(".jsonl"));
+      const now = Date.now();
+      for (const file of files) {
+        const src = path.join(this.traceDir, file);
+        const dest = path.join(this.traceDir, `${file}.archived.${now}`);
+        fs.renameSync(src, dest);
+      }
+    } catch {
+      // ignore
+    }
+    this.currentFile = null;
+    this.currentDate = null;
+  }
+
+  getTraceDir(): string {
+    return this.traceDir;
+  }
+
+  getActiveTraceFiles(): string[] {
+    try {
+      return fs
+        .readdirSync(this.traceDir)
+        .filter((f) => f.endsWith(".jsonl") && !f.includes(".archived."))
+        .toSorted()
+        .map((f) => path.join(this.traceDir, f));
+    } catch {
+      return [];
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private
+  // -------------------------------------------------------------------------
+
+  private resolveFilePath(): string {
+    const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (this.currentDate === dateStr && this.currentFile) {
+      return this.currentFile;
+    }
+    // Day rolled over — close old stream
+    if (this.writeStream) {
+      this.writeStream.end();
+      this.writeStream = null;
+    }
+    this.currentDate = dateStr;
+    this.currentFile = path.join(this.traceDir, `trace-${dateStr}.jsonl`);
+    return this.currentFile;
+  }
+
+  private appendToFile(record: ProtocolTraceRecord) {
+    const filePath = this.resolveFilePath();
+    if (!this.writeStream || this.writeStream.path !== filePath) {
+      if (this.writeStream) {
+        this.writeStream.end();
+      }
+      this.writeStream = fs.createWriteStream(filePath, { flags: "a" });
+    }
+    this.writeStream.write(`${JSON.stringify(record)}\n`);
+  }
+}
