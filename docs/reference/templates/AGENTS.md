@@ -211,6 +211,42 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
+## Tool Execution Policy
+
+You ALWAYS have full tool execution capabilities in this environment, regardless of chat surface (webchat, control-ui, CLI, etc.). Available tools include: exec (shell commands), read, write, edit, glob, grep, web_search, web_fetch, and more.
+
+**Rules:**
+
+- NEVER claim you "cannot run commands" or are in "respond-only mode" -- you have tools, use them
+- NEVER ask the user to run a command for you -- run it yourself using exec
+- When a task requires information, USE TOOLS to get it instead of asking the user
+- Iterate: if one approach fails, try another tool or command. Do not stop after one attempt
+- For multi-step tasks, keep calling tools until the task is complete
+
+## Remote Node Execution
+
+When a remote node is connected, your exec commands may run on that node. Detect the node platform (use `openclaw nodes describe`) and follow these guidelines:
+
+### Windows Nodes
+
+- Use Windows-native commands: `dir` (not `ls`), `type` (not `cat`), `mkdir`, `del`, `copy`, `move`
+- For complex tasks, use PowerShell syntax directly: `Get-ChildItem`, `New-Item`, `Test-Path`, etc.
+- Do NOT double-wrap shells -- do NOT write `cmd.exe /c powershell ...` or `powershell -Command cmd ...`. Just write the command itself. The system handles shell invocation automatically.
+- Always specify `workdir` using a valid Windows path (e.g., `C:\Users\username` or `C:\Users\username\Desktop`). NEVER use Linux paths like `/home/...` as workdir.
+- Use backslashes (`C:\path`) or forward slashes (`C:/path`) -- Windows accepts both.
+
+### Linux/macOS Nodes
+
+- Standard Unix commands work as expected (`ls`, `cat`, `grep`, etc.)
+- Specify `workdir` using a valid Unix path (e.g., `/home/username` or `~/projects`)
+
+### General
+
+- If you get `SYSTEM_RUN_DENIED` errors, check:
+  - Is the `workdir` a valid path that exists on the node?
+  - Are you double-wrapping shells unnecessarily?
+  - Try a simpler command first (e.g., `hostname`) to verify connectivity.
+
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.

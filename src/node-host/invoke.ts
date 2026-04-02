@@ -120,6 +120,49 @@ export function parseWindowsCodePage(raw: string): number | null {
   return codePage;
 }
 
+/**
+ * Resolve a Windows shell executable (cmd.exe, powershell.exe, etc.) to its
+ * full path using %SystemRoot%.  Node.js `spawn` without `shell: true` does
+ * not always search PATH on Windows, causing ENOENT for bare names like
+ * "cmd.exe" when the node host was started with a stripped-down PATH.
+ */
+function resolveWindowsShellPath(executable: string): string {
+  const lower = executable.toLowerCase();
+  const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+  const system32 = path.join(systemRoot, "System32");
+
+  if (lower === "cmd.exe" || lower === "cmd") {
+    const full = path.join(system32, "cmd.exe");
+    if (fs.existsSync(full)) {
+      return full;
+    }
+  }
+  if (lower === "powershell.exe" || lower === "powershell" || lower === "windowspowershell") {
+    const full = path.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (fs.existsSync(full)) {
+      return full;
+    }
+  }
+  if (lower === "pwsh.exe" || lower === "pwsh") {
+    // pwsh (PowerShell Core) is typically on PATH; try to find it but fall back
+    try {
+      const result = spawnSync("where", ["pwsh.exe"], {
+        windowsHide: true,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000,
+      });
+      const found = result.stdout?.trim().split(/\r?\n/)[0];
+      if (found && fs.existsSync(found)) {
+        return found;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return executable;
+}
+
 function resolveWindowsConsoleEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
@@ -128,7 +171,8 @@ function resolveWindowsConsoleEncoding(): string | null {
     return cachedWindowsConsoleEncoding;
   }
   try {
-    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+    const cmdPath = resolveWindowsShellPath("cmd.exe");
+    const result = spawnSync(cmdPath, ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -206,11 +250,35 @@ async function runCommand(
     let settled = false;
     const windowsEncoding = resolveWindowsConsoleEncoding();
 
-    const child = spawn(argv[0], argv.slice(1), {
+    // On Windows with shell:true, Node.js already routes through cmd.exe.
+    // If the argv was pre-wrapped as ["cmd.exe", "/d", "/s", "/c", <command>]
+    // by the gateway, unwrap it to avoid double cmd.exe invocation which
+    // destroys quoting for PowerShell, Python, and other nested commands.
+    let spawnCmd: string;
+    let spawnArgs: string[];
+    const isWindowsCmdWrap =
+      process.platform === "win32" &&
+      argv.length >= 4 &&
+      argv[0].toLowerCase().endsWith("cmd.exe") &&
+      argv
+        .slice(1, -1)
+        .map((a) => a.toLowerCase())
+        .join(" ") === "/d /s /c";
+    if (isWindowsCmdWrap) {
+      // Pass the raw command string to shell:true which handles it natively
+      spawnCmd = argv[argv.length - 1];
+      spawnArgs = [];
+    } else {
+      spawnCmd = argv[0];
+      spawnArgs = argv.slice(1);
+    }
+
+    const child = spawn(spawnCmd, spawnArgs, {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      ...(process.platform === "win32" ? { shell: true } : {}),
     });
 
     const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {

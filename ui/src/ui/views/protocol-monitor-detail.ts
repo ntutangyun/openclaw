@@ -1,5 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ProtocolTraceRecord, CoalescedGroup } from "../controllers/protocol-monitor.ts";
+import {
+  type ProtocolTraceRecord,
+  type CoalescedGroup,
+  traceTypeKey,
+} from "../controllers/protocol-monitor.ts";
 
 function isCoalescedGroup(trace: ProtocolTraceRecord | CoalescedGroup): trace is CoalescedGroup {
   return "type" in trace && trace.type === "group";
@@ -8,6 +12,7 @@ function isCoalescedGroup(trace: ProtocolTraceRecord | CoalescedGroup): trace is
 export type ProtocolMonitorDetailProps = {
   trace: ProtocolTraceRecord | CoalescedGroup;
   onClose: () => void;
+  onToggleType?: (key: string) => void;
 };
 
 function formatTs(ts: number): string {
@@ -180,6 +185,32 @@ export function renderProtocolMonitorDetail(props: ProtocolMonitorDetailProps): 
         padding: 8px;
         border-top: 1px solid #d4d8e8;
       }
+      .pd-hide-toggle {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #d4d8e8;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .pd-hide-btn {
+        background: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fca5a5;
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 11px;
+        font-family: inherit;
+      }
+      .pd-hide-btn:hover {
+        background: #fee2e2;
+      }
+      .pd-hide-hint {
+        font-size: 10px;
+        color: #9ca3af;
+        font-family: monospace;
+      }
     </style>
 
     <div class="pd-root">
@@ -189,6 +220,28 @@ export function renderProtocolMonitorDetail(props: ProtocolMonitorDetailProps): 
       </div>
 
       ${isGroup ? renderGroupDetail(trace) : renderSingleTrace(trace)}
+      ${props.onToggleType
+        ? html`
+            <div class="pd-hide-toggle">
+              <button
+                class="pd-hide-btn"
+                @click=${() => {
+                  const key = isGroup
+                    ? `event.${trace.events?.[0]?.event ?? "agent"}${trace.events?.[0]?.stream ? `.${trace.events[0].stream}` : ""}`
+                    : traceTypeKey(trace);
+                  props.onToggleType!(key);
+                }}
+              >
+                Hide this message type
+              </button>
+              <span class="pd-hide-hint"
+                >${isGroup
+                  ? `event.${trace.events?.[0]?.event ?? "agent"}`
+                  : traceTypeKey(trace)}</span
+              >
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }

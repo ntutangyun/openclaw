@@ -356,7 +356,7 @@ export type AppViewState = {
       | null;
     protocolAutoScroll: boolean;
     protocolDisabledTypes: Set<string>;
-    protocolSubTab: "usage" | "protocol";
+    protocolSubTab: "protocol" | "settings";
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;
