@@ -63,7 +63,11 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { ProtocolTraceRecord, CoalescedGroup } from "./controllers/protocol-monitor.ts";
+import {
+  DEFAULT_DISABLED_TYPES,
+  type ProtocolTraceRecord,
+  type CoalescedGroup,
+} from "./controllers/protocol-monitor.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -449,8 +453,8 @@ export class OpenClawApp extends LitElement {
   @state() protocolMonitorLoading = false;
   @state() protocolSelectedTrace: ProtocolTraceRecord | CoalescedGroup | null = null;
   @state() protocolAutoScroll = true;
-  @state() protocolDisabledTypes: Set<string> = new Set();
-  @state() protocolSubTab: "usage" | "protocol" = "protocol";
+  @state() protocolDisabledTypes: Set<string> = new Set(DEFAULT_DISABLED_TYPES);
+  @state() protocolSubTab: "protocol" | "settings" = "protocol";
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;

@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, svg, nothing, type TemplateResult } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import type {
   ProtocolTraceRecord,
@@ -7,14 +8,19 @@ import type {
   MessageTypeStats,
   NetworkStats,
   ThroughputSample,
+  DirectionalThroughputSamples,
   LatencyStats,
   LatencySample,
+  ChatMessage,
+  ToolCallMessage,
 } from "../controllers/protocol-monitor.ts";
 import {
   coalesceTraces,
   filterTraces,
   computeMessageTypes,
   computeNetworkStats,
+  extractChatMessages,
+  extractToolCalls,
 } from "../controllers/protocol-monitor.ts";
 import { renderProtocolMonitorDetail } from "./protocol-monitor-detail.ts";
 import {
@@ -29,7 +35,7 @@ import type { UsageTotals, UsageAggregates } from "./usageTypes.ts";
 // Props
 // ---------------------------------------------------------------------------
 
-export type ProtocolMonitorSubTab = "usage" | "protocol";
+export type ProtocolMonitorSubTab = "protocol" | "settings";
 
 export type ProtocolMonitorProps = {
   traces: ProtocolTraceRecord[];
@@ -60,11 +66,25 @@ type Column = "operator" | "gateway" | "node" | "agent" | "llm";
 const COLUMNS: Column[] = ["operator", "gateway", "node", "agent", "llm"];
 const COL_INDEX: Record<Column, number> = { operator: 0, gateway: 1, node: 2, agent: 3, llm: 4 };
 const COL_LABELS: Record<Column, string> = {
-  operator: "Operator",
-  gateway: "Gateway",
-  node: "Node",
-  agent: "Agent",
-  llm: "LLM",
+  operator: "Operator (STA)",
+  gateway: "Gateway (AP)",
+  node: "Node (PC)",
+  agent: "Agent (AP)",
+  llm: "Model",
+};
+
+// SVG icons for column headers — larger, displayed on a separate row above the label
+const COL_ICONS: Record<Column, string> = {
+  // Mobile phone
+  operator: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="3"/><circle cx="12" cy="18" r="1" fill="currentColor"/><line x1="9" y1="5" x2="15" y2="5" opacity="0.5"/></svg>`,
+  // WiFi router
+  gateway: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5C5.5 5 18.5 5 22 9.5"/><path d="M5 13c2.5-3 11.5-3 14 0"/><path d="M8.5 16.5c1.5-2 5.5-2 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>`,
+  // Laptop
+  node: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="2" y1="20" x2="22" y2="20"/><line x1="7" y1="16" x2="7" y2="20"/><line x1="17" y1="16" x2="17" y2="20"/></svg>`,
+  // Robot
+  agent: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="3"/><circle cx="9" cy="15" r="1.5" fill="currentColor"/><circle cx="15" cy="15" r="1.5" fill="currentColor"/><path d="M12 2v4"/><circle cx="12" cy="2" r="1.5"/><path d="M4 14H2"/><path d="M22 14h-2"/></svg>`,
+  // Brain / AI chip
+  llm: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.5" y1="4.5" x2="6.5" y2="6.5"/><line x1="17.5" y1="17.5" x2="19.5" y2="19.5"/><line x1="4.5" y1="19.5" x2="6.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="19.5" y2="4.5"/></svg>`,
 };
 
 // ---------------------------------------------------------------------------
@@ -589,10 +609,10 @@ function formatTs(ts: number): string {
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
-    return `${bytes} B`;
+    return `${Number(bytes.toFixed(2))} B`;
   }
   if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024).toFixed(2)} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
@@ -604,8 +624,8 @@ const ROW_HEIGHT = 80;
 // ---------------------------------------------------------------------------
 
 const SUB_TABS: { id: ProtocolMonitorSubTab; label: string }[] = [
-  { id: "usage", label: "Usage Overview" },
   { id: "protocol", label: "Protocol & Network" },
+  { id: "settings", label: "Settings" },
 ];
 
 export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResult {
@@ -629,8 +649,8 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
         ${renderControlButtons(props)}
       </div>
       <div class="pm-tab-content">
-        ${props.subTab === "usage" ? renderUsagePane(props) : nothing}
         ${props.subTab === "protocol" ? renderProtocolAndNetworkPane(props) : nothing}
+        ${props.subTab === "settings" ? renderSettingsPane(props) : nothing}
       </div>
       ${props.selectedTrace
         ? html`<div
@@ -645,6 +665,10 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
               ${renderProtocolMonitorDetail({
                 trace: props.selectedTrace,
                 onClose: props.onClearSelection,
+                onToggleType: (key) => {
+                  props.onToggleType(key);
+                  props.onClearSelection();
+                },
               })}
             </div>
           </div>`
@@ -653,41 +677,127 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
   `;
 }
 
-function renderUsagePane(props: ProtocolMonitorProps): TemplateResult {
-  return html`<div class="pm-pane">${renderUsageOverview(props)}</div>`;
-}
-
 function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResult {
   const filtered = filterTraces(props.traces, props.disabledTypes);
   const coalesced = coalesceTraces(filtered);
-  const msgTypes = computeMessageTypes(props.traces, props.disabledTypes);
   const netStats = computeNetworkStats(props.traces);
+  const chatMessages = extractChatMessages(props.traces).slice(-5);
+  const toolCalls = extractToolCalls(props.traces).slice(-5);
   return html`
-    <div class="pm-split-pane">
-      <div class="pm-split-left">
-        <div class="pm-section-title">Message Filters</div>
-        ${renderMessageTypeFilters(msgTypes, props)}
-        <div
-          class="pm-section-title"
-          style="display:flex;justify-content:space-between;align-items:center;"
-        >
-          Sequence Diagram
-          <label class="pm-check" style="font-weight:400;text-transform:none;letter-spacing:0;">
-            <input
-              type="checkbox"
-              .checked=${props.autoScroll}
-              @change=${(e: Event) =>
-                props.onToggleAutoScroll((e.target as HTMLInputElement).checked)}
-            />
-            Auto-scroll
-          </label>
+    <div class="pm-protocol-layout">
+      <!-- Left half: messages, tool calls, sequence diagram -->
+      <div class="pm-left-half">
+        <div class="pm-left-top">
+          <div class="pm-live-card-col">
+            <div class="pm-section-title">Latest Messages</div>
+            ${renderChatCards(chatMessages)}
+          </div>
+          <div class="pm-live-card-col">
+            <div class="pm-section-title">Latest Tool Calls</div>
+            ${renderToolCallCards(toolCalls)}
+          </div>
         </div>
-        ${renderSequenceDiagram(coalesced, props)}
+        <div class="pm-diagram-section">
+          <div
+            class="pm-section-title"
+            style="display:flex;justify-content:space-between;align-items:center;"
+          >
+            Sequence Diagram
+            <label class="pm-check" style="font-weight:400;text-transform:none;letter-spacing:0;">
+              <input
+                type="checkbox"
+                .checked=${props.autoScroll}
+                @change=${(e: Event) =>
+                  props.onToggleAutoScroll((e.target as HTMLInputElement).checked)}
+              />
+              Auto-scroll
+            </label>
+          </div>
+          ${renderSequenceDiagram(coalesced, props)}
+        </div>
       </div>
-      <div class="pm-split-mid">
-        ${renderNetworkStats(netStats)} ${renderThroughputCharts(netStats)}
+      <!-- Right half: usage, network, latency (scrolls independently) -->
+      <div class="pm-right-half">
+        <div class="pm-usage-banner">${renderUsageOverview(props)}</div>
+        <div class="pm-right-cols">
+          <div class="pm-stats-col">${renderNetworkCombined(netStats)}</div>
+          <div class="pm-stats-col">${renderLatencyCombined(netStats)}</div>
+        </div>
       </div>
-      <div class="pm-split-right">${renderLatencySection(netStats)}</div>
+    </div>
+  `;
+}
+
+function renderSettingsPane(props: ProtocolMonitorProps): TemplateResult {
+  const msgTypes = computeMessageTypes(props.traces, props.disabledTypes);
+  return html`
+    <div class="pm-pane" style="display:flex;flex-direction:column;">
+      <div class="pm-section-title" style="flex-shrink:0;">Message Filters</div>
+      <p class="pm-muted" style="padding:0 10px;flex-shrink:0;">
+        Toggle message types to show/hide in the sequence diagram. Agentic task-unrelated messages
+        are hidden by default.
+      </p>
+      ${renderMessageTypeFilters(msgTypes, props)}
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Live chat / tool call cards
+// ---------------------------------------------------------------------------
+
+function renderChatCards(messages: ChatMessage[]): TemplateResult {
+  if (messages.length === 0) {
+    return html`<div class="pm-live-cards-empty">No chat messages yet</div>`;
+  }
+  return html`
+    <div class="pm-live-cards">
+      ${messages.map(
+        (m) => html`
+          <div class="pm-live-card ${m.role === "user" ? "pm-card-user" : "pm-card-assistant"}">
+            <div class="pm-card-role">${m.role === "user" ? "User" : "Assistant"}</div>
+            <div class="pm-card-text">
+              ${m.text.slice(0, 200)}${m.text.length > 200 ? "\u2026" : ""}
+            </div>
+            <div class="pm-card-time">
+              ${new Date(m.ts).toLocaleTimeString("en-US", { hour12: false })}
+            </div>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function renderToolCallCards(calls: ToolCallMessage[]): TemplateResult {
+  if (calls.length === 0) {
+    return html`<div class="pm-live-cards-empty">No tool calls yet</div>`;
+  }
+  return html`
+    <div class="pm-live-cards">
+      ${calls.map(
+        (c) => html`
+          <div
+            class="pm-live-card pm-card-tool ${c.phase === "start"
+              ? "pm-card-tool-start"
+              : c.phase === "result" || c.phase === "end"
+                ? "pm-card-tool-end"
+                : ""}"
+          >
+            <div class="pm-card-role">
+              <strong>${c.name}</strong>
+              <span class="pm-card-phase">${c.phase}</span>
+              ${c.agentId ? html`<span class="pm-card-agent">${c.agentId}</span>` : nothing}
+            </div>
+            <div class="pm-card-text">
+              ${c.detail.slice(0, 150)}${c.detail.length > 150 ? "\u2026" : ""}
+            </div>
+            <div class="pm-card-time">
+              ${new Date(c.ts).toLocaleTimeString("en-US", { hour12: false })}
+            </div>
+          </div>
+        `,
+      )}
     </div>
   `;
 }
@@ -901,7 +1011,13 @@ function renderSequenceDiagram(
     <div class="pm-diagram" id="pm-diagram-scroll" @scroll=${handleDiagramScroll}>
       <div class="pm-columns-header">
         <div class="pm-ts-header">Time</div>
-        ${COLUMNS.map((col) => html`<div class="pm-col-header">${COL_LABELS[col]}</div>`)}
+        ${COLUMNS.map(
+          (col) =>
+            html`<div class="pm-col-header">
+              <span class="pm-col-icon">${unsafeHTML(COL_ICONS[col])}</span>
+              <span class="pm-col-label-text">${COL_LABELS[col]}</span>
+            </div>`,
+        )}
       </div>
       ${coalesced.length === 0
         ? html`<div class="pm-empty">
@@ -1080,13 +1196,6 @@ function renderRow(
 // Section 4: Network statistics (right-top)
 // ---------------------------------------------------------------------------
 
-function peakBps(samples: ThroughputSample[]): number {
-  if (samples.length === 0) {
-    return 0;
-  }
-  return Math.max(...samples.map((s) => s.bytesPerSec));
-}
-
 function avgBps(samples: ThroughputSample[]): number {
   if (samples.length === 0) {
     return 0;
@@ -1094,98 +1203,68 @@ function avgBps(samples: ThroughputSample[]): number {
   return samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length;
 }
 
-function renderNetworkStats(net: NetworkStats): TemplateResult {
+function renderNetworkCombined(net: NetworkStats): TemplateResult {
   const total = net.totalBytesIn + net.totalBytesOut;
   const inPct = total > 0 ? Math.round((net.totalBytesIn / total) * 100) : 0;
   const outPct = 100 - inPct;
 
   return html`
-    <div class="pm-net-stats">
-      <div class="pm-filters-title">Network Statistics</div>
-
-      <div class="pm-net-cards">
-        <div class="pm-net-card">
-          <div class="pm-net-card-label">Total Transfer</div>
-          <div class="pm-net-card-value">${formatBytes(total)}</div>
-          <div class="pm-net-bar">
-            <div
-              class="pm-net-bar-in"
-              style="width:${inPct}%;"
-              title="In: ${formatBytes(net.totalBytesIn)}"
-            ></div>
-            <div
-              class="pm-net-bar-out"
-              style="width:${outPct}%;"
-              title="Out: ${formatBytes(net.totalBytesOut)}"
-            ></div>
-          </div>
-          <div class="pm-net-bar-legend">
-            <span
-              ><span class="pm-dot" style="background:#3b82f6;"></span> In
-              ${formatBytes(net.totalBytesIn)}</span
-            >
-            <span
-              ><span class="pm-dot" style="background:#f59e0b;"></span> Out
-              ${formatBytes(net.totalBytesOut)}</span
-            >
-          </div>
+    <div class="pm-filters-title">Network Statistics</div>
+    <div class="pm-net-cards" style="padding:4px 0;">
+      <div class="pm-net-card">
+        <div class="pm-net-card-label">Total Transfer</div>
+        <div class="pm-net-card-value">${formatBytes(total)}</div>
+        <div class="pm-net-bar">
+          <div
+            class="pm-net-bar-in"
+            style="width:${inPct}%;"
+            title="In: ${formatBytes(net.totalBytesIn)}"
+          ></div>
+          <div
+            class="pm-net-bar-out"
+            style="width:${outPct}%;"
+            title="Out: ${formatBytes(net.totalBytesOut)}"
+          ></div>
         </div>
-      </div>
-
-      <div class="pm-net-channels">
-        ${renderChannelRow("Operator ↔ Gateway", net.operatorGateway, "#3b82f6")}
-        ${renderChannelRow("Agent ↔ LLM", net.agentLlm, "#f59e0b")}
-        ${renderChannelRow("Gateway ↔ Node", net.gatewayNode, "#22c55e")}
-      </div>
-    </div>
-  `;
-}
-
-function renderChannelRow(
-  label: string,
-  samples: ThroughputSample[],
-  color: string,
-): TemplateResult {
-  const peak = peakBps(samples);
-  const avg = avgBps(samples);
-  const totalBytes = samples.reduce((a, s) => a + s.rawBytes, 0);
-
-  return html`
-    <div class="pm-net-channel">
-      <div class="pm-net-channel-header">
-        <span class="pm-dot" style="background:${color};"></span>
-        <span class="pm-net-channel-label">${label}</span>
-        <span class="pm-net-channel-badge">${samples.length} samples</span>
-      </div>
-      <div class="pm-net-channel-metrics">
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatBytes(peak)}/s</span>
-          <span class="pm-net-metric-label">peak</span>
-        </div>
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatBytes(avg)}/s</span>
-          <span class="pm-net-metric-label">avg</span>
-        </div>
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatBytes(totalBytes)}</span>
-          <span class="pm-net-metric-label">total</span>
+        <div class="pm-net-bar-legend">
+          <span
+            ><span class="pm-dot" style="background:#3b82f6;"></span> In
+            ${formatBytes(net.totalBytesIn)}</span
+          >
+          <span
+            ><span class="pm-dot" style="background:#f59e0b;"></span> Out
+            ${formatBytes(net.totalBytesOut)}</span
+          >
         </div>
       </div>
     </div>
-  `;
-}
-
-// ---------------------------------------------------------------------------
-// Section 5: Throughput charts (right-bottom)
-// ---------------------------------------------------------------------------
-
-function renderThroughputCharts(net: NetworkStats): TemplateResult {
-  return html`
-    <div class="pm-charts">
-      ${renderChart("Operator ↔ Gateway", net.operatorGateway, "#3b82f6")}
-      ${renderChart("Agent ↔ LLM", net.agentLlm, "#f59e0b")}
-      ${renderChart("Gateway ↔ Node", net.gatewayNode, "#22c55e")}
-    </div>
+    ${renderStatsChart(
+      "Operator (STA) \u2194 Gateway (AP)",
+      net.operatorGateway,
+      "#3b82f6",
+      "#e11d48",
+      "#059669",
+      "STA \u2192 AP",
+      "AP \u2192 STA",
+    )}
+    ${renderStatsChart(
+      "Agent (AP) \u2194 Model",
+      net.agentLlm,
+      "#f59e0b",
+      "#e11d48",
+      "#059669",
+      "Prompt (lifecycle)",
+      "Response (stream)",
+    )}
+    ${renderStatsChart(
+      "Gateway (AP) \u2194 Node (PC)",
+      net.gatewayNode,
+      "#22c55e",
+      "#e11d48",
+      "#059669",
+      "AP \u2192 PC",
+      "PC \u2192 AP",
+    )}
   `;
 }
 
@@ -1197,7 +1276,24 @@ function chartTimeLabel(ts: number): string {
   });
 }
 
-function renderChart(title: string, samples: ThroughputSample[], color: string): TemplateResult {
+/**
+ * Combined stats + chart for a single throughput route.
+ * Numbers displayed above the chart, directional lines use solid strokes
+ * with different colors.
+ */
+function renderStatsChart(
+  title: string,
+  dir: DirectionalThroughputSamples,
+  color: string,
+  fwdColor: string,
+  revColor: string,
+  fwdLabel: string,
+  revLabel: string,
+): TemplateResult {
+  const samples = dir.combined;
+  const fwdSamples = dir.forward;
+  const revSamples = dir.reverse;
+
   const PAD_L = 48;
   const PAD_R = 8;
   const PAD_T = 6;
@@ -1211,6 +1307,35 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
   const avg =
     samples.length > 0 ? samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length : 0;
   const totalBytes = samples.reduce((a, s) => a + s.rawBytes, 0);
+  const fwdAvg = avgBps(fwdSamples);
+  const revAvg = avgBps(revSamples);
+
+  const statsHtml = html`
+    <div class="pm-net-channel-metrics" style="margin-bottom:2px;">
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatBytes(peak)}/s</span>
+        <span class="pm-net-metric-label">peak</span>
+      </div>
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatBytes(avg)}/s</span>
+        <span class="pm-net-metric-label">avg</span>
+      </div>
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatBytes(totalBytes)}</span>
+        <span class="pm-net-metric-label">total</span>
+      </div>
+    </div>
+    <div class="pm-net-channel-metrics" style="margin-bottom:4px;">
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val" style="color:${fwdColor};">${formatBytes(fwdAvg)}/s</span>
+        <span class="pm-net-metric-label">${fwdLabel}</span>
+      </div>
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val" style="color:${revColor};">${formatBytes(revAvg)}/s</span>
+        <span class="pm-net-metric-label">${revLabel}</span>
+      </div>
+    </div>
+  `;
 
   if (samples.length < 2) {
     return html`
@@ -1219,11 +1344,10 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
           <span class="pm-chart-title"
             ><span class="pm-dot" style="background:${color};"></span> ${title}</span
           >
+          <span class="pm-net-channel-badge">${samples.length} samples</span>
         </div>
+        ${statsHtml}
         <div class="pm-chart-empty">Waiting for data...</div>
-        <div class="pm-chart-summary">
-          <span>Peak: —</span><span>Avg: —</span><span>Total: —</span>
-        </div>
       </div>
     `;
   }
@@ -1236,31 +1360,25 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
 
-  // Line + area fill points
-  const linePoints = samples.map((s) => `${toX(s.ts)},${toY(s.bytesPerSec)}`).join(" ");
-  const areaPoints =
-    `${toX(minTs)},${toY(0)} ` +
-    samples.map((s) => `${toX(s.ts)},${toY(s.bytesPerSec)}`).join(" ") +
-    ` ${toX(maxTs)},${toY(0)}`;
+  const makeLine = (s: ThroughputSample[]) =>
+    s.map((p) => `${toX(p.ts)},${toY(p.bytesPerSec)}`).join(" ");
 
-  // Y-axis grid (4 lines)
+  const fwdLinePoints = fwdSamples.length >= 1 ? makeLine(fwdSamples) : null;
+  const revLinePoints = revSamples.length >= 1 ? makeLine(revSamples) : null;
+
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
     const val = (maxVal / yGridCount) * (i + 1);
     return { y: toY(val), label: formatBytes(val) + "/s" };
   });
 
-  // X-axis labels (5 ticks)
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
     const ts = minTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
 
-  // Average line
   const avgY = toY(avg);
-
-  // Unique chart id for gradient
   const chartId = `chart-${title.replace(/\W/g, "")}`;
 
   return html`
@@ -1269,21 +1387,32 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
         <span class="pm-chart-title"
           ><span class="pm-dot" style="background:${color};"></span> ${title}</span
         >
+        <span class="pm-net-channel-badge">${samples.length} samples</span>
       </div>
+      ${statsHtml}
       <div
         class="pm-chart-wrap"
         @mousemove=${(e: MouseEvent) =>
-          handleChartHover(e, samples, minTs, tsRange, maxVal, PAD_L, plotW, plotH, PAD_T)}
+          handleChartHover(
+            e,
+            samples,
+            minTs,
+            tsRange,
+            maxVal,
+            PAD_L,
+            plotW,
+            plotH,
+            PAD_T,
+            fwdSamples,
+            revSamples,
+            fwdColor,
+            revColor,
+            fwdLabel,
+            revLabel,
+          )}
         @mouseleave=${handleChartLeave}
       >
         <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="${chartId}-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="${color}" stop-opacity="0.25" />
-              <stop offset="100%" stop-color="${color}" stop-opacity="0.02" />
-            </linearGradient>
-          </defs>
-          <!-- Y grid -->
           ${yGridLines.map(
             (g) => html`
               <line
@@ -1306,7 +1435,6 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
               >
             `,
           )}
-          <!-- X axis -->
           <line
             x1="${PAD_L}"
             y1="${PAD_T + plotH}"
@@ -1328,7 +1456,6 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
               >
             `,
           )}
-          <!-- Avg line -->
           <line
             x1="${PAD_L}"
             y1="${avgY}"
@@ -1349,41 +1476,41 @@ function renderChart(title: string, samples: ThroughputSample[], color: string):
           >
             avg
           </text>
-          <!-- Area fill -->
-          <polygon points="${areaPoints}" fill="url(#${chartId}-fill)" />
-          <!-- Line -->
-          <polyline
-            points="${linePoints}"
-            fill="none"
-            stroke="${color}"
-            stroke-width="1.5"
-            stroke-linejoin="round"
-            vector-effect="non-scaling-stroke"
-          />
-          <!-- Data point dots -->
-          ${samples.map(
-            (s) => html`
-              <circle
-                cx="${toX(s.ts)}"
-                cy="${toY(s.bytesPerSec)}"
-                r="2"
-                fill="${color}"
-                opacity="0.6"
-              />
-            `,
-          )}
+          ${fwdLinePoints
+            ? svg`<polyline points="${fwdLinePoints}" fill="none" stroke="${fwdColor}"
+                stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />`
+            : nothing}
+          ${revLinePoints
+            ? svg`<polyline points="${revLinePoints}" fill="none" stroke="${revColor}"
+                stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />`
+            : nothing}
         </svg>
         <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
         <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
       </div>
-      <div class="pm-chart-summary">
-        <span>Peak: <b>${formatBytes(peak)}/s</b></span>
-        <span>Avg: <b>${formatBytes(avg)}/s</b></span>
-        <span>Total: <b>${formatBytes(totalBytes)}</b></span>
-        <span>Samples: <b>${samples.length}</b></span>
+      <div class="pm-chart-legend">
+        <span
+          ><span class="pm-legend-line" style="background:${fwdColor};"></span> ${fwdLabel}</span
+        >
+        <span
+          ><span class="pm-legend-line" style="background:${revColor};"></span> ${revLabel}</span
+        >
       </div>
     </div>
   `;
+}
+
+function findNearest(samples: ThroughputSample[], ts: number): ThroughputSample | null {
+  let nearest: ThroughputSample | null = null;
+  let nearestDist = Infinity;
+  for (const s of samples) {
+    const d = Math.abs(s.ts - ts);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = s;
+    }
+  }
+  return nearest;
 }
 
 function handleChartHover(
@@ -1396,13 +1523,18 @@ function handleChartHover(
   plotW: number,
   plotH: number,
   padT: number,
+  fwdSamples: ThroughputSample[] = [],
+  revSamples: ThroughputSample[] = [],
+  fwdColor = "#e11d48",
+  revColor = "#059669",
+  fwdLabel = "\u2192",
+  revLabel = "\u2190",
 ) {
   const wrap = e.currentTarget as HTMLElement;
   const rect = wrap.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const svgW = rect.width;
 
-  // Map mouse X to timestamp
   const xRatio = (mouseX - (padL / 460) * svgW) / ((plotW / 460) * svgW);
   if (xRatio < 0 || xRatio > 1) {
     handleChartLeave(e);
@@ -1410,18 +1542,7 @@ function handleChartHover(
   }
   const hoverTs = minTs + xRatio * tsRange;
 
-  // Find nearest sample
-  let nearest = samples[0];
-  let nearestDist = Infinity;
-  for (const s of samples) {
-    const d = Math.abs(s.ts - hoverTs);
-    if (d < nearestDist) {
-      nearestDist = d;
-      nearest = s;
-    }
-  }
-
-  // Position tooltip & crosshair
+  const nearest = findNearest(samples, hoverTs);
   const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
   const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
   if (!tip || !cross || !nearest) {
@@ -1436,10 +1557,29 @@ function handleChartHover(
   cross.style.display = "block";
   cross.style.left = `${crossLeftPct}%`;
 
+  // Find nearest directional samples at similar timestamp (within one bucket)
+  const bucketThreshold = 3000;
+  const fwdNearest = findNearest(fwdSamples, nearest.ts);
+  const revNearest = findNearest(revSamples, nearest.ts);
+  const fwdVal =
+    fwdNearest && Math.abs(fwdNearest.ts - nearest.ts) < bucketThreshold
+      ? fwdNearest.bytesPerSec
+      : 0;
+  const revVal =
+    revNearest && Math.abs(revNearest.ts - nearest.ts) < bucketThreshold
+      ? revNearest.bytesPerSec
+      : 0;
+
+  const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    fractionalSecondDigits: 1,
+  });
+
   tip.style.display = "block";
   tip.innerHTML =
-    `<b>${formatBytes(nearest.bytesPerSec)}/s</b><br/>` +
-    new Date(nearest.ts).toLocaleTimeString("en-US", { hour12: false, fractionalSecondDigits: 1 });
+    `<span style="color:${fwdColor};font-weight:600;">${fwdLabel}</span> <b>${formatBytes(fwdVal)}/s</b><br/>` +
+    `<span style="color:${revColor};font-weight:600;">${revLabel}</span> <b>${formatBytes(revVal)}/s</b><br/>` +
+    `<span style="color:#9ca3af;">${time}</span>`;
 
   // Position tooltip to avoid overflow
   const tipLeft = crossLeftPct > 70 ? crossLeftPct - 20 : crossLeftPct + 3;
@@ -1462,53 +1602,69 @@ function formatMs(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function renderLatencySection(net: NetworkStats): TemplateResult {
+function renderLatencyCombined(net: NetworkStats): TemplateResult {
   return html`
     <div class="pm-filters-title">Latency</div>
-    <div class="pm-net-channels">
-      ${renderLatencyCard("Agent ↔ LLM · TTFT", net.agentLlmTtft, "#7c3aed")}
-      ${renderLatencyCard("Agent ↔ LLM · Generation", net.agentLlmGeneration, "#9333ea")}
-      ${renderLatencyCard("Gateway ↔ Node", net.gatewayNodeLatency, "#059669")}
-    </div>
-    <div class="pm-charts">
-      ${renderLatencyChart("Agent ↔ LLM · TTFT", net.agentLlmTtft, "#7c3aed")}
-      ${renderLatencyChart("Agent ↔ LLM · Generation", net.agentLlmGeneration, "#9333ea")}
-      ${renderLatencyChart("Gateway ↔ Node Latency", net.gatewayNodeLatency, "#059669")}
-    </div>
+    ${renderLatencyStatsChart(
+      "Agent (AP) \u2194 Model \u00B7 TTFT (wait)",
+      net.agentLlmTtft,
+      "#7c3aed",
+    )}
+    ${renderLatencyStatsChart(
+      "Agent (AP) \u2194 Model \u00B7 Streaming",
+      net.agentLlmGeneration,
+      "#9333ea",
+    )}
+    ${renderLatencyStatsChart("Gateway (AP) \u2194 Node (PC)", net.gatewayNodeLatency, "#059669")}
   `;
 }
 
-function renderLatencyCard(label: string, stats: LatencyStats, color: string): TemplateResult {
+function renderLatencyStatsChart(
+  label: string,
+  stats: LatencyStats,
+  color: string,
+): TemplateResult {
+  const statsHtml = html`
+    <div class="pm-net-channel-metrics" style="margin-bottom:2px;">
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatMs(stats.avgMs)}</span>
+        <span class="pm-net-metric-label">avg</span>
+      </div>
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatMs(stats.p50Ms)}</span>
+        <span class="pm-net-metric-label">p50</span>
+      </div>
+    </div>
+    <div class="pm-net-channel-metrics" style="margin-bottom:4px;">
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatMs(stats.p95Ms)}</span>
+        <span class="pm-net-metric-label">p95</span>
+      </div>
+      <div class="pm-net-metric">
+        <span class="pm-net-metric-val">${formatMs(stats.peakMs)}</span>
+        <span class="pm-net-metric-label">peak</span>
+      </div>
+    </div>
+  `;
   return html`
-    <div class="pm-net-channel">
-      <div class="pm-net-channel-header">
-        <span class="pm-dot" style="background:${color};"></span>
-        <span class="pm-net-channel-label">${label}</span>
+    <div class="pm-chart-block">
+      <div class="pm-chart-header">
+        <span class="pm-chart-title"
+          ><span class="pm-dot" style="background:${color};"></span> ${label}</span
+        >
         <span class="pm-net-channel-badge">${stats.count} samples</span>
       </div>
-      <div class="pm-net-channel-metrics">
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatMs(stats.avgMs)}</span>
-          <span class="pm-net-metric-label">avg</span>
-        </div>
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatMs(stats.p50Ms)}</span>
-          <span class="pm-net-metric-label">p50</span>
-        </div>
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatMs(stats.p95Ms)}</span>
-          <span class="pm-net-metric-label">p95</span>
-        </div>
-        <div class="pm-net-metric">
-          <span class="pm-net-metric-val">${formatMs(stats.peakMs)}</span>
-          <span class="pm-net-metric-label">peak</span>
-        </div>
-      </div>
+      ${statsHtml} ${renderLatencyChartSvg(label, stats, color)}
     </div>
   `;
 }
 
-function renderLatencyChart(title: string, stats: LatencyStats, color: string): TemplateResult {
+function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string): TemplateResult {
+  const { samples } = stats;
+  if (samples.length === 0) {
+    return html`<div class="pm-chart-empty">Waiting for data...</div>`;
+  }
+
   const PAD_L = 48;
   const PAD_R = 8;
   const PAD_T = 6;
@@ -1517,162 +1673,121 @@ function renderLatencyChart(title: string, stats: LatencyStats, color: string): 
   const H = 120;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  const { samples } = stats;
-
-  if (samples.length === 0) {
-    return html`
-      <div class="pm-chart-block">
-        <div class="pm-chart-header">
-          <span class="pm-chart-title"
-            ><span class="pm-dot" style="background:${color};"></span> ${title}</span
-          >
-        </div>
-        <div class="pm-chart-empty">Waiting for data...</div>
-        <div class="pm-chart-summary">
-          <span>Avg: —</span><span>P50: —</span><span>P95: —</span><span>Peak: —</span>
-        </div>
-      </div>
-    `;
-  }
 
   const maxVal = Math.max(stats.peakMs ?? 1, 1);
   const minTs = samples[0].ts;
   const maxTs = samples.length > 1 ? samples[samples.length - 1].ts : minTs + 1000;
   const tsRange = maxTs - minTs || 1;
   const avgVal = stats.avgMs ?? 0;
-
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
 
-  // Y-axis grid (4 lines)
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
     const val = (maxVal / yGridCount) * (i + 1);
     return { y: toY(val), label: formatMs(val) };
   });
-
-  // X-axis labels (5 ticks)
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
     const ts = minTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
-
-  // Average line
   const avgY = toY(avgVal);
-
-  const chartId = `lat-${title.replace(/\W/g, "")}`;
+  const chartId = `lat-${label.replace(/\W/g, "")}`;
 
   return html`
-    <div class="pm-chart-block">
-      <div class="pm-chart-header">
-        <span class="pm-chart-title"
-          ><span class="pm-dot" style="background:${color};"></span> ${title}</span
+    <div
+      class="pm-chart-wrap"
+      @mousemove=${(e: MouseEvent) =>
+        handleLatencyChartHover(e, samples, minTs, tsRange, maxVal, PAD_L, plotW, plotH, PAD_T)}
+      @mouseleave=${handleChartLeave}
+    >
+      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg" preserveAspectRatio="none">
+        ${yGridLines.map(
+          (g) => html`
+            <line
+              x1="${PAD_L}"
+              y1="${g.y}"
+              x2="${W - PAD_R}"
+              y2="${g.y}"
+              stroke="#d4d8e8"
+              stroke-width="0.5"
+              stroke-dasharray="3,3"
+            />
+            <text
+              x="${PAD_L - 4}"
+              y="${g.y + 3}"
+              text-anchor="end"
+              fill="#6b7280"
+              font-size="8"
+              font-family="monospace"
+              >${g.label}</text
+            >
+          `,
+        )}
+        <line
+          x1="${PAD_L}"
+          y1="${PAD_T + plotH}"
+          x2="${W - PAD_R}"
+          y2="${PAD_T + plotH}"
+          stroke="#c4c9d6"
+          stroke-width="0.5"
+        />
+        ${xTicks.map(
+          (t) => html`
+            <text
+              x="${t.x}"
+              y="${H - 2}"
+              text-anchor="middle"
+              fill="#6b7280"
+              font-size="8"
+              font-family="monospace"
+              >${t.label}</text
+            >
+          `,
+        )}
+        <line
+          x1="${PAD_L}"
+          y1="${avgY}"
+          x2="${W - PAD_R}"
+          y2="${avgY}"
+          stroke="${color}"
+          stroke-width="1.5"
+          stroke-dasharray="6,4"
+          opacity="0.8"
+        />
+        <text
+          x="${W - PAD_R + 2}"
+          y="${avgY + 3}"
+          fill="${color}"
+          font-size="8"
+          font-family="monospace"
+          font-weight="600"
+          opacity="0.9"
         >
-      </div>
-      <div
-        class="pm-chart-wrap"
-        @mousemove=${(e: MouseEvent) =>
-          handleLatencyChartHover(e, samples, minTs, tsRange, maxVal, PAD_L, plotW, plotH, PAD_T)}
-        @mouseleave=${handleChartLeave}
-      >
-        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg" preserveAspectRatio="none">
-          <!-- Y grid -->
-          ${yGridLines.map(
-            (g) => html`
-              <line
-                x1="${PAD_L}"
-                y1="${g.y}"
-                x2="${W - PAD_R}"
-                y2="${g.y}"
-                stroke="#d4d8e8"
-                stroke-width="0.5"
-                stroke-dasharray="3,3"
-              />
-              <text
-                x="${PAD_L - 4}"
-                y="${g.y + 3}"
-                text-anchor="end"
-                fill="#6b7280"
-                font-size="8"
-                font-family="monospace"
-                >${g.label}</text
-              >
-            `,
-          )}
-          <!-- X axis -->
-          <line
-            x1="${PAD_L}"
-            y1="${PAD_T + plotH}"
-            x2="${W - PAD_R}"
-            y2="${PAD_T + plotH}"
-            stroke="#c4c9d6"
-            stroke-width="0.5"
-          />
-          ${xTicks.map(
-            (t) => html`
-              <text
-                x="${t.x}"
-                y="${H - 2}"
-                text-anchor="middle"
-                fill="#6b7280"
-                font-size="8"
-                font-family="monospace"
-                >${t.label}</text
-              >
-            `,
-          )}
-          <!-- Avg line -->
-          <line
-            x1="${PAD_L}"
-            y1="${avgY}"
-            x2="${W - PAD_R}"
-            y2="${avgY}"
-            stroke="${color}"
-            stroke-width="1.5"
-            stroke-dasharray="6,4"
-            opacity="0.8"
-          />
-          <text
-            x="${W - PAD_R + 2}"
-            y="${avgY + 3}"
-            fill="${color}"
-            font-size="8"
-            font-family="monospace"
-            font-weight="600"
-            opacity="0.9"
-          >
-            avg
-          </text>
-          <!-- Scatter points -->
-          ${samples.map(
-            (s) => html`
-              <circle
-                cx="${toX(s.ts)}"
-                cy="${toY(s.latencyMs)}"
-                r="5"
-                fill="${color}"
-                opacity="1"
-                stroke="#ffffff"
-                stroke-width="1.5"
-              />
-            `,
-          )}
-        </svg>
-        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
-        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
-      </div>
-      <div class="pm-chart-summary">
-        <span>Avg: <b>${formatMs(stats.avgMs)}</b></span>
-        <span>P50: <b>${formatMs(stats.p50Ms)}</b></span>
-        <span>P95: <b>${formatMs(stats.p95Ms)}</b></span>
-        <span>Peak: <b>${formatMs(stats.peakMs)}</b></span>
-        <span>N: <b>${stats.count}</b></span>
-      </div>
+          avg
+        </text>
+        ${samples.map(
+          (s) => html`
+            <circle
+              cx="${toX(s.ts)}"
+              cy="${toY(s.latencyMs)}"
+              r="5"
+              fill="${color}"
+              opacity="1"
+              stroke="#ffffff"
+              stroke-width="1.5"
+            />
+          `,
+        )}
+      </svg>
+      <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+      <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
     </div>
   `;
 }
 
+// Keep for backwards compat
 function handleLatencyChartHover(
   e: MouseEvent,
   samples: LatencySample[],
@@ -1875,32 +1990,131 @@ const STYLES = /* css */ `
     overflow-y: auto;
     padding: 10px;
   }
-  .pm-split-pane {
+  .pm-protocol-layout {
     flex: 1;
     display: grid;
-    grid-template-columns: 50% 25% 25%;
+    grid-template-columns: 1fr 1fr;
     overflow: hidden;
+    gap: 0;
   }
-  .pm-split-left {
+  .pm-left-half {
     display: flex;
     flex-direction: column;
     overflow: hidden;
     border-right: 1px solid #d4d8e8;
   }
-  .pm-split-mid {
+  .pm-left-top {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex-shrink: 0;
+    border-bottom: 1px solid #d4d8e8;
+  }
+  .pm-live-card-col {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    padding: 8px;
+    max-height: 300px;
     overflow-y: auto;
-    padding: 10px;
+  }
+  .pm-live-card-col:first-child {
     border-right: 1px solid #d4d8e8;
   }
-  .pm-split-right {
+  .pm-right-half {
     display: flex;
     flex-direction: column;
-    gap: 10px;
     overflow-y: auto;
-    padding: 10px;
+  }
+  .pm-usage-banner {
+    padding: 8px;
+    border-bottom: 1px solid #d4d8e8;
+    flex-shrink: 0;
+  }
+  .pm-right-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+  .pm-stats-col {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    overflow-y: auto;
+  }
+  .pm-stats-col:first-child {
+    border-right: 1px solid #d4d8e8;
+  }
+  .pm-diagram-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 300px;
+    overflow: hidden;
+  }
+  /* Live cards */
+  .pm-live-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .pm-live-cards-empty {
+    padding: 20px;
+    text-align: center;
+    color: #9ca3af;
+    font-size: 11px;
+  }
+  .pm-live-card {
+    border: 1px solid #d4d8e8;
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: #ffffff;
+    font-size: 11px;
+  }
+  .pm-card-user { border-left: 3px solid #3b82f6; }
+  .pm-card-assistant { border-left: 3px solid #8b5cf6; }
+  .pm-card-tool { border-left: 3px solid #f59e0b; }
+  .pm-card-tool-start { border-left-color: #3b82f6; }
+  .pm-card-tool-end { border-left-color: #22c55e; }
+  .pm-card-role {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pm-card-phase {
+    font-size: 8px;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #eef0f6;
+    color: #374151;
+  }
+  .pm-card-agent {
+    font-size: 8px;
+    color: #9ca3af;
+    font-weight: 400;
+  }
+  .pm-card-text {
+    color: #1a1a2e;
+    line-height: 1.4;
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .pm-card-time {
+    font-size: 8px;
+    color: #9ca3af;
+    margin-top: 2px;
+    text-align: right;
   }
   .pm-section-title {
     padding: 8px 10px 4px;
@@ -1914,9 +2128,8 @@ const STYLES = /* css */ `
 
   /* Filters */
   .pm-filters {
-    max-height: 220px;
+    flex: 1;
     overflow-y: auto;
-    flex-shrink: 0;
   }
   .pm-filters-title {
     padding: 6px 10px 4px;
@@ -2049,13 +2262,27 @@ const STYLES = /* css */ `
   }
   .pm-col-header {
     text-align: center;
-    padding: 5px 0;
-    font-weight: 600;
+    padding: 8px 0 6px;
+    color: #374151;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+  }
+  .pm-col-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #4b5563;
+  }
+  .pm-col-label-text {
+    font-weight: 800;
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #6b7280;
-    position: relative;
+    letter-spacing: 0.06em;
+    color: #374151;
   }
   .pm-col-header::after {
     content: "";
@@ -2290,7 +2517,7 @@ const STYLES = /* css */ `
     flex: 1;
   }
   .pm-net-metric-val {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     color: #1a1a2e;
     white-space: nowrap;
@@ -2306,6 +2533,7 @@ const STYLES = /* css */ `
   .pm-charts {
     flex: 1;
     padding: 0;
+    margin-top: 12px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -2388,6 +2616,42 @@ const STYLES = /* css */ `
   .pm-chart-summary b {
     color: #1a1a2e;
     font-weight: 600;
+  }
+  .pm-chart-legend {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+    font-size: 9px;
+    color: #6b7280;
+  }
+  .pm-chart-legend span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .pm-legend-line {
+    display: inline-block;
+    width: 16px;
+    height: 2px;
+    border-radius: 1px;
+  }
+  .pm-legend-dash {
+    background: repeating-linear-gradient(
+      90deg,
+      currentColor 0px,
+      currentColor 4px,
+      transparent 4px,
+      transparent 7px
+    ) !important;
+  }
+  .pm-legend-dot {
+    background: repeating-linear-gradient(
+      90deg,
+      currentColor 0px,
+      currentColor 2px,
+      transparent 2px,
+      transparent 5px
+    ) !important;
   }
 
   /* Detail overlay */

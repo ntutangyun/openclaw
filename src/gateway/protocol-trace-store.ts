@@ -90,10 +90,20 @@ function resolveEntities(
     if (stream === "tool") {
       return { source: "agent", target: "gateway" };
     }
-    // Lifecycle: start = agent calling LLM, end = LLM done
+    // Lifecycle: start/request = agent calling LLM, end = LLM done
     if (stream === "lifecycle") {
-      const phase = typeof data?.phase === "string" ? data.phase : undefined;
-      if (phase === "start") {
+      // Phase can be at data.phase (flattened by summarize) or data.data.phase (nested AgentEventPayload)
+      const nestedData =
+        data?.data && typeof data.data === "object"
+          ? (data.data as Record<string, unknown>)
+          : undefined;
+      const phase =
+        typeof data?.phase === "string"
+          ? data.phase
+          : typeof nestedData?.phase === "string"
+            ? nestedData.phase
+            : undefined;
+      if (phase === "start" || phase === "request") {
         return { source: "agent", target: "llm" };
       }
       if (phase === "end" || phase === "error") {
@@ -120,7 +130,7 @@ function estimatePayloadSize(payload: unknown): number {
   }
 }
 
-const RING_BUFFER_CAP = 5000;
+const RING_BUFFER_CAP = 1000;
 
 export class ProtocolTraceStore {
   private buffer: ProtocolTraceRecord[] = [];
@@ -149,7 +159,17 @@ export class ProtocolTraceStore {
 
     const { source, target } = resolveEntities(direction, kind, meta);
 
-    const payloadSize = estimatePayloadSize(meta.payload);
+    let payloadSize = estimatePayloadSize(meta.payload);
+
+    // For lifecycle request events, use the requestSize from the event data
+    // as it represents the actual LLM request size, not the small event envelope.
+    if (meta.stream === "lifecycle" || (meta.payload && typeof meta.payload === "object")) {
+      const p = meta.payload as Record<string, unknown> | undefined;
+      const data = p?.data && typeof p.data === "object" ? (p.data as Record<string, unknown>) : p;
+      if (data && typeof data?.requestSize === "number" && data.requestSize > 0) {
+        payloadSize = data.requestSize;
+      }
+    }
 
     // Resolve runId: prefer top-level meta, fall back to payload.runId (agent events)
     let runId = meta.runId as string | undefined;

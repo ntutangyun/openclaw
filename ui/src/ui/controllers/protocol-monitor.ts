@@ -102,12 +102,18 @@ export type LatencyStats = {
   count: number;
 };
 
+export type DirectionalThroughputSamples = {
+  combined: ThroughputSample[];
+  forward: ThroughputSample[];
+  reverse: ThroughputSample[];
+};
+
 export type NetworkStats = {
   totalBytesIn: number;
   totalBytesOut: number;
-  operatorGateway: ThroughputSample[];
-  agentLlm: ThroughputSample[];
-  gatewayNode: ThroughputSample[];
+  operatorGateway: DirectionalThroughputSamples;
+  agentLlm: DirectionalThroughputSamples;
+  gatewayNode: DirectionalThroughputSamples;
   /** Agent-LLM TTFT latency samples (one per LLM call). */
   agentLlmTtft: LatencyStats;
   /** Agent-LLM full generation latency samples (one per LLM call). */
@@ -115,6 +121,174 @@ export type NetworkStats = {
   /** Gateway-Node request-response latency samples. */
   gatewayNodeLatency: LatencyStats;
 };
+
+// ---------------------------------------------------------------------------
+// Chat / tool message extraction for live cards
+// ---------------------------------------------------------------------------
+
+export type ChatMessage = {
+  ts: number;
+  role: "user" | "assistant";
+  text: string;
+};
+
+export type ToolCallMessage = {
+  ts: number;
+  name: string;
+  phase: string;
+  detail: string;
+  agentId?: string;
+};
+
+export function extractChatMessages(traces: ProtocolTraceRecord[]): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  for (const t of traces) {
+    if (t.kind !== "event") {
+      continue;
+    }
+    // Chat events (complete messages, not streaming tokens)
+    if (t.event === "chat" || t.event === "session.message") {
+      const p = t.payload as Record<string, unknown> | undefined;
+      if (!p) {
+        continue;
+      }
+      const state = p.state as string | undefined;
+      if (state !== "final" && t.event === "chat") {
+        continue;
+      }
+      const msg = p.message as Record<string, unknown> | undefined;
+      if (!msg) {
+        continue;
+      }
+      const role = msg.role as string;
+      if (role !== "user" && role !== "assistant") {
+        continue;
+      }
+      let text = "";
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            typeof (block as Record<string, unknown>).text === "string"
+          ) {
+            text = ((block as Record<string, unknown>).text as string).trim();
+            if (text) {
+              break;
+            }
+          }
+        }
+      }
+      if (!text && typeof msg.text === "string") {
+        text = msg.text.trim();
+      }
+      if (text) {
+        messages.push({ ts: t.ts, role: role, text });
+      }
+    }
+  }
+  return messages;
+}
+
+export function extractToolCalls(traces: ProtocolTraceRecord[]): ToolCallMessage[] {
+  const calls: ToolCallMessage[] = [];
+  for (const t of traces) {
+    if (t.kind !== "event" || t.stream !== "tool") {
+      continue;
+    }
+    const p = t.payload as Record<string, unknown> | undefined;
+    const data = p?.data && typeof p.data === "object" ? (p.data as Record<string, unknown>) : p;
+    if (!data) {
+      continue;
+    }
+    const phase = (data.phase as string) ?? "";
+    const name = (data.name as string) ?? "unknown";
+    if (!phase) {
+      continue;
+    }
+    let detail = "";
+    const meta = typeof data.meta === "string" ? data.meta : undefined;
+    const args =
+      data.args && typeof data.args === "object" ? (data.args as Record<string, unknown>) : null;
+    if (phase === "start") {
+      if ((name === "exec" || name === "bash") && args?.command) {
+        detail = (
+          typeof args.command === "string" ? args.command : JSON.stringify(args.command)
+        ).slice(0, 120);
+      } else if (
+        (name === "read" || name === "write" || name === "edit") &&
+        (args?.path ?? args?.file_path)
+      ) {
+        detail = String(args?.path ?? args?.file_path);
+      } else if (meta) {
+        detail = meta.slice(0, 120);
+      }
+    } else if (phase === "result" || phase === "end") {
+      const isErr = data.isError === true;
+      detail = isErr ? "failed" : (meta ?? "done");
+    }
+    calls.push({
+      ts: t.ts,
+      name,
+      phase,
+      detail,
+      agentId: t.runId ? `agent:${t.runId.slice(0, 8)}` : undefined,
+    });
+  }
+  return calls;
+}
+
+/** Default disabled message types for cleaner agentic task view. */
+export const DEFAULT_DISABLED_TYPES = new Set([
+  "req.health",
+  "res.health",
+  "req.connect",
+  "event.open",
+  "event.hello-ok",
+  "req.agents.list",
+  "res.agents.list",
+  "req.nodes.list",
+  "res.nodes.list",
+  "req.sessions.list",
+  "res.sessions.list",
+  "req.sessions.subscribe",
+  "res.sessions.subscribe",
+  "req.sessions.unsubscribe",
+  "res.sessions.unsubscribe",
+  "req.sessions.messages.subscribe",
+  "res.sessions.messages.subscribe",
+  "req.sessions.messages.unsubscribe",
+  "res.sessions.messages.unsubscribe",
+  "event.presence",
+  "event.tick",
+  "event.heartbeat",
+  "event.health",
+  "event.protocol.trace",
+  "req.protocol-traces.list",
+  "res.protocol-traces.list",
+  "req.last-heartbeat",
+  "res.last-heartbeat",
+  "req.set-heartbeats",
+  "res.set-heartbeats",
+  "req.status",
+  "res.status",
+  "req.usage.status",
+  "res.usage.status",
+  "req.usage.cost",
+  "res.usage.cost",
+  "req.config.get",
+  "res.config.get",
+  "req.models.list",
+  "res.models.list",
+  "req.tools.catalog",
+  "res.tools.catalog",
+  "req.tools.effective",
+  "res.tools.effective",
+  "req.system-presence",
+  "res.system-presence",
+  "req.channels.status",
+  "res.channels.status",
+]);
 
 /**
  * Resolve the `phase` string from an agent event payload.
@@ -250,9 +424,16 @@ export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats
   let totalBytesIn = 0;
   let totalBytesOut = 0;
 
-  const ogBuckets = new Map<number, number>();
-  const alBuckets = new Map<number, number>();
-  const gnBuckets = new Map<number, number>();
+  // Combined + directional buckets for each route
+  const ogCombined = new Map<number, number>();
+  const ogFwd = new Map<number, number>(); // operator → gateway
+  const ogRev = new Map<number, number>(); // gateway → operator
+  const alCombined = new Map<number, number>();
+  const alFwd = new Map<number, number>(); // agent → llm
+  const alRev = new Map<number, number>(); // llm → agent
+  const gnCombined = new Map<number, number>();
+  const gnFwd = new Map<number, number>(); // gateway → node
+  const gnRev = new Map<number, number>(); // node → gateway
 
   for (const t of traces) {
     const size = t.payloadSize ?? 0;
@@ -266,14 +447,28 @@ export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats
     const src = t.source;
     const tgt = t.target;
 
-    if ((src === "operator" && tgt === "gateway") || (src === "gateway" && tgt === "operator")) {
-      ogBuckets.set(bucket, (ogBuckets.get(bucket) ?? 0) + size);
+    if (src === "operator" && tgt === "gateway") {
+      ogCombined.set(bucket, (ogCombined.get(bucket) ?? 0) + size);
+      ogFwd.set(bucket, (ogFwd.get(bucket) ?? 0) + size);
+    } else if (src === "gateway" && tgt === "operator") {
+      ogCombined.set(bucket, (ogCombined.get(bucket) ?? 0) + size);
+      ogRev.set(bucket, (ogRev.get(bucket) ?? 0) + size);
     }
-    if ((src === "agent" && tgt === "llm") || (src === "llm" && tgt === "agent")) {
-      alBuckets.set(bucket, (alBuckets.get(bucket) ?? 0) + size);
+
+    if (src === "agent" && tgt === "llm") {
+      alCombined.set(bucket, (alCombined.get(bucket) ?? 0) + size);
+      alFwd.set(bucket, (alFwd.get(bucket) ?? 0) + size);
+    } else if (src === "llm" && tgt === "agent") {
+      alCombined.set(bucket, (alCombined.get(bucket) ?? 0) + size);
+      alRev.set(bucket, (alRev.get(bucket) ?? 0) + size);
     }
-    if ((src === "gateway" && tgt === "node") || (src === "node" && tgt === "gateway")) {
-      gnBuckets.set(bucket, (gnBuckets.get(bucket) ?? 0) + size);
+
+    if (src === "gateway" && tgt === "node") {
+      gnCombined.set(bucket, (gnCombined.get(bucket) ?? 0) + size);
+      gnFwd.set(bucket, (gnFwd.get(bucket) ?? 0) + size);
+    } else if (src === "node" && tgt === "gateway") {
+      gnCombined.set(bucket, (gnCombined.get(bucket) ?? 0) + size);
+      gnRev.set(bucket, (gnRev.get(bucket) ?? 0) + size);
     }
   }
 
@@ -286,12 +481,22 @@ export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats
         rawBytes: bytes,
       }));
 
+  const toDirectional = (
+    combined: Map<number, number>,
+    fwd: Map<number, number>,
+    rev: Map<number, number>,
+  ): DirectionalThroughputSamples => ({
+    combined: toSamples(combined),
+    forward: toSamples(fwd),
+    reverse: toSamples(rev),
+  });
+
   return {
     totalBytesIn,
     totalBytesOut,
-    operatorGateway: toSamples(ogBuckets),
-    agentLlm: toSamples(alBuckets),
-    gatewayNode: toSamples(gnBuckets),
+    operatorGateway: toDirectional(ogCombined, ogFwd, ogRev),
+    agentLlm: toDirectional(alCombined, alFwd, alRev),
+    gatewayNode: toDirectional(gnCombined, gnFwd, gnRev),
     agentLlmTtft: computeAgentLlmTtft(traces),
     agentLlmGeneration: computeAgentLlmGeneration(traces),
     gatewayNodeLatency: computeGatewayNodeLatency(traces),
@@ -424,16 +629,19 @@ function computeAgentLlmTtft(traces: ProtocolTraceRecord[]): LatencyStats {
       continue;
     }
 
-    // Tool end: marks a new call boundary
-    if (t.stream === "tool" && resolvePhase(t.payload) === "end") {
-      let state = ttftRunState.get(t.runId);
-      if (!state) {
-        state = { lastBoundaryTs: t.ts, hasBoundary: true, inBurst: false, callIndex: 0 };
-        ttftRunState.set(t.runId, state);
-      } else {
-        state.lastBoundaryTs = t.ts;
-        state.hasBoundary = true;
-        state.inBurst = false;
+    // Tool end/result: marks a new call boundary
+    if (t.stream === "tool") {
+      const phase = resolvePhase(t.payload);
+      if (phase === "end" || phase === "result") {
+        let state = ttftRunState.get(t.runId);
+        if (!state) {
+          state = { lastBoundaryTs: t.ts, hasBoundary: true, inBurst: false, callIndex: 0 };
+          ttftRunState.set(t.runId, state);
+        } else {
+          state.lastBoundaryTs = t.ts;
+          state.hasBoundary = true;
+          state.inBurst = false;
+        }
       }
       continue;
     }
@@ -719,7 +927,7 @@ export function filterTraces(
 // Data loading
 // ---------------------------------------------------------------------------
 
-const MAX_VISIBLE = 5000;
+const MAX_VISIBLE = 1000;
 
 export async function loadProtocolTraces(host: ProtocolMonitorHost) {
   if (!host.client || !host.connected) {

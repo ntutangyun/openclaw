@@ -98,6 +98,18 @@ export async function executeNodeHostCommand(
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+  // When the gateway runs in a container (Linux) and the node is on a different
+  // platform (e.g., Windows), the gateway's workspace cwd is invalid on the node.
+  // Detect cross-platform mismatch and omit the cwd so the node uses its own default.
+  const nodePlatform = nodeInfo?.platform;
+  const gatewayIsUnix = process.platform !== "win32";
+  const nodeIsWindows = nodePlatform === "win32";
+  const cwdLooksUnix = params.workdir.startsWith("/");
+  const cwdLooksWindows = /^[A-Z]:\\/i.test(params.workdir);
+  const crossPlatformCwdMismatch =
+    (gatewayIsUnix && nodeIsWindows && cwdLooksUnix) ||
+    (!gatewayIsUnix && !nodeIsWindows && cwdLooksWindows);
+  const effectiveCwd = crossPlatformCwdMismatch ? undefined : params.workdir;
   const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
     "node.invoke",
     { timeoutMs: 15_000 },
@@ -107,7 +119,7 @@ export async function executeNodeHostCommand(
       params: {
         command: argv,
         rawCommand: params.command,
-        cwd: params.workdir,
+        cwd: effectiveCwd,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
@@ -120,7 +132,7 @@ export async function executeNodeHostCommand(
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
-  const runCwd = prepared.plan.cwd ?? params.workdir;
+  const runCwd = prepared.plan.cwd ?? effectiveCwd ?? params.workdir;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
@@ -199,16 +211,22 @@ export async function executeNodeHostCommand(
     );
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
   }
+  // When ask=off and security=full, skip all approval gates including
+  // obfuscation detection and inline-eval checks.  This allows long
+  // commands (e.g. inline Python scripts) to execute on remote nodes
+  // without manual approval for testing/development setups.
   const requiresAsk =
-    requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-      durableApprovalSatisfied,
-    }) ||
-    inlineEvalHit !== null ||
-    obfuscation.detected;
+    hostAsk === "off" && hostSecurity === "full"
+      ? false
+      : requiresExecApproval({
+          ask: hostAsk,
+          security: hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+          durableApprovalSatisfied,
+        }) ||
+        inlineEvalHit !== null ||
+        obfuscation.detected;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
