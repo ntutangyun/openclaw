@@ -103,13 +103,13 @@ export async function executeNodeHostCommand(
   const nodePlatform = nodeInfo?.platform;
   const gatewayIsUnix = process.platform !== "win32";
   const nodeIsWindows = nodePlatform === "win32";
-  const cwdLooksUnix = params.workdir.startsWith("/");
-  const cwdLooksWindows = /^[A-Z]:\\/i.test(params.workdir);
+  const cwdLooksUnix = params.workdir?.startsWith("/") ?? false;
+  const cwdLooksWindows = params.workdir != null && /^[A-Z]:\\/i.test(params.workdir);
   const crossPlatformCwdMismatch =
     (gatewayIsUnix && nodeIsWindows && cwdLooksUnix) ||
     (!gatewayIsUnix && !nodeIsWindows && cwdLooksWindows);
   const effectiveCwd = crossPlatformCwdMismatch ? undefined : params.workdir;
-  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+  const prepareRaw = await callGatewayTool(
     "node.invoke",
     { timeoutMs: 15_000 },
     {

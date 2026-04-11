@@ -3,8 +3,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../config/config.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 import { getProtocolTraceStore } from "./protocol-trace-store.js";
 
 export type ProtocolTraceHttpOpts = {
@@ -38,7 +38,7 @@ async function authorize(
   opts: ProtocolTraceHttpOpts,
 ): Promise<boolean> {
   const cfg = loadConfig();
-  return authorizeGatewayBearerRequestOrReply({
+  const result = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -46,6 +46,7 @@ async function authorize(
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
+  return result !== null;
 }
 
 async function handleExport(

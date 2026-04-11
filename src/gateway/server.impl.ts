@@ -603,18 +603,6 @@ export async function startGatewayServer(
         protocolTraceStore.captureTrace(direction, kind, meta);
       });
     }
-      },
-      loadConfig,
-    });
-    runtimeState.mcpServer = earlyRuntime.mcpServer;
-    runtimeState.bonjourStop = earlyRuntime.bonjourStop;
-    runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
-    if (earlyRuntime.maintenance) {
-      runtimeState.tickInterval = earlyRuntime.maintenance.tickInterval;
-      runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
-      runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
-      runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
-    }
 
     Object.assign(
       runtimeState,
