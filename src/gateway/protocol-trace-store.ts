@@ -130,6 +130,66 @@ function estimatePayloadSize(payload: unknown): number {
   }
 }
 
+/** Max payload size for non-essential messages in the in-memory buffer. */
+const TRUNCATE_PAYLOAD_LIMIT = 512;
+
+/**
+ * Selectively truncate payloads for the in-memory buffer to limit heap usage.
+ * Keeps full payloads for:
+ *   - tool events (stream=tool): needed for tool call details display
+ *   - chat/session.message events: needed for chat message display
+ *   - lifecycle events: small, needed for latency tracking
+ * Truncates payloads for:
+ *   - assistant stream events: hundreds per call, only need small deltas
+ *   - RPC req/res: models.list, config.get, etc.
+ *   - everything else
+ */
+function selectiveTruncatePayload(payload: unknown, meta: Record<string, unknown>): unknown {
+  if (payload === undefined || payload === null) {
+    return payload;
+  }
+
+  const stream = meta.stream as string | undefined;
+  const event = meta.event as string | undefined;
+
+  // Keep full: tool events, chat events, lifecycle events
+  if (stream === "tool" || stream === "lifecycle") {
+    return payload;
+  }
+  if (event === "chat" || event === "session.message" || event === "session.tool") {
+    return payload;
+  }
+
+  // For assistant stream: keep only the text delta, drop the rest
+  if (stream === "assistant") {
+    if (payload && typeof payload === "object") {
+      const p = payload as Record<string, unknown>;
+      const data =
+        p.data && typeof p.data === "object" ? (p.data as Record<string, unknown>) : null;
+      if (data) {
+        const text = typeof data.text === "string" ? data.text : undefined;
+        return { _slim: true, data: { text } };
+      }
+    }
+    return { _slim: true };
+  }
+
+  // For everything else: truncate if large
+  try {
+    const json = JSON.stringify(payload);
+    if (json.length <= TRUNCATE_PAYLOAD_LIMIT) {
+      return payload;
+    }
+    if (typeof payload === "object" && payload !== null) {
+      const keys = Object.keys(payload as Record<string, unknown>);
+      return { _truncated: true, _keys: keys.slice(0, 15), _size: json.length };
+    }
+    return { _truncated: true, _size: json.length };
+  } catch {
+    return { _truncated: true };
+  }
+}
+
 const RING_BUFFER_CAP = 1000;
 
 export class ProtocolTraceStore {
@@ -206,7 +266,12 @@ export class ProtocolTraceStore {
       reqId,
     };
 
-    const record = fullRecord;
+    // Selectively truncate payloads for in-memory buffer to limit heap usage.
+    // Full payloads are persisted to JSONL for export.
+    const record: ProtocolTraceRecord = {
+      ...fullRecord,
+      payload: selectiveTruncatePayload(meta.payload, meta),
+    };
 
     // In-memory ring buffer
     this.buffer.push(record);

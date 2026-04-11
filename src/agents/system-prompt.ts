@@ -361,6 +361,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "Find new skills: https://clawhub.ai",
     "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    "For all node-related operations (status, describe, invoke, pairing, camera, screen, etc.), use `openclaw nodes <subcommand>`. Note: `openclaw status` does NOT show node information.",
     "",
   ];
 }
