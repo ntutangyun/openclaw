@@ -1,0 +1,5208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>End-to-End Agent Task Execution Protocol Report</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --surface: #181b24;
+        --surface2: #1e2230;
+        --border: #2a2f3e;
+        --text: #e0e4ed;
+        --text-muted: #8b92a8;
+        --accent: #6c8cff;
+        --accent2: #45d6b5;
+        --accent3: #f0a050;
+        --red: #f06070;
+        --purple: #b48cff;
+        --code-bg: #14161e;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.7;
+        padding: 0;
+      }
+
+      .container {
+        max-width: 1020px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+
+      h1 {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 8px;
+        color: #fff;
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        margin-bottom: 48px;
+      }
+
+      h2 {
+        font-size: 1.35rem;
+        font-weight: 600;
+        color: #fff;
+        margin-top: 56px;
+        margin-bottom: 20px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      h3 {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--accent);
+        margin-top: 32px;
+        margin-bottom: 12px;
+      }
+
+      h4 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--accent2);
+        margin-top: 24px;
+        margin-bottom: 10px;
+      }
+
+      p {
+        margin-bottom: 14px;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* Tables */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0 24px;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+      }
+      th {
+        background: var(--surface2);
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td {
+        background: var(--surface);
+      }
+      tr:hover td {
+        background: var(--surface2);
+      }
+
+      /* Code blocks */
+      pre {
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 18px 20px;
+        overflow-x: auto;
+        font-size: 0.85rem;
+        line-height: 1.6;
+        margin: 14px 0 20px;
+      }
+      code {
+        font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+        font-size: 0.85em;
+      }
+      p code,
+      li code,
+      td code {
+        background: var(--surface2);
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: var(--accent2);
+      }
+
+      /* Sequence diagrams */
+      .diagram {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 28px 24px;
+        margin: 20px 0 28px;
+        overflow-x: auto;
+      }
+      .diagram svg {
+        display: block;
+        margin: 0 auto;
+      }
+      .diagram-caption {
+        text-align: center;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        margin-top: 10px;
+        font-style: italic;
+      }
+
+      /* Info cards */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px 24px;
+        margin: 16px 0 24px;
+      }
+      .card.accent {
+        border-left: 3px solid var(--accent);
+      }
+      .card.green {
+        border-left: 3px solid var(--accent2);
+      }
+      .card.warn {
+        border-left: 3px solid var(--accent3);
+      }
+      .card.red {
+        border-left: 3px solid var(--red);
+      }
+      .card.purple {
+        border-left: 3px solid var(--purple);
+      }
+      .card-title {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 8px;
+      }
+      .card.accent .card-title {
+        color: var(--accent);
+      }
+      .card.green .card-title {
+        color: var(--accent2);
+      }
+      .card.warn .card-title {
+        color: var(--accent3);
+      }
+      .card.red .card-title {
+        color: var(--red);
+      }
+      .card.purple .card-title {
+        color: var(--purple);
+      }
+
+      ul,
+      ol {
+        padding-left: 24px;
+        margin-bottom: 14px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+
+      /* TOC */
+      .toc {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px 28px;
+        margin-bottom: 40px;
+      }
+      .toc-title {
+        font-weight: 700;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+        margin-bottom: 14px;
+      }
+      .toc ol {
+        list-style: none;
+        padding-left: 0;
+        margin: 0;
+      }
+      .toc li {
+        margin-bottom: 6px;
+      }
+      .toc a {
+        color: var(--text);
+        font-size: 0.93rem;
+      }
+      .toc a:hover {
+        color: var(--accent);
+      }
+      .toc .toc-sub {
+        padding-left: 20px;
+      }
+
+      /* Badge / tag */
+      .badge {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
+        margin-left: 6px;
+      }
+      .badge-blue {
+        background: rgba(108, 140, 255, 0.15);
+        color: var(--accent);
+      }
+      .badge-green {
+        background: rgba(69, 214, 181, 0.15);
+        color: var(--accent2);
+      }
+      .badge-amber {
+        background: rgba(240, 160, 80, 0.15);
+        color: var(--accent3);
+      }
+      .badge-red {
+        background: rgba(240, 96, 112, 0.15);
+        color: var(--red);
+      }
+      .badge-purple {
+        background: rgba(180, 140, 255, 0.15);
+        color: var(--purple);
+      }
+
+      /* Flow arrow steps */
+      .flow-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 20px 0 28px;
+      }
+      .flow-step {
+        flex: 1 1 140px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+        text-align: center;
+        position: relative;
+      }
+      .flow-step .step-num {
+        display: block;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: var(--accent);
+        margin-bottom: 4px;
+      }
+      .flow-step .step-label {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+      }
+      .flow-step .step-desc {
+        font-size: 0.88rem;
+        margin-top: 6px;
+      }
+
+      /* Phase header */
+      .phase-header {
+        background: linear-gradient(90deg, var(--surface2), var(--surface));
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin: 28px 0 16px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .phase-num {
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: var(--accent);
+        min-width: 40px;
+        text-align: center;
+      }
+      .phase-info {
+        flex: 1;
+      }
+      .phase-title {
+        font-weight: 700;
+        font-size: 1rem;
+        color: #fff;
+      }
+      .phase-desc {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-top: 2px;
+      }
+
+      /* Protocol tag in tables */
+      .proto-tag {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 1px 6px;
+        border-radius: 3px;
+        letter-spacing: 0.02em;
+        margin-right: 4px;
+      }
+      .proto-ws {
+        background: rgba(108, 140, 255, 0.2);
+        color: var(--accent);
+      }
+      .proto-https {
+        background: rgba(69, 214, 181, 0.2);
+        color: var(--accent2);
+      }
+      .proto-tls {
+        background: rgba(240, 160, 80, 0.2);
+        color: var(--accent3);
+      }
+      .proto-dns {
+        background: rgba(180, 140, 255, 0.2);
+        color: var(--purple);
+      }
+      .proto-tcp {
+        background: rgba(240, 96, 112, 0.2);
+        color: var(--red);
+      }
+
+      /* Responsive */
+      @media (max-width: 700px) {
+        .container {
+          padding: 20px 14px 60px;
+        }
+        h1 {
+          font-size: 1.5rem;
+        }
+        pre {
+          font-size: 0.78rem;
+          padding: 14px;
+        }
+        table {
+          font-size: 0.82rem;
+        }
+        th,
+        td {
+          padding: 8px 10px;
+        }
+        .phase-header {
+          flex-direction: column;
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>End-to-End Agent Task Execution Protocol Report</h1>
+      <p class="subtitle">
+        Comprehensive communication analysis &middot; Operator &rarr; Gateway &rarr; Node &rarr;
+        Cloud LLM &middot; March 2026
+      </p>
+
+      <div class="card accent">
+        <div class="card-title">Scenario</div>
+        <p>
+          An <strong>operator</strong> (human user at a CLI/Web UI) asks an AI agent to search for,
+          download, organize, and generate a report on IEEE Wi-Fi standards (802.11 family). The
+          <strong>gateway</strong> orchestrates the task. A <strong>node</strong> (laptop device)
+          executes file downloads and local filesystem operations. The agent&rsquo;s reasoning is
+          powered by a <strong>cloud LLM API</strong> (e.g., Anthropic Claude API). This report
+          details every network communication, protocol, and data exchange across all four
+          components.
+        </p>
+      </div>
+
+      <!-- TOC -->
+      <div class="toc">
+        <div class="toc-title">Table of Contents</div>
+        <ol>
+          <li><a href="#architecture">1. System Architecture &amp; Components</a></li>
+          <li><a href="#protocols">2. Protocol Summary</a></li>
+          <li><a href="#connections">3. Connection Establishment (All Links)</a></li>
+          <ol class="toc-sub">
+            <li><a href="#conn-op-gw">3.1 Operator &harr; Gateway</a></li>
+            <li><a href="#conn-node-gw">3.2 Node &harr; Gateway</a></li>
+            <li><a href="#conn-gw-llm">3.3 Gateway &harr; Cloud LLM API</a></li>
+            <li><a href="#conn-node-inet">3.4 Node &harr; Internet (IEEE/Web)</a></li>
+          </ol>
+          <li><a href="#e2e-overview">4. End-to-End Task Flow Overview</a></li>
+          <li><a href="#phase1">5. Phase 1: Operator Submits Task</a></li>
+          <li><a href="#phase2">6. Phase 2: Gateway Consults Cloud LLM for Planning</a></li>
+          <li><a href="#phase3">7. Phase 3: Agent Searches for IEEE Standards</a></li>
+          <li><a href="#phase4">8. Phase 4: Agent Downloads IEEE Standard Files</a></li>
+          <li><a href="#phase5">9. Phase 5: Agent Organizes Files on Node</a></li>
+          <li><a href="#phase6">10. Phase 6: Agent Generates Report</a></li>
+          <li><a href="#phase7">11. Phase 7: Result Delivery to Operator</a></li>
+          <li><a href="#streaming">12. Streaming &amp; Progress Updates</a></li>
+          <li><a href="#error-handling">13. Error Handling &amp; Retries</a></li>
+          <li><a href="#security">14. Security Model</a></li>
+          <li><a href="#data-flow">15. Complete Data Flow Matrix</a></li>
+          <li><a href="#timing">16. Timing &amp; Latency Analysis</a></li>
+          <li><a href="#summary">17. Summary</a></li>
+        </ol>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 1. SYSTEM ARCHITECTURE -->
+      <!-- ================================================================ -->
+      <h2 id="architecture">1. System Architecture &amp; Components</h2>
+
+      <div class="diagram">
+        <svg width="940" height="320" viewBox="0 0 940 320" xmlns="http://www.w3.org/2000/svg">
+          <!-- Operator box -->
+          <rect
+            x="20"
+            y="100"
+            width="160"
+            height="120"
+            rx="10"
+            fill="#181b24"
+            stroke="#6c8cff"
+            stroke-width="2"
+          />
+          <text
+            x="100"
+            y="135"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+          <text
+            x="100"
+            y="158"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            CLI / Web UI
+          </text>
+          <text
+            x="100"
+            y="175"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Desktop App
+          </text>
+          <text
+            x="100"
+            y="200"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            role: operator
+          </text>
+
+          <!-- Gateway box -->
+          <rect
+            x="280"
+            y="60"
+            width="200"
+            height="200"
+            rx="10"
+            fill="#181b24"
+            stroke="#45d6b5"
+            stroke-width="2"
+          />
+          <text
+            x="380"
+            y="95"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <text
+            x="380"
+            y="118"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Control Plane
+          </text>
+          <text
+            x="380"
+            y="138"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Agent Orchestrator
+          </text>
+          <line x1="300" y1="155" x2="460" y2="155" stroke="#2a2f3e" stroke-width="1" />
+          <text
+            x="380"
+            y="175"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            Node Registry
+          </text>
+          <text
+            x="380"
+            y="192"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            Session Manager
+          </text>
+          <text
+            x="380"
+            y="209"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            Tool Router
+          </text>
+          <text
+            x="380"
+            y="226"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            LLM Client
+          </text>
+          <text
+            x="380"
+            y="243"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            Event Bus
+          </text>
+
+          <!-- Node box -->
+          <rect
+            x="580"
+            y="100"
+            width="160"
+            height="120"
+            rx="10"
+            fill="#181b24"
+            stroke="#f0a050"
+            stroke-width="2"
+          />
+          <text
+            x="660"
+            y="135"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node (Laptop)
+          </text>
+          <text
+            x="660"
+            y="158"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Capability Host
+          </text>
+          <text
+            x="660"
+            y="175"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            File System Access
+          </text>
+          <text
+            x="660"
+            y="200"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            role: node
+          </text>
+
+          <!-- Cloud LLM box -->
+          <rect
+            x="280"
+            y="285"
+            width="200"
+            height="30"
+            rx="6"
+            fill="#181b24"
+            stroke="#b48cff"
+            stroke-width="2"
+          />
+          <text
+            x="380"
+            y="305"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Cloud LLM API
+          </text>
+
+          <!-- Internet box -->
+          <rect
+            x="780"
+            y="100"
+            width="140"
+            height="120"
+            rx="10"
+            fill="#181b24"
+            stroke="#f06070"
+            stroke-width="2"
+          />
+          <text
+            x="850"
+            y="135"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Internet
+          </text>
+          <text
+            x="850"
+            y="158"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            IEEE Xplore
+          </text>
+          <text
+            x="850"
+            y="175"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Web Search APIs
+          </text>
+          <text
+            x="850"
+            y="200"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            standards.ieee.org
+          </text>
+
+          <!-- Arrows -->
+          <!-- Operator <-> Gateway (WebSocket) -->
+          <line
+            x1="180"
+            y1="148"
+            x2="278"
+            y2="148"
+            stroke="#6c8cff"
+            stroke-width="2"
+            marker-end="url(#arrow-blue)"
+          />
+          <line
+            x1="278"
+            y1="168"
+            x2="180"
+            y2="168"
+            stroke="#45d6b5"
+            stroke-width="2"
+            marker-end="url(#arrow-green)"
+          />
+          <text
+            x="229"
+            y="140"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            WebSocket
+          </text>
+          <text
+            x="229"
+            y="186"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            (JSON-RPC)
+          </text>
+
+          <!-- Gateway <-> Node (WebSocket) -->
+          <line
+            x1="480"
+            y1="148"
+            x2="578"
+            y2="148"
+            stroke="#45d6b5"
+            stroke-width="2"
+            marker-end="url(#arrow-amber)"
+          />
+          <line
+            x1="578"
+            y1="168"
+            x2="480"
+            y2="168"
+            stroke="#f0a050"
+            stroke-width="2"
+            marker-end="url(#arrow-green)"
+          />
+          <text
+            x="529"
+            y="140"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            WebSocket
+          </text>
+          <text
+            x="529"
+            y="186"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            (JSON-RPC)
+          </text>
+
+          <!-- Gateway -> Cloud LLM (HTTPS) -->
+          <line
+            x1="380"
+            y1="260"
+            x2="380"
+            y2="283"
+            stroke="#b48cff"
+            stroke-width="2"
+            marker-end="url(#arrow-purple)"
+          />
+          <text
+            x="420"
+            y="277"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="start"
+          >
+            HTTPS REST
+          </text>
+
+          <!-- Node -> Internet (HTTPS) -->
+          <line
+            x1="740"
+            y1="155"
+            x2="778"
+            y2="155"
+            stroke="#f06070"
+            stroke-width="2"
+            marker-end="url(#arrow-red)"
+          />
+          <text
+            x="759"
+            y="148"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            HTTPS
+          </text>
+
+          <!-- Arrow markers -->
+          <defs>
+            <marker
+              id="arrow-blue"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0,0 8,3 0,6" fill="#6c8cff" />
+            </marker>
+            <marker
+              id="arrow-green"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0,0 8,3 0,6" fill="#45d6b5" />
+            </marker>
+            <marker
+              id="arrow-amber"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0,0 8,3 0,6" fill="#f0a050" />
+            </marker>
+            <marker
+              id="arrow-purple"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0,0 8,3 0,6" fill="#b48cff" />
+            </marker>
+            <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0,0 8,3 0,6" fill="#f06070" />
+            </marker>
+          </defs>
+        </svg>
+        <div class="diagram-caption">
+          Figure 1 &mdash; Four-component architecture: Operator, Gateway, Node (laptop), Cloud LLM
+          API, plus external Internet resources
+        </div>
+      </div>
+
+      <table>
+        <tr>
+          <th>Component</th>
+          <th>Role</th>
+          <th>Location</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><strong>Operator</strong></td>
+          <td>Human user</td>
+          <td>Local machine (CLI/Web/Desktop)</td>
+          <td>
+            Issues task instructions, receives progress updates and final results. Connects to
+            gateway as <code>role: operator</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>Gateway</strong></td>
+          <td>Control plane &amp; orchestrator</td>
+          <td>Local machine or remote server</td>
+          <td>
+            Central hub that manages sessions, routes tool invocations to nodes, communicates with
+            the Cloud LLM API for agent reasoning, and relays events to operators.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>Node (Laptop)</strong></td>
+          <td>Capability host</td>
+          <td>User&rsquo;s laptop</td>
+          <td>
+            Executes file system operations (download, mkdir, write), runs shell commands, provides
+            web browsing/fetching capabilities. Connects to gateway as <code>role: node</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>Cloud LLM API</strong></td>
+          <td>AI reasoning engine</td>
+          <td>Remote cloud (e.g., api.anthropic.com)</td>
+          <td>
+            Provides the language model that powers the agent&rsquo;s planning, reasoning, and text
+            generation. Accessed via HTTPS REST API.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>Internet (IEEE/Web)</strong></td>
+          <td>External data source</td>
+          <td>Remote servers</td>
+          <td>
+            IEEE Xplore, standards.ieee.org, search engines. Accessed by the node via HTTPS to
+            search and download standards documents.
+          </td>
+        </tr>
+      </table>
+
+      <!-- ================================================================ -->
+      <!-- 2. PROTOCOL SUMMARY -->
+      <!-- ================================================================ -->
+      <h2 id="protocols">2. Protocol Summary</h2>
+
+      <table>
+        <tr>
+          <th>Communication Link</th>
+          <th>Transport</th>
+          <th>Application Protocol</th>
+          <th>Serialization</th>
+          <th>Authentication</th>
+          <th>Encryption</th>
+        </tr>
+        <tr>
+          <td>Operator &harr; Gateway</td>
+          <td>TCP &rarr; WebSocket (RFC 6455)</td>
+          <td>OpenClaw JSON-RPC (Protocol v3)</td>
+          <td>JSON (text frames)</td>
+          <td>Challenge-response + token</td>
+          <td>TLS 1.3 (<code>wss://</code>) or plaintext for loopback</td>
+        </tr>
+        <tr>
+          <td>Node &harr; Gateway</td>
+          <td>TCP &rarr; WebSocket (RFC 6455)</td>
+          <td>OpenClaw JSON-RPC (Protocol v3)</td>
+          <td>JSON (text frames)</td>
+          <td>Device keypair + challenge-response</td>
+          <td>TLS 1.3 (<code>wss://</code>) or plaintext for loopback</td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM API</td>
+          <td>TCP &rarr; HTTPS</td>
+          <td>REST API (Anthropic Messages API / OpenAI-compatible)</td>
+          <td>JSON</td>
+          <td>API key (<code>x-api-key</code> / <code>Authorization: Bearer</code>)</td>
+          <td>TLS 1.2/1.3</td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet (IEEE/Web)</td>
+          <td>TCP &rarr; HTTPS</td>
+          <td>HTTP/1.1 or HTTP/2</td>
+          <td>HTML, PDF, JSON (varies)</td>
+          <td>None (public) or session cookies</td>
+          <td>TLS 1.2/1.3</td>
+        </tr>
+      </table>
+
+      <div class="card green">
+        <div class="card-title">Protocol Stack (per link)</div>
+        <ul>
+          <li>
+            <strong>Operator/Node &harr; Gateway:</strong> IP &rarr; TCP &rarr; TLS (optional)
+            &rarr; HTTP/1.1 Upgrade &rarr; WebSocket &rarr; JSON-RPC frames
+          </li>
+          <li>
+            <strong>Gateway &rarr; Cloud LLM:</strong> IP &rarr; TCP &rarr; TLS 1.2+ &rarr; HTTP/1.1
+            or HTTP/2 &rarr; REST JSON + SSE (streaming)
+          </li>
+          <li>
+            <strong>Node &rarr; IEEE/Web:</strong> DNS resolution &rarr; IP &rarr; TCP &rarr; TLS
+            1.2+ &rarr; HTTP/1.1 or HTTP/2 &rarr; HTML/PDF/JSON content
+          </li>
+        </ul>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 3. CONNECTION ESTABLISHMENT -->
+      <!-- ================================================================ -->
+      <h2 id="connections">3. Connection Establishment (All Links)</h2>
+
+      <h3 id="conn-op-gw">
+        3.1 Operator &harr; Gateway <span class="badge badge-blue">WebSocket</span>
+      </h3>
+
+      <p>
+        The operator (CLI, Web UI, or desktop app) connects to the gateway via WebSocket. The
+        handshake follows the standard OpenClaw gateway protocol (Protocol v3).
+      </p>
+
+      <div class="diagram">
+        <svg width="780" height="400" viewBox="0 0 780 400" xmlns="http://www.w3.org/2000/svg">
+          <text
+            x="140"
+            y="24"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+          <text
+            x="580"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <line
+            x1="140"
+            y1="36"
+            x2="140"
+            y2="390"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="580"
+            y1="36"
+            x2="580"
+            y2="390"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- DNS + TCP -->
+          <text
+            x="360"
+            y="56"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            DNS A/AAAA lookup (if remote gateway)
+          </text>
+          <line
+            x1="145"
+            y1="70"
+            x2="575"
+            y2="70"
+            stroke="#8b92a8"
+            stroke-width="1"
+            stroke-dasharray="3,3"
+          />
+
+          <!-- TCP 3-way -->
+          <line x1="145" y1="95" x2="575" y2="95" stroke="#8b92a8" stroke-width="1.2" />
+          <polygon points="575,91 575,99 585,95" fill="#8b92a8" />
+          <text
+            x="360"
+            y="88"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP SYN
+          </text>
+
+          <line x1="575" y1="115" x2="145" y2="115" stroke="#8b92a8" stroke-width="1.2" />
+          <polygon points="145,111 145,119 135,115" fill="#8b92a8" />
+          <text
+            x="360"
+            y="108"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP SYN-ACK
+          </text>
+
+          <line x1="145" y1="135" x2="575" y2="135" stroke="#8b92a8" stroke-width="1.2" />
+          <polygon points="575,131 575,139 585,135" fill="#8b92a8" />
+          <text
+            x="360"
+            y="128"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP ACK (connection established)
+          </text>
+
+          <!-- TLS (if wss) -->
+          <rect
+            x="120"
+            y="148"
+            width="480"
+            height="24"
+            rx="4"
+            fill="rgba(240,160,80,0.08)"
+            stroke="#f0a050"
+            stroke-width="1"
+            stroke-dasharray="4,2"
+          />
+          <text
+            x="360"
+            y="164"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.3 Handshake (ClientHello / ServerHello / Finished) &mdash; if wss://
+          </text>
+
+          <!-- HTTP Upgrade -->
+          <line x1="145" y1="195" x2="575" y2="195" stroke="#6c8cff" stroke-width="1.5" />
+          <polygon points="575,191 575,199 585,195" fill="#6c8cff" />
+          <text
+            x="360"
+            y="188"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP GET /ws Upgrade: websocket Connection: Upgrade
+          </text>
+
+          <line x1="575" y1="220" x2="145" y2="220" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="145,216 145,224 135,220" fill="#45d6b5" />
+          <text
+            x="360"
+            y="213"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP 101 Switching Protocols
+          </text>
+
+          <!-- Challenge -->
+          <line x1="575" y1="258" x2="145" y2="258" stroke="#f0a050" stroke-width="2" />
+          <polygon points="145,254 145,262 135,258" fill="#f0a050" />
+          <text
+            x="360"
+            y="250"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            event: connect.challenge { nonce, ts }
+          </text>
+
+          <!-- Connect request -->
+          <line x1="145" y1="298" x2="575" y2="298" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="575,294 575,302 585,298" fill="#6c8cff" />
+          <text
+            x="360"
+            y="290"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            req: connect { role:"operator", scopes:["read","write","approvals"], auth }
+          </text>
+
+          <!-- Hello-ok -->
+          <line x1="575" y1="338" x2="145" y2="338" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="145,334 145,342 135,338" fill="#45d6b5" />
+          <text
+            x="360"
+            y="330"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            res: hello-ok { protocol:3, features, policy, auth:{token,role:"operator"} }
+          </text>
+
+          <!-- Authenticated -->
+          <rect
+            x="610"
+            y="355"
+            width="100"
+            height="22"
+            rx="4"
+            fill="rgba(69,214,181,0.12)"
+            stroke="#45d6b5"
+            stroke-width="1"
+          />
+          <text
+            x="660"
+            y="370"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            AUTHENTICATED
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 2 &mdash; Operator &harr; Gateway connection establishment (TCP + optional TLS +
+          WebSocket upgrade + OpenClaw handshake)
+        </div>
+      </div>
+
+      <h4>HTTP Upgrade Request</h4>
+      <pre><code>GET /ws HTTP/1.1
+Host: gateway-host:18789
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Protocol: openclaw-v3
+Origin: http://localhost</code></pre>
+
+      <h4>HTTP 101 Response</h4>
+      <pre><code>HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+Sec-WebSocket-Protocol: openclaw-v3</code></pre>
+
+      <h4>Operator Connect Request</h4>
+      <pre><code>{
+  "type": "req",
+  "id": "op-conn-001",
+  "method": "connect",
+  "params": {
+    "minProtocol": 3,
+    "maxProtocol": 3,
+    "client": {
+      "id": "cli-session-abc",
+      "version": "2026.3.17",
+      "platform": "linux",
+      "mode": "operator"
+    },
+    "role": "operator",
+    "scopes": ["operator.read", "operator.write", "operator.approvals"],
+    "auth": {
+      "token": "previously-issued-operator-token"
+    }
+  }
+}</code></pre>
+
+      <h3 id="conn-node-gw">
+        3.2 Node (Laptop) &harr; Gateway <span class="badge badge-amber">WebSocket</span>
+      </h3>
+
+      <p>
+        The node connects using the same WebSocket + OpenClaw Protocol v3 handshake, but
+        authenticates as <code>role: node</code> with device keypair-based challenge-response.
+      </p>
+
+      <div class="diagram">
+        <svg width="780" height="400" viewBox="0 0 780 400" xmlns="http://www.w3.org/2000/svg">
+          <text
+            x="140"
+            y="24"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node (Laptop)
+          </text>
+          <text
+            x="580"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <line
+            x1="140"
+            y1="36"
+            x2="140"
+            y2="390"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="580"
+            y1="36"
+            x2="580"
+            y2="390"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- TCP + optional TLS -->
+          <line x1="145" y1="65" x2="575" y2="65" stroke="#8b92a8" stroke-width="1" />
+          <text
+            x="360"
+            y="58"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP 3-way handshake + TLS 1.3 (if wss://)
+          </text>
+
+          <!-- WS Upgrade -->
+          <line x1="145" y1="100" x2="575" y2="100" stroke="#f0a050" stroke-width="1.5" />
+          <polygon points="575,96 575,104 585,100" fill="#f0a050" />
+          <text
+            x="360"
+            y="92"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP GET /ws Upgrade: websocket
+          </text>
+
+          <line x1="575" y1="125" x2="145" y2="125" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="145,121 145,129 135,125" fill="#45d6b5" />
+          <text
+            x="360"
+            y="118"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP 101 Switching Protocols
+          </text>
+
+          <!-- Challenge -->
+          <line x1="575" y1="165" x2="145" y2="165" stroke="#f0a050" stroke-width="2" />
+          <polygon points="145,161 145,169 135,165" fill="#f0a050" />
+          <text
+            x="360"
+            y="157"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            event: connect.challenge { nonce, ts }
+          </text>
+
+          <!-- Connect with device crypto -->
+          <line x1="145" y1="210" x2="575" y2="210" stroke="#f0a050" stroke-width="2" />
+          <polygon points="575,206 575,214 585,210" fill="#f0a050" />
+          <text
+            x="360"
+            y="197"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            req: connect { role:"node", caps:["shell","fs","web_fetch"],
+          </text>
+          <text
+            x="360"
+            y="210"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            device:{ publicKey, signature(nonce), id } }
+          </text>
+
+          <!-- Gateway verifies signature -->
+          <rect
+            x="590"
+            y="222"
+            width="165"
+            height="22"
+            rx="4"
+            fill="rgba(69,214,181,0.08)"
+            stroke="#45d6b5"
+            stroke-width="1"
+            stroke-dasharray="3,2"
+          />
+          <text
+            x="672"
+            y="237"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            verify signature(nonce, pubKey)
+          </text>
+
+          <!-- Hello-ok -->
+          <line x1="575" y1="265" x2="145" y2="265" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="145,261 145,269 135,265" fill="#45d6b5" />
+          <text
+            x="360"
+            y="257"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            res: hello-ok { protocol:3, auth:{deviceToken,role:"node"}, features, policy }
+          </text>
+
+          <!-- Session sync -->
+          <line x1="575" y1="305" x2="145" y2="305" stroke="#8b92a8" stroke-width="1.5" />
+          <polygon points="145,301 145,309 135,305" fill="#8b92a8" />
+          <text
+            x="360"
+            y="297"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            event: presence { nodes:[{id,caps,status:"online"}] }
+          </text>
+
+          <!-- Pending work check -->
+          <line x1="145" y1="340" x2="575" y2="340" stroke="#f0a050" stroke-width="1.5" />
+          <polygon points="575,336 575,344 585,340" fill="#f0a050" />
+          <text
+            x="360"
+            y="333"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            req: node.pending.pull { nodeId, limit:10 }
+          </text>
+
+          <line x1="575" y1="365" x2="145" y2="365" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="145,361 145,369 135,365" fill="#45d6b5" />
+          <text
+            x="360"
+            y="358"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            res: { items:[] } (no pending work)
+          </text>
+
+          <!-- Authenticated -->
+          <rect
+            x="610"
+            y="378"
+            width="100"
+            height="18"
+            rx="4"
+            fill="rgba(240,160,80,0.12)"
+            stroke="#f0a050"
+            stroke-width="1"
+          />
+          <text
+            x="660"
+            y="391"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            NODE READY
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 3 &mdash; Node &harr; Gateway connection with device keypair authentication and
+          capability declaration
+        </div>
+      </div>
+
+      <h4>Node Connect Request (Key Fields)</h4>
+      <pre><code>{
+  "type": "req",
+  "id": "node-conn-001",
+  "method": "connect",
+  "params": {
+    "minProtocol": 3,
+    "maxProtocol": 3,
+    "client": {
+      "id": "laptop-node",
+      "version": "2026.3.17",
+      "platform": "linux",
+      "mode": "node"
+    },
+    "role": "node",
+    "caps": ["shell", "fs", "web_fetch", "web_search"],
+    "commands": [
+      "shell.exec", "fs.write", "fs.read", "fs.mkdir",
+      "web.fetch", "web.search"
+    ],
+    "permissions": {
+      "shell.exec": true,
+      "fs.write": true,
+      "fs.read": true,
+      "web.fetch": true
+    },
+    "device": {
+      "id": "laptop-fingerprint-sha256",
+      "publicKey": "base64-ed25519-public-key",
+      "signature": "base64-signature-over-challenge-nonce",
+      "signedAt": 1742198400000,
+      "nonce": "echoed-challenge-nonce"
+    },
+    "auth": {
+      "token": "previously-issued-device-token"
+    }
+  }
+}</code></pre>
+
+      <h3 id="conn-gw-llm">
+        3.3 Gateway &harr; Cloud LLM API <span class="badge badge-purple">HTTPS</span>
+      </h3>
+
+      <p>
+        The gateway communicates with the Cloud LLM API (e.g., Anthropic Claude) over standard HTTPS
+        REST. This connection is established on-demand for each agent turn, not as a persistent
+        WebSocket.
+      </p>
+
+      <div class="diagram">
+        <svg width="780" height="310" viewBox="0 0 780 310" xmlns="http://www.w3.org/2000/svg">
+          <text
+            x="140"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <text
+            x="580"
+            y="24"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Cloud LLM API
+          </text>
+          <line
+            x1="140"
+            y1="36"
+            x2="140"
+            y2="300"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="580"
+            y1="36"
+            x2="580"
+            y2="300"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- DNS -->
+          <text
+            x="360"
+            y="56"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            DNS A/AAAA: api.anthropic.com &rarr; IP address
+          </text>
+          <line
+            x1="145"
+            y1="68"
+            x2="575"
+            y2="68"
+            stroke="#8b92a8"
+            stroke-width="1"
+            stroke-dasharray="3,3"
+          />
+
+          <!-- TCP -->
+          <line x1="145" y1="95" x2="575" y2="95" stroke="#8b92a8" stroke-width="1.2" />
+          <polygon points="575,91 575,99 585,95" fill="#8b92a8" />
+          <text
+            x="360"
+            y="88"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP 3-way handshake (port 443)
+          </text>
+
+          <!-- TLS -->
+          <rect
+            x="120"
+            y="108"
+            width="480"
+            height="34"
+            rx="4"
+            fill="rgba(240,160,80,0.06)"
+            stroke="#f0a050"
+            stroke-width="1"
+            stroke-dasharray="4,2"
+          />
+          <text
+            x="360"
+            y="122"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.3 Handshake
+          </text>
+          <text
+            x="360"
+            y="136"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            ClientHello &rarr; ServerHello + Cert &rarr; Verify &rarr; Finished
+          </text>
+
+          <!-- HTTP POST -->
+          <line x1="145" y1="170" x2="575" y2="170" stroke="#b48cff" stroke-width="2" />
+          <polygon points="575,166 575,174 585,170" fill="#b48cff" />
+          <text
+            x="360"
+            y="162"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            POST /v1/messages x-api-key: sk-ant-... Content-Type: application/json
+          </text>
+
+          <!-- SSE stream -->
+          <line x1="575" y1="210" x2="145" y2="210" stroke="#b48cff" stroke-width="2" />
+          <polygon points="145,206 145,214 135,210" fill="#b48cff" />
+          <text
+            x="360"
+            y="202"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP 200 Content-Type: text/event-stream
+          </text>
+
+          <!-- SSE events -->
+          <line
+            x1="575"
+            y1="240"
+            x2="145"
+            y2="240"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <text
+            x="360"
+            y="233"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            SSE: message_start, content_block_delta, ..., message_stop
+          </text>
+
+          <!-- Connection reuse note -->
+          <rect
+            x="135"
+            y="265"
+            width="460"
+            height="28"
+            rx="4"
+            fill="rgba(180,140,255,0.06)"
+            stroke="#b48cff"
+            stroke-width="1"
+            stroke-dasharray="3,2"
+          />
+          <text
+            x="360"
+            y="283"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            HTTP/2 or Keep-Alive: TCP connection reused for subsequent LLM calls in same agent loop
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 4 &mdash; Gateway &harr; Cloud LLM API connection (HTTPS + SSE streaming)
+        </div>
+      </div>
+
+      <h4>LLM API Request (Anthropic Messages API)</h4>
+      <pre><code>POST /v1/messages HTTP/1.1
+Host: api.anthropic.com
+x-api-key: sk-ant-api03-...
+anthropic-version: 2023-06-01
+content-type: application/json
+
+{
+  "model": "claude-opus-4-6-20250310",
+  "max_tokens": 8192,
+  "stream": true,
+  "system": "You are an AI agent with access to tools...",
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Search the web for information",
+      "input_schema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }
+    },
+    {
+      "name": "web_fetch",
+      "description": "Fetch content from a URL",
+      "input_schema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }
+    },
+    {
+      "name": "fs_write",
+      "description": "Write content to a file on the node",
+      "input_schema": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] }
+    },
+    {
+      "name": "fs_mkdir",
+      "description": "Create a directory on the node",
+      "input_schema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+    },
+    {
+      "name": "shell_exec",
+      "description": "Execute a shell command on the node",
+      "input_schema": { "type": "object", "properties": { "command": { "type": "string" } }, "required": ["command"] }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search for, download, and organize IEEE 802.11 Wi-Fi standards, then generate a comprehensive report."
+    }
+  ]
+}</code></pre>
+
+      <h4>LLM API Streaming Response (SSE)</h4>
+      <pre><code>HTTP/1.1 200 OK
+Content-Type: text/event-stream
+X-Request-Id: req_01ABC...
+
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_01XYZ","type":"message","role":"assistant","model":"claude-opus-4-6-20250310","usage":{"input_tokens":1847,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll help you search for"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" and organize IEEE 802.11 Wi-Fi standards."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01ABC","name":"web_search","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"IEEE 802.11 Wi-Fi standards list download\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":156}}
+
+event: message_stop
+data: {"type":"message_stop"}</code></pre>
+
+      <h3 id="conn-node-inet">
+        3.4 Node &harr; Internet (IEEE/Web) <span class="badge badge-red">HTTPS</span>
+      </h3>
+
+      <p>
+        When the agent instructs the node to fetch web content or download files, the node opens
+        HTTPS connections to external servers. These are standard HTTP requests initiated by the
+        node&rsquo;s tool execution runtime.
+      </p>
+
+      <h4>Typical HTTPS Request to IEEE Xplore</h4>
+      <pre><code>GET /document/10376084 HTTP/2
+Host: ieeexplore.ieee.org
+User-Agent: OpenClaw-Node/2026.3.17
+Accept: text/html,application/xhtml+xml,application/pdf
+Accept-Encoding: gzip, br
+Connection: keep-alive</code></pre>
+
+      <h4>PDF Download Request</h4>
+      <pre><code>GET /stampPDF/getPDF.jsp?arnumber=10376084 HTTP/2
+Host: ieeexplore.ieee.org
+Accept: application/pdf
+Cookie: (session cookies if authenticated)</code></pre>
+
+      <div class="card warn">
+        <div class="card-title">DNS Resolution</div>
+        <p>
+          Before any HTTPS connection, the node&rsquo;s OS resolver performs DNS lookups. For
+          <code>ieeexplore.ieee.org</code>, this involves:
+        </p>
+        <ol>
+          <li><strong>Local DNS cache check</strong> (OS-level)</li>
+          <li>
+            <strong>Recursive DNS query</strong> (UDP port 53) to configured resolver (e.g., router,
+            <code>8.8.8.8</code>, or <code>1.1.1.1</code>)
+          </li>
+          <li><strong>A/AAAA record response</strong> with the server&rsquo;s IP address</li>
+          <li><strong>TCP connection</strong> to resolved IP on port 443</li>
+          <li>
+            <strong>TLS 1.2/1.3 handshake</strong> with SNI (<code>ieeexplore.ieee.org</code>)
+          </li>
+        </ol>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 4. END-TO-END TASK FLOW OVERVIEW -->
+      <!-- ================================================================ -->
+      <h2 id="e2e-overview">4. End-to-End Task Flow Overview</h2>
+
+      <p>
+        The complete task involves an <strong>agentic loop</strong> where the gateway repeatedly
+        consults the Cloud LLM, dispatches tool calls to the node, feeds results back to the LLM,
+        and streams progress to the operator. Below is the high-level phase structure:
+      </p>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          <span class="step-num">1</span>
+          <span class="step-label">Submit</span>
+          <div class="step-desc">Operator sends task to gateway</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">2</span>
+          <span class="step-label">Plan</span>
+          <div class="step-desc">Gateway queries LLM for task plan</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">3</span>
+          <span class="step-label">Search</span>
+          <div class="step-desc">Node executes web searches</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">4</span>
+          <span class="step-label">Download</span>
+          <div class="step-desc">Node downloads IEEE PDFs</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">5</span>
+          <span class="step-label">Organize</span>
+          <div class="step-desc">Node creates directory structure</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">6</span>
+          <span class="step-label">Report</span>
+          <div class="step-desc">LLM generates report, node writes it</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">7</span>
+          <span class="step-label">Deliver</span>
+          <div class="step-desc">Gateway sends result to operator</div>
+        </div>
+      </div>
+
+      <div class="diagram">
+        <svg width="960" height="820" viewBox="0 0 960 820" xmlns="http://www.w3.org/2000/svg">
+          <!-- Lifelines -->
+          <text
+            x="100"
+            y="24"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+          <text
+            x="340"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <text
+            x="580"
+            y="24"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Cloud LLM
+          </text>
+          <text
+            x="780"
+            y="24"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node (Laptop)
+          </text>
+
+          <line
+            x1="100"
+            y1="36"
+            x2="100"
+            y2="810"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="340"
+            y1="36"
+            x2="340"
+            y2="810"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="580"
+            y1="36"
+            x2="580"
+            y2="810"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="780"
+            y1="36"
+            x2="780"
+            y2="810"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- Phase 1: Operator -> Gateway -->
+          <rect
+            x="10"
+            y="46"
+            width="940"
+            height="50"
+            rx="4"
+            fill="rgba(108,140,255,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="62"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 1
+          </text>
+          <line x1="105" y1="75" x2="335" y2="75" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="335,71 335,79 345,75" fill="#6c8cff" />
+          <text
+            x="220"
+            y="68"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: agent.run { prompt: "Search IEEE 802.11..." }
+          </text>
+
+          <!-- Phase 2: Gateway -> LLM -->
+          <rect
+            x="10"
+            y="100"
+            width="940"
+            height="80"
+            rx="4"
+            fill="rgba(180,140,255,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="116"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 2
+          </text>
+          <line x1="345" y1="130" x2="575" y2="130" stroke="#b48cff" stroke-width="2" />
+          <polygon points="575,126 575,134 585,130" fill="#b48cff" />
+          <text
+            x="460"
+            y="123"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            POST /v1/messages { messages, tools }
+          </text>
+
+          <line
+            x1="575"
+            y1="160"
+            x2="345"
+            y2="160"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <polygon points="345,156 345,164 335,160" fill="#b48cff" />
+          <text
+            x="460"
+            y="153"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            SSE stream: tool_use[web_search]
+          </text>
+
+          <!-- Phase 3: Gateway -> Node (search) -->
+          <rect
+            x="10"
+            y="185"
+            width="940"
+            height="110"
+            rx="4"
+            fill="rgba(240,160,80,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="201"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 3
+          </text>
+          <line x1="345" y1="215" x2="775" y2="215" stroke="#f0a050" stroke-width="2" />
+          <polygon points="775,211 775,219 785,215" fill="#f0a050" />
+          <text
+            x="560"
+            y="208"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: node.invoke { cmd:"web.search", args:{query:"IEEE 802.11"} }
+          </text>
+
+          <!-- Node -> Internet -->
+          <rect
+            x="800"
+            y="228"
+            width="130"
+            height="18"
+            rx="3"
+            fill="rgba(240,96,112,0.08)"
+            stroke="#f06070"
+            stroke-width="1"
+            stroke-dasharray="2,2"
+          />
+          <text
+            x="865"
+            y="240"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="8"
+            text-anchor="middle"
+          >
+            HTTPS to search API
+          </text>
+
+          <line x1="775" y1="265" x2="345" y2="265" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="345,261 345,269 335,265" fill="#45d6b5" />
+          <text
+            x="560"
+            y="258"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            res: { results: [{title, url, snippet}, ...] }
+          </text>
+
+          <!-- Progress to operator -->
+          <line
+            x1="335"
+            y1="280"
+            x2="105"
+            y2="280"
+            stroke="#8b92a8"
+            stroke-width="1"
+            stroke-dasharray="3,2"
+          />
+          <polygon points="105,276 105,284 95,280" fill="#8b92a8" />
+          <text
+            x="220"
+            y="274"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="8"
+            text-anchor="middle"
+          >
+            event: agent.progress { step:"searching..." }
+          </text>
+
+          <!-- Phase 4: LLM decides downloads, Gateway -> Node (download) -->
+          <rect
+            x="10"
+            y="298"
+            width="940"
+            height="165"
+            rx="4"
+            fill="rgba(69,214,181,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="314"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 4
+          </text>
+
+          <!-- Feed search results to LLM -->
+          <line x1="345" y1="330" x2="575" y2="330" stroke="#b48cff" stroke-width="2" />
+          <polygon points="575,326 575,334 585,330" fill="#b48cff" />
+          <text
+            x="460"
+            y="323"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            POST /v1/messages { tool_result + continue }
+          </text>
+
+          <line
+            x1="575"
+            y1="355"
+            x2="345"
+            y2="355"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <polygon points="345,351 345,359 335,355" fill="#b48cff" />
+          <text
+            x="460"
+            y="348"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            SSE: tool_use[fs_mkdir] + tool_use[web_fetch] x N
+          </text>
+
+          <!-- mkdir + download invocations -->
+          <line x1="345" y1="385" x2="775" y2="385" stroke="#f0a050" stroke-width="2" />
+          <polygon points="775,381 775,389 785,385" fill="#f0a050" />
+          <text
+            x="560"
+            y="378"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: node.invoke { cmd:"fs.mkdir", args:{path:"/home/user/ieee-wifi/"} }
+          </text>
+
+          <line x1="345" y1="415" x2="775" y2="415" stroke="#f0a050" stroke-width="2" />
+          <polygon points="775,411 775,419 785,415" fill="#f0a050" />
+          <text
+            x="560"
+            y="408"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: node.invoke { cmd:"web.fetch", args:{url:"...802.11ax.pdf"} }
+          </text>
+
+          <!-- Node -> Internet for PDF -->
+          <rect
+            x="800"
+            y="423"
+            width="130"
+            height="18"
+            rx="3"
+            fill="rgba(240,96,112,0.08)"
+            stroke="#f06070"
+            stroke-width="1"
+            stroke-dasharray="2,2"
+          />
+          <text
+            x="865"
+            y="435"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="8"
+            text-anchor="middle"
+          >
+            HTTPS PDF download
+          </text>
+
+          <line x1="775" y1="450" x2="345" y2="450" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="345,446 345,454 335,450" fill="#45d6b5" />
+          <text
+            x="560"
+            y="443"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            res: { ok:true, bytesWritten:2458624 }
+          </text>
+
+          <!-- Phase 5: Organize -->
+          <rect
+            x="10"
+            y="468"
+            width="940"
+            height="90"
+            rx="4"
+            fill="rgba(108,140,255,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="484"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 5
+          </text>
+
+          <line x1="345" y1="505" x2="775" y2="505" stroke="#f0a050" stroke-width="2" />
+          <polygon points="775,501 775,509 785,505" fill="#f0a050" />
+          <text
+            x="560"
+            y="498"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: node.invoke { cmd:"shell.exec", args:{command:"mv *.pdf ..."} }
+          </text>
+
+          <line x1="775" y1="535" x2="345" y2="535" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="345,531 345,539 335,535" fill="#45d6b5" />
+          <text
+            x="560"
+            y="528"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            res: { exitCode:0, stdout:"" }
+          </text>
+
+          <!-- Phase 6: Generate report -->
+          <rect
+            x="10"
+            y="562"
+            width="940"
+            height="130"
+            rx="4"
+            fill="rgba(180,140,255,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="578"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 6
+          </text>
+
+          <!-- LLM generates report text -->
+          <line x1="345" y1="600" x2="575" y2="600" stroke="#b48cff" stroke-width="2" />
+          <polygon points="575,596 575,604 585,600" fill="#b48cff" />
+          <text
+            x="460"
+            y="593"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            POST /v1/messages { context + "generate report" }
+          </text>
+
+          <line
+            x1="575"
+            y1="630"
+            x2="345"
+            y2="630"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <polygon points="345,626 345,634 335,630" fill="#b48cff" />
+          <text
+            x="460"
+            y="623"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            SSE: tool_use[fs_write] { path:"report.md", content:"..." }
+          </text>
+
+          <!-- Write report to node -->
+          <line x1="345" y1="660" x2="775" y2="660" stroke="#f0a050" stroke-width="2" />
+          <polygon points="775,656 775,664 785,660" fill="#f0a050" />
+          <text
+            x="560"
+            y="653"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            req: node.invoke { cmd:"fs.write", args:{path:"report.md",content:"..."} }
+          </text>
+
+          <line x1="775" y1="680" x2="345" y2="680" stroke="#45d6b5" stroke-width="1.5" />
+          <polygon points="345,676 345,684 335,680" fill="#45d6b5" />
+          <text
+            x="560"
+            y="673"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            res: { ok:true, path:"/home/user/ieee-wifi/report.md" }
+          </text>
+
+          <!-- Phase 7: Result -->
+          <rect
+            x="10"
+            y="698"
+            width="940"
+            height="80"
+            rx="4"
+            fill="rgba(108,140,255,0.04)"
+            stroke="none"
+          />
+          <text
+            x="20"
+            y="714"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="9"
+            font-weight="bold"
+          >
+            PHASE 7
+          </text>
+
+          <line x1="345" y1="740" x2="575" y2="740" stroke="#b48cff" stroke-width="1.5" />
+          <polygon points="575,736 575,744 585,740" fill="#b48cff" />
+          <text
+            x="460"
+            y="733"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            POST /v1/messages { final summary turn }
+          </text>
+
+          <line
+            x1="575"
+            y1="758"
+            x2="345"
+            y2="758"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <polygon points="345,754 345,762 335,758" fill="#b48cff" />
+          <text
+            x="460"
+            y="752"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            SSE: text "Task complete. Report at /home/..."
+          </text>
+
+          <line x1="335" y1="785" x2="105" y2="785" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="105,781 105,789 95,785" fill="#6c8cff" />
+          <text
+            x="220"
+            y="778"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            res: agent.run.complete { summary, artifacts }
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 5 &mdash; Complete end-to-end sequence across all four components (7 phases)
+        </div>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 5. PHASE 1: OPERATOR SUBMITS TASK -->
+      <!-- ================================================================ -->
+      <h2 id="phase1">5. Phase 1: Operator Submits Task</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">1</div>
+        <div class="phase-info">
+          <div class="phase-title">Task Submission</div>
+          <div class="phase-desc">Operator &rarr; Gateway via WebSocket JSON-RPC</div>
+        </div>
+      </div>
+
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Direction</td>
+          <td>Operator &rarr; Gateway</td>
+        </tr>
+        <tr>
+          <td>Protocol</td>
+          <td><span class="proto-tag proto-ws">WS</span> OpenClaw JSON-RPC (text frame)</td>
+        </tr>
+        <tr>
+          <td>Frame type</td>
+          <td><code>req</code></td>
+        </tr>
+        <tr>
+          <td>Method</td>
+          <td><code>agent.run</code></td>
+        </tr>
+      </table>
+
+      <h4>Request: Operator &rarr; Gateway</h4>
+      <pre><code>{
+  "type": "req",
+  "id": "op-task-001",
+  "method": "agent.run",
+  "params": {
+    "sessionId": "session-abc-123",
+    "prompt": "Search for IEEE 802.11 Wi-Fi standards (802.11a/b/g/n/ac/ax/be). Download the available standard documents to my laptop, organize them by standard revision in a clear directory structure, and generate a comprehensive summary report covering each standard's key specifications, data rates, frequency bands, and improvements over predecessors.",
+    "model": "claude-opus-4-6-20250310",
+    "options": {
+      "maxTurns": 20,
+      "tools": ["web_search", "web_fetch", "fs_write", "fs_read", "fs_mkdir", "shell_exec"],
+      "targetNode": "laptop-node"
+    }
+  }
+}</code></pre>
+
+      <h4>Acknowledgment: Gateway &rarr; Operator</h4>
+      <pre><code>{
+  "type": "res",
+  "id": "op-task-001",
+  "ok": true,
+  "payload": {
+    "status": "accepted",
+    "agentRunId": "run-xyz-789",
+    "sessionId": "session-abc-123"
+  }
+}</code></pre>
+
+      <div class="card accent">
+        <div class="card-title">Communication Breakdown</div>
+        <ol>
+          <li>
+            <strong>WebSocket text frame</strong> containing the JSON request is sent from operator
+            to gateway over the already-established connection.
+          </li>
+          <li>
+            The gateway validates the request (checks operator scopes, verifies target node exists
+            and is online, validates requested tools against node capabilities).
+          </li>
+          <li>
+            Gateway responds immediately with an acknowledgment. The actual agent execution runs
+            asynchronously.
+          </li>
+          <li>
+            Gateway begins streaming <code>event</code> frames back to the operator for progress
+            updates.
+          </li>
+        </ol>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 6. PHASE 2: GATEWAY CONSULTS CLOUD LLM -->
+      <!-- ================================================================ -->
+      <h2 id="phase2">6. Phase 2: Gateway Consults Cloud LLM for Planning</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">2</div>
+        <div class="phase-info">
+          <div class="phase-title">LLM Planning Turn</div>
+          <div class="phase-desc">Gateway &rarr; Cloud LLM API via HTTPS POST + SSE</div>
+        </div>
+      </div>
+
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Direction</td>
+          <td>Gateway &rarr; Cloud LLM API</td>
+        </tr>
+        <tr>
+          <td>Protocol</td>
+          <td><span class="proto-tag proto-https">HTTPS</span> REST (POST) + Server-Sent Events</td>
+        </tr>
+        <tr>
+          <td>Endpoint</td>
+          <td><code>POST https://api.anthropic.com/v1/messages</code></td>
+        </tr>
+        <tr>
+          <td>Auth</td>
+          <td><code>x-api-key: sk-ant-api03-...</code></td>
+        </tr>
+        <tr>
+          <td>Content-Type (request)</td>
+          <td><code>application/json</code></td>
+        </tr>
+        <tr>
+          <td>Content-Type (response)</td>
+          <td><code>text/event-stream</code> (SSE)</td>
+        </tr>
+      </table>
+
+      <h4>Step 2a: Gateway constructs the LLM request</h4>
+      <p>
+        The gateway assembles a Messages API request with the operator&rsquo;s prompt, the system
+        prompt (which includes agent instructions and available tools), and tool definitions mapped
+        from the target node&rsquo;s declared capabilities.
+      </p>
+
+      <pre><code>POST /v1/messages HTTP/2
+Host: api.anthropic.com
+x-api-key: sk-ant-api03-...
+anthropic-version: 2023-06-01
+content-type: application/json
+
+{
+  "model": "claude-opus-4-6-20250310",
+  "max_tokens": 8192,
+  "stream": true,
+  "system": "You are an AI agent. You have access to tools that execute on a user's laptop device. Available tools: web_search (search the web), web_fetch (download content from URLs), fs_mkdir (create directories), fs_write (write files), fs_read (read files), shell_exec (run shell commands). Plan your approach step-by-step, then execute using tools.",
+  "tools": [
+    { "name": "web_search", "description": "Search the web for information", "input_schema": {"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]} },
+    { "name": "web_fetch", "description": "Fetch/download content from a URL", "input_schema": {"type":"object","properties":{"url":{"type":"string"},"save_path":{"type":"string","description":"Optional local path to save the fetched content"}},"required":["url"]} },
+    { "name": "fs_mkdir", "description": "Create a directory (including parents)", "input_schema": {"type":"object","properties":{"path":{"type":"string"}},"required":["path"]} },
+    { "name": "fs_write", "description": "Write text content to a file", "input_schema": {"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]} },
+    { "name": "fs_read", "description": "Read a file's content", "input_schema": {"type":"object","properties":{"path":{"type":"string"}},"required":["path"]} },
+    { "name": "shell_exec", "description": "Execute a shell command", "input_schema": {"type":"object","properties":{"command":{"type":"string"}},"required":["command"]} }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search for IEEE 802.11 Wi-Fi standards (802.11a/b/g/n/ac/ax/be). Download the available standard documents to my laptop, organize them by standard revision in a clear directory structure, and generate a comprehensive summary report."
+    }
+  ]
+}</code></pre>
+
+      <h4>Step 2b: LLM streams response with tool calls</h4>
+      <p>
+        The LLM responds via SSE (Server-Sent Events). Each SSE event arrives as a separate chunk
+        over the persistent HTTPS connection. The gateway parses each event incrementally.
+      </p>
+
+      <pre><code>// The LLM's first turn output (assembled from SSE deltas):
+{
+  "id": "msg_01ABC",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I'll search for IEEE 802.11 Wi-Fi standards and organize them for you. Let me start by searching for information about each standard revision."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_search_01",
+      "name": "web_search",
+      "input": {
+        "query": "IEEE 802.11 Wi-Fi standards complete list 802.11a b g n ac ax be specifications"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": { "input_tokens": 1847, "output_tokens": 156 }
+}</code></pre>
+
+      <div class="card purple">
+        <div class="card-title">SSE Protocol Details</div>
+        <p>
+          The SSE stream uses the <code>text/event-stream</code> MIME type (W3C Server-Sent Events
+          specification). Each event follows the format:
+        </p>
+        <pre><code>event: &lt;event-type&gt;\ndata: &lt;json-payload&gt;\n\n</code></pre>
+        <p>
+          The gateway maintains a buffer and reassembles the full message from incremental
+          <code>content_block_delta</code> events. For tool use, the
+          <code>input_json_delta</code> events are concatenated and JSON-parsed once
+          <code>content_block_stop</code> is received.
+        </p>
+        <p>
+          <strong>HTTP connection:</strong> The HTTPS connection remains open for the duration of
+          the SSE stream. HTTP/2 multiplexing may allow multiple concurrent streams over a single
+          TCP connection. The TCP connection can be kept alive via HTTP Keep-Alive for subsequent
+          LLM turns in the same agent loop.
+        </p>
+      </div>
+
+      <h4>Step 2c: Gateway relays progress to operator</h4>
+      <p>
+        As the SSE stream arrives, the gateway pushes incremental events to the operator over the
+        existing WebSocket.
+      </p>
+      <pre><code>// Gateway -> Operator (WebSocket event frame)
+{
+  "type": "event",
+  "event": "agent.progress",
+  "payload": {
+    "agentRunId": "run-xyz-789",
+    "turn": 1,
+    "status": "thinking",
+    "text": "I'll search for IEEE 802.11 Wi-Fi standards..."
+  },
+  "seq": 1
+}</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 7. PHASE 3: AGENT SEARCHES FOR IEEE STANDARDS -->
+      <!-- ================================================================ -->
+      <h2 id="phase3">7. Phase 3: Agent Searches for IEEE Standards</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">3</div>
+        <div class="phase-info">
+          <div class="phase-title">Web Search Execution</div>
+          <div class="phase-desc">
+            Gateway &rarr; Node (tool invocation) &rarr; Internet (HTTPS search)
+          </div>
+        </div>
+      </div>
+
+      <p>
+        The gateway processes the LLM&rsquo;s <code>tool_use</code> response and routes the
+        <code>web_search</code> tool call to the target node.
+      </p>
+
+      <h4>Step 3a: Gateway dispatches tool invocation to node</h4>
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Direction</td>
+          <td>Gateway &rarr; Node</td>
+        </tr>
+        <tr>
+          <td>Protocol</td>
+          <td><span class="proto-tag proto-ws">WS</span> OpenClaw JSON-RPC</td>
+        </tr>
+        <tr>
+          <td>Frame type</td>
+          <td><code>req</code></td>
+        </tr>
+        <tr>
+          <td>Method</td>
+          <td><code>node.invoke</code></td>
+        </tr>
+      </table>
+
+      <pre><code>// Gateway -> Node (WebSocket req frame)
+{
+  "type": "req",
+  "id": "invoke-001",
+  "method": "node.invoke",
+  "params": {
+    "invocationId": "inv-search-001",
+    "command": "web.search",
+    "args": {
+      "query": "IEEE 802.11 Wi-Fi standards complete list 802.11a b g n ac ax be specifications"
+    },
+    "timeout": 30000,
+    "context": {
+      "agentRunId": "run-xyz-789",
+      "turn": 1,
+      "toolUseId": "toolu_search_01"
+    }
+  }
+}</code></pre>
+
+      <h4>Step 3b: Node executes web search (Node &rarr; Internet)</h4>
+      <p>The node&rsquo;s tool runtime makes an HTTPS request to an external search API.</p>
+
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Direction</td>
+          <td>Node &rarr; Search API (Internet)</td>
+        </tr>
+        <tr>
+          <td>Protocol</td>
+          <td><span class="proto-tag proto-https">HTTPS</span> HTTP/2</td>
+        </tr>
+        <tr>
+          <td>Target</td>
+          <td>Search engine API endpoint</td>
+        </tr>
+      </table>
+
+      <pre><code>// DNS resolution: search-api.example.com -> 203.0.113.10
+// TCP handshake: SYN -> SYN-ACK -> ACK (port 443)
+// TLS 1.3 handshake: ClientHello(SNI:search-api.example.com) -> ... -> Finished
+
+GET /v1/search?q=IEEE+802.11+Wi-Fi+standards+complete+list+802.11a+b+g+n+ac+ax+be+specifications&count=20 HTTP/2
+Host: search-api.example.com
+Authorization: Bearer search-api-key-...
+Accept: application/json</code></pre>
+
+      <h4>Search API Response</h4>
+      <pre><code>HTTP/2 200 OK
+Content-Type: application/json
+
+{
+  "results": [
+    {
+      "title": "IEEE 802.11-2024 - Standard for WLAN Medium Access Control",
+      "url": "https://standards.ieee.org/ieee/802.11/11089/",
+      "snippet": "IEEE 802.11-2024 consolidates all amendments through 802.11be..."
+    },
+    {
+      "title": "IEEE 802.11ax-2021 (Wi-Fi 6) Standard",
+      "url": "https://ieeexplore.ieee.org/document/9442429",
+      "snippet": "High Efficiency WLAN, up to 9.6 Gbps..."
+    },
+    {
+      "title": "IEEE 802.11ac-2013 (Wi-Fi 5) Standard",
+      "url": "https://ieeexplore.ieee.org/document/6687187",
+      "snippet": "Very High Throughput at 5 GHz, up to 6.93 Gbps..."
+    }
+    // ... more results
+  ]
+}</code></pre>
+
+      <h4>Step 3c: Node returns search results to gateway</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame)
+{
+  "type": "res",
+  "id": "invoke-001",
+  "ok": true,
+  "payload": {
+    "invocationId": "inv-search-001",
+    "result": {
+      "results": [
+        {
+          "title": "IEEE 802.11-2024 - Standard for WLAN Medium Access Control",
+          "url": "https://standards.ieee.org/ieee/802.11/11089/",
+          "snippet": "IEEE 802.11-2024 consolidates all amendments..."
+        },
+        {
+          "title": "IEEE 802.11ax-2021 (Wi-Fi 6) Standard",
+          "url": "https://ieeexplore.ieee.org/document/9442429",
+          "snippet": "High Efficiency WLAN, up to 9.6 Gbps..."
+        },
+        {
+          "title": "IEEE 802.11ac-2013 (Wi-Fi 5) Standard",
+          "url": "https://ieeexplore.ieee.org/document/6687187",
+          "snippet": "Very High Throughput at 5 GHz..."
+        },
+        {
+          "title": "IEEE 802.11n-2009 (Wi-Fi 4) Standard",
+          "url": "https://ieeexplore.ieee.org/document/5307322",
+          "snippet": "HT WLAN, MIMO, up to 600 Mbps..."
+        },
+        {
+          "title": "IEEE 802.11be (Wi-Fi 7) Draft Standard",
+          "url": "https://ieeexplore.ieee.org/document/10376084",
+          "snippet": "Extremely High Throughput, up to 46 Gbps..."
+        }
+      ]
+    },
+    "durationMs": 1842
+  }
+}</code></pre>
+
+      <div class="card green">
+        <div class="card-title">Network hops for this phase</div>
+        <ol>
+          <li>
+            <strong>Gateway &rarr; Node</strong> (WebSocket text frame, JSON) &mdash; tool
+            invocation request
+          </li>
+          <li>
+            <strong>Node &rarr; DNS resolver</strong> (UDP/53) &mdash; resolve search API hostname
+          </li>
+          <li>
+            <strong>Node &rarr; Search API</strong> (TCP/443 + TLS 1.3 + HTTP/2 GET) &mdash; execute
+            search
+          </li>
+          <li>
+            <strong>Search API &rarr; Node</strong> (HTTP/2 200 JSON response) &mdash; search
+            results
+          </li>
+          <li>
+            <strong>Node &rarr; Gateway</strong> (WebSocket text frame, JSON) &mdash; invocation
+            result
+          </li>
+        </ol>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 8. PHASE 4: AGENT DOWNLOADS IEEE STANDARD FILES -->
+      <!-- ================================================================ -->
+      <h2 id="phase4">8. Phase 4: Agent Downloads IEEE Standard Files</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">4</div>
+        <div class="phase-info">
+          <div class="phase-title">File Download &amp; Directory Creation</div>
+          <div class="phase-desc">
+            Gateway &harr; LLM (plan next tools) &rarr; Node (mkdir + fetch) &rarr; Internet (HTTPS
+            downloads)
+          </div>
+        </div>
+      </div>
+
+      <p>
+        The gateway feeds the search results back to the LLM as a <code>tool_result</code> message.
+        The LLM decides which files to download and which directory structure to create.
+      </p>
+
+      <h4>Step 4a: Gateway sends tool result to LLM (turn 2)</h4>
+      <pre><code>POST /v1/messages HTTP/2
+Host: api.anthropic.com
+x-api-key: sk-ant-api03-...
+anthropic-version: 2023-06-01
+content-type: application/json
+
+{
+  "model": "claude-opus-4-6-20250310",
+  "max_tokens": 8192,
+  "stream": true,
+  "system": "...(same system prompt)...",
+  "tools": [ ...(same tool definitions)... ],
+  "messages": [
+    { "role": "user", "content": "Search for IEEE 802.11 Wi-Fi standards..." },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "I'll search for IEEE 802.11 Wi-Fi standards..." },
+        { "type": "tool_use", "id": "toolu_search_01", "name": "web_search", "input": {"query":"..."} }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_search_01",
+          "content": "[{\"title\":\"IEEE 802.11-2024...\",\"url\":\"https://standards.ieee.org/ieee/802.11/11089/\",...}, ...]"
+        }
+      ]
+    }
+  ]
+}</code></pre>
+
+      <h4>Step 4b: LLM responds with multiple tool calls</h4>
+      <p>
+        The LLM returns multiple tool calls: first creating the directory structure, then
+        downloading files.
+      </p>
+
+      <pre><code>// LLM response (assembled from SSE stream):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I found the key IEEE 802.11 standards. Let me create a directory structure and download the available documents."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mkdir_01",
+      "name": "fs_mkdir",
+      "input": { "path": "/home/user/ieee-wifi-standards" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mkdir_02",
+      "name": "fs_mkdir",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mkdir_03",
+      "name": "fs_mkdir",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11ac-wifi5" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mkdir_04",
+      "name": "fs_mkdir",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11n-wifi4" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_mkdir_05",
+      "name": "fs_mkdir",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11be-wifi7" }
+    }
+  ],
+  "stop_reason": "tool_use"
+}</code></pre>
+
+      <h4>Step 4c: Gateway dispatches mkdir invocations to node (parallel)</h4>
+      <p>
+        The gateway sends each <code>fs_mkdir</code> tool call as a separate
+        <code>node.invoke</code> request to the node. These can be sent in rapid succession over the
+        WebSocket.
+      </p>
+
+      <pre><code>// Gateway -> Node (5 parallel WebSocket req frames)
+{
+  "type": "req", "id": "invoke-mkdir-01", "method": "node.invoke",
+  "params": { "invocationId": "inv-mkdir-01", "command": "fs.mkdir",
+    "args": { "path": "/home/user/ieee-wifi-standards" }, "timeout": 5000 }
+}
+{
+  "type": "req", "id": "invoke-mkdir-02", "method": "node.invoke",
+  "params": { "invocationId": "inv-mkdir-02", "command": "fs.mkdir",
+    "args": { "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6" }, "timeout": 5000 }
+}
+// ... (3 more mkdir invocations)</code></pre>
+
+      <h4>Step 4d: Node executes mkdir and responds</h4>
+      <pre><code>// Node -> Gateway (5 WebSocket res frames)
+{ "type": "res", "id": "invoke-mkdir-01", "ok": true,
+  "payload": { "invocationId": "inv-mkdir-01", "result": { "created": true } } }
+{ "type": "res", "id": "invoke-mkdir-02", "ok": true,
+  "payload": { "invocationId": "inv-mkdir-02", "result": { "created": true } } }
+// ... etc</code></pre>
+
+      <h4>Step 4e: Gateway feeds mkdir results to LLM, LLM requests downloads (turn 3)</h4>
+      <p>
+        The gateway sends all tool results back to the LLM. The LLM responds with
+        <code>web_fetch</code> tool calls to download the IEEE standard pages/PDFs.
+      </p>
+
+      <pre><code>// LLM response (turn 3):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Directories created. Now I'll fetch the standard pages to get detailed specifications."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_fetch_01",
+      "name": "web_fetch",
+      "input": {
+        "url": "https://ieeexplore.ieee.org/document/9442429",
+        "save_path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/ieee-802.11ax-2021.html"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_fetch_02",
+      "name": "web_fetch",
+      "input": {
+        "url": "https://ieeexplore.ieee.org/document/6687187",
+        "save_path": "/home/user/ieee-wifi-standards/802.11ac-wifi5/ieee-802.11ac-2013.html"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_fetch_03",
+      "name": "web_fetch",
+      "input": {
+        "url": "https://ieeexplore.ieee.org/document/5307322",
+        "save_path": "/home/user/ieee-wifi-standards/802.11n-wifi4/ieee-802.11n-2009.html"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_fetch_04",
+      "name": "web_fetch",
+      "input": {
+        "url": "https://ieeexplore.ieee.org/document/10376084",
+        "save_path": "/home/user/ieee-wifi-standards/802.11be-wifi7/ieee-802.11be-draft.html"
+      }
+    }
+  ],
+  "stop_reason": "tool_use"
+}</code></pre>
+
+      <h4>Step 4f: Gateway dispatches web_fetch invocations to node</h4>
+      <pre><code>// Gateway -> Node (WebSocket req frame, one per download)
+{
+  "type": "req",
+  "id": "invoke-fetch-01",
+  "method": "node.invoke",
+  "params": {
+    "invocationId": "inv-fetch-01",
+    "command": "web.fetch",
+    "args": {
+      "url": "https://ieeexplore.ieee.org/document/9442429",
+      "save_path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/ieee-802.11ax-2021.html"
+    },
+    "timeout": 60000,
+    "context": { "agentRunId": "run-xyz-789", "turn": 3, "toolUseId": "toolu_fetch_01" }
+  }
+}</code></pre>
+
+      <h4>Step 4g: Node downloads from IEEE (Node &rarr; Internet)</h4>
+      <p>
+        For each <code>web.fetch</code> invocation, the node makes an HTTPS request to the target
+        URL.
+      </p>
+
+      <pre><code>// For each download, the node performs:
+// 1. DNS lookup: ieeexplore.ieee.org -> resolved IP
+// 2. TCP 3-way handshake to port 443
+// 3. TLS 1.3 handshake with SNI: ieeexplore.ieee.org
+//    (ClientHello -> ServerHello -> EncryptedExtensions -> Cert -> CertVerify -> Finished)
+// 4. HTTP/2 request:
+
+GET /document/9442429 HTTP/2
+Host: ieeexplore.ieee.org
+User-Agent: OpenClaw-Node/2026.3.17
+Accept: text/html,application/xhtml+xml
+Accept-Encoding: gzip, br
+
+// 5. Response:
+HTTP/2 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Encoding: gzip
+Content-Length: 145832
+// ... HTML body with standard details ...
+
+// 6. Node writes response body to save_path on local filesystem</code></pre>
+
+      <div class="card warn">
+        <div class="card-title">TLS Certificate Verification</div>
+        <p>During each TLS handshake with IEEE servers, the node verifies:</p>
+        <ul>
+          <li><strong>Certificate chain</strong> up to a trusted root CA</li>
+          <li>
+            <strong>Server name</strong> matches the certificate&rsquo;s Subject Alternative Name
+            (SAN)
+          </li>
+          <li><strong>Certificate expiration</strong> (not expired, not yet valid)</li>
+          <li><strong>Revocation status</strong> via OCSP stapling or CRL (optional)</li>
+        </ul>
+        <p>
+          The cipher suite negotiated is typically <code>TLS_AES_256_GCM_SHA384</code> or
+          <code>TLS_CHACHA20_POLY1305_SHA256</code> for TLS 1.3.
+        </p>
+      </div>
+
+      <h4>Step 4h: Node returns download results to gateway</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame, per download)
+{
+  "type": "res",
+  "id": "invoke-fetch-01",
+  "ok": true,
+  "payload": {
+    "invocationId": "inv-fetch-01",
+    "result": {
+      "statusCode": 200,
+      "contentType": "text/html",
+      "bytesWritten": 145832,
+      "savedTo": "/home/user/ieee-wifi-standards/802.11ax-wifi6/ieee-802.11ax-2021.html"
+    },
+    "durationMs": 3241
+  }
+}</code></pre>
+
+      <h4>Step 4i: Gateway streams progress to operator</h4>
+      <pre><code>// Gateway -> Operator (WebSocket event frames)
+{
+  "type": "event",
+  "event": "agent.progress",
+  "payload": {
+    "agentRunId": "run-xyz-789",
+    "turn": 3,
+    "status": "tool_executing",
+    "tool": "web_fetch",
+    "detail": "Downloading IEEE 802.11ax-2021 standard page...",
+    "progress": { "completed": 1, "total": 4 }
+  },
+  "seq": 5
+}
+// ... more progress events as each download completes</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 9. PHASE 5: AGENT ORGANIZES FILES -->
+      <!-- ================================================================ -->
+      <h2 id="phase5">9. Phase 5: Agent Organizes Files on Node</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">5</div>
+        <div class="phase-info">
+          <div class="phase-title">File Organization</div>
+          <div class="phase-desc">
+            Gateway &harr; LLM (decide organization) &rarr; Node (shell commands + fs operations)
+          </div>
+        </div>
+      </div>
+
+      <p>
+        After downloads complete, the gateway feeds the results to the LLM. The LLM may issue
+        additional commands to rename files, create index files, or move content into the proper
+        structure.
+      </p>
+
+      <h4>Step 5a: LLM decides file organization (turn 4)</h4>
+      <pre><code>// LLM response (turn 4, assembled from SSE):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "All standard pages downloaded. Let me read the downloaded content to extract key details, and create a summary index file for each standard."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_read_01",
+      "name": "fs_read",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/ieee-802.11ax-2021.html" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_read_02",
+      "name": "fs_read",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11ac-wifi5/ieee-802.11ac-2013.html" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_read_03",
+      "name": "fs_read",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11n-wifi4/ieee-802.11n-2009.html" }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_read_04",
+      "name": "fs_read",
+      "input": { "path": "/home/user/ieee-wifi-standards/802.11be-wifi7/ieee-802.11be-draft.html" }
+    }
+  ],
+  "stop_reason": "tool_use"
+}</code></pre>
+
+      <h4>Step 5b: Gateway dispatches read invocations to node</h4>
+      <pre><code>// Gateway -> Node (4 parallel WebSocket req frames)
+{
+  "type": "req", "id": "invoke-read-01", "method": "node.invoke",
+  "params": {
+    "invocationId": "inv-read-01", "command": "fs.read",
+    "args": { "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/ieee-802.11ax-2021.html" },
+    "timeout": 10000
+  }
+}
+// ... (3 more read invocations)</code></pre>
+
+      <h4>Step 5c: Node reads files and returns content</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame)
+{
+  "type": "res",
+  "id": "invoke-read-01",
+  "ok": true,
+  "payload": {
+    "invocationId": "inv-read-01",
+    "result": {
+      "content": "&lt;!DOCTYPE html&gt;&lt;html&gt;...&lt;title&gt;IEEE 802.11ax-2021&lt;/title&gt;...Frequency: 2.4/5/6 GHz...Data Rate: up to 9.6 Gbps...OFDMA...&lt;/html&gt;",
+      "sizeBytes": 145832,
+      "encoding": "utf-8"
+    },
+    "durationMs": 12
+  }
+}</code></pre>
+
+      <h4>Step 5d: LLM issues organization shell commands (turn 5)</h4>
+      <p>
+        After reading the content, the LLM may run shell commands to create summary metadata files
+        in each directory.
+      </p>
+
+      <pre><code>// LLM response (turn 5):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_write_meta_01",
+      "name": "fs_write",
+      "input": {
+        "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/README.md",
+        "content": "# IEEE 802.11ax-2021 (Wi-Fi 6)\n\n- **Standard:** IEEE 802.11ax-2021\n- **Marketing Name:** Wi-Fi 6 / Wi-Fi 6E\n- **Frequency Bands:** 2.4 GHz, 5 GHz, 6 GHz\n- **Max Data Rate:** 9.6 Gbps\n- **Key Technologies:** OFDMA, MU-MIMO, BSS Coloring, TWT\n- **Approved:** February 2021\n"
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_write_meta_02",
+      "name": "fs_write",
+      "input": {
+        "path": "/home/user/ieee-wifi-standards/802.11ac-wifi5/README.md",
+        "content": "# IEEE 802.11ac-2013 (Wi-Fi 5)\n\n- **Standard:** IEEE 802.11ac-2013\n- **Marketing Name:** Wi-Fi 5\n- **Frequency Bands:** 5 GHz\n- **Max Data Rate:** 6.93 Gbps\n- **Key Technologies:** VHT, 80/160 MHz channels, 256-QAM, MU-MIMO (DL)\n- **Approved:** January 2014\n"
+      }
+    }
+    // ... more metadata writes
+  ],
+  "stop_reason": "tool_use"
+}</code></pre>
+
+      <h4>Step 5e: Gateway dispatches write invocations to node</h4>
+      <pre><code>// Gateway -> Node (WebSocket req frames)
+{
+  "type": "req", "id": "invoke-write-meta-01", "method": "node.invoke",
+  "params": {
+    "invocationId": "inv-write-meta-01", "command": "fs.write",
+    "args": {
+      "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/README.md",
+      "content": "# IEEE 802.11ax-2021 (Wi-Fi 6)\n\n- **Standard:** IEEE 802.11ax-2021\n..."
+    },
+    "timeout": 5000
+  }
+}</code></pre>
+
+      <h4>Step 5f: Node writes files and responds</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame)
+{
+  "type": "res",
+  "id": "invoke-write-meta-01",
+  "ok": true,
+  "payload": {
+    "invocationId": "inv-write-meta-01",
+    "result": { "bytesWritten": 312, "path": "/home/user/ieee-wifi-standards/802.11ax-wifi6/README.md" },
+    "durationMs": 3
+  }
+}</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 10. PHASE 6: AGENT GENERATES REPORT -->
+      <!-- ================================================================ -->
+      <h2 id="phase6">10. Phase 6: Agent Generates Report</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">6</div>
+        <div class="phase-info">
+          <div class="phase-title">Report Generation</div>
+          <div class="phase-desc">
+            Gateway &harr; LLM (generate report text) &rarr; Node (write report file)
+          </div>
+        </div>
+      </div>
+
+      <p>
+        With all files organized and content read, the gateway sends the accumulated context to the
+        LLM for report generation. This is typically the largest LLM turn in terms of output tokens.
+      </p>
+
+      <h4>Step 6a: Gateway sends report generation request to LLM (turn 6)</h4>
+      <pre><code>POST /v1/messages HTTP/2
+Host: api.anthropic.com
+x-api-key: sk-ant-api03-...
+anthropic-version: 2023-06-01
+content-type: application/json
+
+{
+  "model": "claude-opus-4-6-20250310",
+  "max_tokens": 16384,
+  "stream": true,
+  "system": "...(same system prompt)...",
+  "tools": [ ...(same tool definitions)... ],
+  "messages": [
+    // ... all prior turns (user prompt, assistant responses, tool results) ...
+    // The conversation history now includes:
+    // - Original user prompt
+    // - Search results
+    // - File download confirmations
+    // - File content (from fs_read)
+    // - Metadata file write confirmations
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_write_meta_01", "content": "{\"bytesWritten\":312}" },
+        { "type": "tool_result", "tool_use_id": "toolu_write_meta_02", "content": "{\"bytesWritten\":287}" }
+        // ... more tool results
+      ]
+    }
+  ]
+}</code></pre>
+
+      <div class="card purple">
+        <div class="card-title">Token Usage at This Point</div>
+        <p>
+          By turn 6, the conversation context sent to the LLM includes all accumulated messages. A
+          typical breakdown:
+        </p>
+        <table>
+          <tr>
+            <th>Component</th>
+            <th>Estimated Tokens</th>
+          </tr>
+          <tr>
+            <td>System prompt + tool definitions</td>
+            <td>~1,500</td>
+          </tr>
+          <tr>
+            <td>User prompt</td>
+            <td>~100</td>
+          </tr>
+          <tr>
+            <td>Turn 1: LLM text + web_search tool call</td>
+            <td>~200</td>
+          </tr>
+          <tr>
+            <td>Turn 1: Search results (tool_result)</td>
+            <td>~800</td>
+          </tr>
+          <tr>
+            <td>Turn 2: LLM text + mkdir tool calls</td>
+            <td>~400</td>
+          </tr>
+          <tr>
+            <td>Turn 2: mkdir results</td>
+            <td>~200</td>
+          </tr>
+          <tr>
+            <td>Turn 3: LLM text + web_fetch tool calls</td>
+            <td>~500</td>
+          </tr>
+          <tr>
+            <td>Turn 3: Fetch results (URLs, sizes)</td>
+            <td>~400</td>
+          </tr>
+          <tr>
+            <td>Turn 4: LLM text + fs_read tool calls</td>
+            <td>~300</td>
+          </tr>
+          <tr>
+            <td>Turn 4: File contents (truncated HTML)</td>
+            <td>~8,000&ndash;20,000</td>
+          </tr>
+          <tr>
+            <td>Turn 5: LLM text + metadata write calls</td>
+            <td>~1,500</td>
+          </tr>
+          <tr>
+            <td>Turn 5: Write results</td>
+            <td>~200</td>
+          </tr>
+          <tr>
+            <td><strong>Total input tokens</strong></td>
+            <td><strong>~14,000&ndash;26,000</strong></td>
+          </tr>
+        </table>
+      </div>
+
+      <h4>Step 6b: LLM streams report + fs_write tool call</h4>
+      <pre><code>// LLM response (turn 6, assembled from SSE stream):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I've gathered all the information. Let me now generate the comprehensive report."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_report_01",
+      "name": "fs_write",
+      "input": {
+        "path": "/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md",
+        "content": "# Comprehensive Report: IEEE 802.11 Wi-Fi Standards\n\n## Executive Summary\n\nThis report covers the major IEEE 802.11 wireless LAN standards...\n\n## 1. IEEE 802.11n-2009 (Wi-Fi 4)\n\n### Overview\n- **Approved:** October 2009\n- **Frequency Bands:** 2.4 GHz and 5 GHz\n- **Max Data Rate:** 600 Mbps\n- **Channel Width:** 20/40 MHz\n\n### Key Technologies\n- **MIMO:** Up to 4 spatial streams\n- **Channel Bonding:** 40 MHz channels\n- **Frame Aggregation:** A-MSDU and A-MPDU\n- **Block Acknowledgment:** Improved efficiency\n\n### Improvements Over Predecessors\nIntroduced MIMO and 40 MHz channels, dramatically increasing throughput from 54 Mbps (802.11a/g) to 600 Mbps...\n\n## 2. IEEE 802.11ac-2013 (Wi-Fi 5)\n\n### Overview\n- **Approved:** January 2014\n- **Frequency Bands:** 5 GHz only\n- **Max Data Rate:** 6.93 Gbps (Wave 2)\n- **Channel Width:** 20/40/80/160 MHz\n\n### Key Technologies\n- **VHT (Very High Throughput)**\n- **256-QAM modulation**\n- **MU-MIMO (downlink)**\n- **Beamforming (standardized)**\n\n### Improvements Over 802.11n\nMoved to 5 GHz exclusively, wider channels (80/160 MHz), higher-order modulation (256-QAM), and standardized beamforming...\n\n## 3. IEEE 802.11ax-2021 (Wi-Fi 6/6E)\n\n### Overview\n- **Approved:** February 2021\n- **Frequency Bands:** 2.4 GHz, 5 GHz, 6 GHz (Wi-Fi 6E)\n- **Max Data Rate:** 9.6 Gbps\n- **Channel Width:** 20/40/80/160 MHz\n\n### Key Technologies\n- **OFDMA:** Orthogonal Frequency Division Multiple Access\n- **MU-MIMO:** Both uplink and downlink\n- **1024-QAM modulation**\n- **BSS Coloring:** Reduced co-channel interference\n- **TWT (Target Wake Time):** Improved battery life\n\n### Improvements Over 802.11ac\nFocused on efficiency in dense environments. OFDMA allows simultaneous multi-user transmissions on subcarrier groups. 6 GHz band adds 1200 MHz of spectrum...\n\n## 4. IEEE 802.11be (Wi-Fi 7)\n\n### Overview\n- **Status:** Draft (expected approval 2025)\n- **Frequency Bands:** 2.4 GHz, 5 GHz, 6 GHz\n- **Max Data Rate:** 46.1 Gbps\n- **Channel Width:** Up to 320 MHz\n\n### Key Technologies\n- **EHT (Extremely High Throughput)**\n- **4096-QAM modulation**\n- **Multi-Link Operation (MLO)**\n- **320 MHz channels**\n- **16 spatial streams**\n\n### Improvements Over 802.11ax\n4x throughput, MLO for simultaneous multi-band operation, 320 MHz channels, and 4096-QAM for maximum spectral efficiency...\n\n## Comparison Table\n\n| Standard | Year | Max Rate | Bands | Channel Width | Key Innovation |\n|----------|------|----------|-------|--------------|----------------|\n| 802.11n  | 2009 | 600 Mbps | 2.4/5 GHz | 40 MHz | MIMO |\n| 802.11ac | 2013 | 6.93 Gbps | 5 GHz | 160 MHz | MU-MIMO, VHT |\n| 802.11ax | 2021 | 9.6 Gbps | 2.4/5/6 GHz | 160 MHz | OFDMA, TWT |\n| 802.11be | TBD  | 46.1 Gbps | 2.4/5/6 GHz | 320 MHz | MLO, EHT |\n\n## References\n\n1. IEEE Std 802.11n-2009\n2. IEEE Std 802.11ac-2013\n3. IEEE Std 802.11ax-2021\n4. IEEE P802.11be/D5.0\n\n---\n*Report generated on 2026-03-17*\n"
+      }
+    }
+  ],
+  "stop_reason": "tool_use"
+}</code></pre>
+
+      <h4>Step 6c: Gateway dispatches report write to node</h4>
+      <pre><code>// Gateway -> Node (WebSocket req frame)
+{
+  "type": "req",
+  "id": "invoke-report-01",
+  "method": "node.invoke",
+  "params": {
+    "invocationId": "inv-report-01",
+    "command": "fs.write",
+    "args": {
+      "path": "/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md",
+      "content": "# Comprehensive Report: IEEE 802.11 Wi-Fi Standards\n\n## Executive Summary\n..."
+    },
+    "timeout": 10000,
+    "context": { "agentRunId": "run-xyz-789", "turn": 6, "toolUseId": "toolu_report_01" }
+  }
+}</code></pre>
+
+      <h4>Step 6d: Node writes report and confirms</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame)
+{
+  "type": "res",
+  "id": "invoke-report-01",
+  "ok": true,
+  "payload": {
+    "invocationId": "inv-report-01",
+    "result": {
+      "bytesWritten": 3847,
+      "path": "/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md"
+    },
+    "durationMs": 5
+  }
+}</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 11. PHASE 7: RESULT DELIVERY -->
+      <!-- ================================================================ -->
+      <h2 id="phase7">11. Phase 7: Result Delivery to Operator</h2>
+
+      <div class="phase-header">
+        <div class="phase-num">7</div>
+        <div class="phase-info">
+          <div class="phase-title">Completion &amp; Summary</div>
+          <div class="phase-desc">
+            Gateway &harr; LLM (final summary) &rarr; Operator (result event)
+          </div>
+        </div>
+      </div>
+
+      <h4>Step 7a: Gateway sends report write result to LLM (turn 7)</h4>
+      <p>The gateway feeds the report write confirmation back to the LLM for a final summary.</p>
+
+      <pre><code>POST /v1/messages HTTP/2
+Host: api.anthropic.com
+// ... (same headers) ...
+
+{
+  "model": "claude-opus-4-6-20250310",
+  "max_tokens": 4096,
+  "stream": true,
+  "messages": [
+    // ... all prior turns ...
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_report_01",
+          "content": "{\"bytesWritten\":3847,\"path\":\"/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md\"}" }
+      ]
+    }
+  ]
+}</code></pre>
+
+      <h4>Step 7b: LLM returns final text (no more tool calls)</h4>
+      <pre><code>// LLM response (turn 7, SSE stream):
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I've completed the task. Here's a summary of what was done:\n\n**Directory structure created:**\n```\n/home/user/ieee-wifi-standards/\n├── 802.11n-wifi4/\n│   ├── ieee-802.11n-2009.html\n│   └── README.md\n├── 802.11ac-wifi5/\n│   ├── ieee-802.11ac-2013.html\n│   └── README.md\n├── 802.11ax-wifi6/\n│   ├── ieee-802.11ax-2021.html\n│   └── README.md\n├── 802.11be-wifi7/\n│   ├── ieee-802.11be-draft.html\n│   └── README.md\n└── IEEE_802.11_WiFi_Standards_Report.md\n```\n\n**Report location:** `/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md`\n\nThe report covers IEEE 802.11n (Wi-Fi 4), 802.11ac (Wi-Fi 5), 802.11ax (Wi-Fi 6/6E), and 802.11be (Wi-Fi 7), including specifications, key technologies, and evolution across generations."
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 28450, "output_tokens": 312 }
+}</code></pre>
+
+      <h4>Step 7c: Gateway sends completion event to operator</h4>
+      <pre><code>// Gateway -> Operator (WebSocket event frame - final text streaming)
+{
+  "type": "event",
+  "event": "agent.text",
+  "payload": {
+    "agentRunId": "run-xyz-789",
+    "turn": 7,
+    "text": "I've completed the task. Here's a summary of what was done:\n\n**Directory structure created:**\n..."
+  },
+  "seq": 18
+}
+
+// Gateway -> Operator (WebSocket event frame - completion)
+{
+  "type": "event",
+  "event": "agent.complete",
+  "payload": {
+    "agentRunId": "run-xyz-789",
+    "status": "success",
+    "totalTurns": 7,
+    "summary": "Downloaded and organized 4 IEEE 802.11 Wi-Fi standards with comprehensive report",
+    "artifacts": [
+      { "type": "file", "path": "/home/user/ieee-wifi-standards/IEEE_802.11_WiFi_Standards_Report.md" },
+      { "type": "directory", "path": "/home/user/ieee-wifi-standards/" }
+    ],
+    "usage": {
+      "totalInputTokens": 82340,
+      "totalOutputTokens": 4215,
+      "llmTurns": 7,
+      "toolInvocations": 17,
+      "nodeInvocations": 17
+    }
+  },
+  "seq": 19
+}</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 12. STREAMING & PROGRESS -->
+      <!-- ================================================================ -->
+      <h2 id="streaming">12. Streaming &amp; Progress Updates</h2>
+
+      <p>
+        Throughout the entire agentic loop, the gateway maintains real-time communication with the
+        operator via WebSocket event frames.
+      </p>
+
+      <h3>12.1 Event Types Sent to Operator</h3>
+      <table>
+        <tr>
+          <th>Event</th>
+          <th>Trigger</th>
+          <th>Payload</th>
+        </tr>
+        <tr>
+          <td><code>agent.progress</code></td>
+          <td>Agent starts a new phase/tool</td>
+          <td><code>{ turn, status, tool, detail, progress }</code></td>
+        </tr>
+        <tr>
+          <td><code>agent.text</code></td>
+          <td>LLM produces text output (streamed)</td>
+          <td><code>{ turn, text, delta }</code></td>
+        </tr>
+        <tr>
+          <td><code>agent.tool_start</code></td>
+          <td>Tool invocation dispatched to node</td>
+          <td><code>{ turn, toolName, args, invocationId }</code></td>
+        </tr>
+        <tr>
+          <td><code>agent.tool_complete</code></td>
+          <td>Tool invocation returned from node</td>
+          <td><code>{ turn, toolName, result, durationMs }</code></td>
+        </tr>
+        <tr>
+          <td><code>agent.error</code></td>
+          <td>Tool or LLM call fails</td>
+          <td><code>{ turn, error, retryable }</code></td>
+        </tr>
+        <tr>
+          <td><code>agent.complete</code></td>
+          <td>Agent finishes all turns</td>
+          <td><code>{ status, summary, artifacts, usage }</code></td>
+        </tr>
+      </table>
+
+      <h3>12.2 Streaming Architecture</h3>
+      <div class="card accent">
+        <div class="card-title">Three-Tier Streaming Pipeline</div>
+        <ol>
+          <li>
+            <strong>Cloud LLM &rarr; Gateway (SSE):</strong> The LLM streams token-by-token via
+            Server-Sent Events over HTTPS. Each <code>content_block_delta</code> event contains a
+            small text or JSON fragment.
+          </li>
+          <li>
+            <strong>Gateway processing:</strong> The gateway reassembles SSE deltas, detects
+            tool_use blocks, and decides when to forward text to the operator vs. when to dispatch
+            tool invocations to the node.
+          </li>
+          <li>
+            <strong>Gateway &rarr; Operator (WebSocket events):</strong> The gateway pushes
+            real-time <code>agent.text</code> events containing LLM text deltas, plus
+            <code>agent.progress</code> / <code>agent.tool_start</code> /
+            <code>agent.tool_complete</code> events for tool activity.
+          </li>
+        </ol>
+      </div>
+
+      <h3>12.3 Keepalive</h3>
+      <p>
+        During long operations (e.g., downloading large files), the WebSocket connections are kept
+        alive via:
+      </p>
+      <ul>
+        <li>
+          <strong>WebSocket ping/pong frames</strong> (RFC 6455 &sect;5.5.2/5.5.3) sent at
+          <code>tickIntervalMs</code> (30s).
+        </li>
+        <li>
+          <strong>TCP keepalive</strong> at the OS level (typically 60s for loopback, configurable
+          for remote).
+        </li>
+        <li>
+          <strong>LLM connection:</strong> HTTP Keep-Alive or HTTP/2 stream idle timeout (typically
+          60&ndash;120s). The gateway may need to re-establish the TLS+HTTP connection if the gap
+          between LLM turns exceeds the server&rsquo;s idle timeout.
+        </li>
+      </ul>
+
+      <!-- ================================================================ -->
+      <!-- 13. ERROR HANDLING -->
+      <!-- ================================================================ -->
+      <h2 id="error-handling">13. Error Handling &amp; Retries</h2>
+
+      <h3>13.1 Error Categories by Link</h3>
+      <table>
+        <tr>
+          <th>Link</th>
+          <th>Error Type</th>
+          <th>Protocol Indicator</th>
+          <th>Recovery Strategy</th>
+        </tr>
+        <tr>
+          <td>Operator &harr; Gateway</td>
+          <td>WebSocket disconnect</td>
+          <td>TCP RST / WS close frame (1006)</td>
+          <td>
+            Auto-reconnect with exponential backoff; agent continues; operator catches up via state
+            sync
+          </td>
+        </tr>
+        <tr>
+          <td>Node &harr; Gateway</td>
+          <td>Node offline during invocation</td>
+          <td>WS close / no response within timeout</td>
+          <td>Invocation queued in pending work queue; retried when node reconnects</td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM</td>
+          <td>Rate limit (429)</td>
+          <td>HTTP 429 + <code>retry-after</code> header</td>
+          <td>
+            Gateway retries after specified delay; operator sees
+            <code>agent.progress</code> &ldquo;rate limited&rdquo;
+          </td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM</td>
+          <td>Server error (500/502/503)</td>
+          <td>HTTP 5xx</td>
+          <td>Exponential backoff retry (up to 3 attempts)</td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM</td>
+          <td>Context too long (400)</td>
+          <td>HTTP 400 + <code>error.type: "invalid_request_error"</code></td>
+          <td>Gateway truncates/summarizes conversation history and retries</td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet</td>
+          <td>Download fails (404, timeout)</td>
+          <td>HTTP 404 / TCP timeout</td>
+          <td>
+            Node returns error to gateway; LLM decides whether to retry, skip, or try alternative
+            URL
+          </td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet</td>
+          <td>TLS certificate error</td>
+          <td>TLS alert (unknown_ca, expired)</td>
+          <td>Node returns TLS error; LLM may suggest alternative source</td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet</td>
+          <td>DNS resolution failure</td>
+          <td>DNS NXDOMAIN / SERVFAIL</td>
+          <td>Node returns DNS error; LLM may suggest alternative hostname or retry</td>
+        </tr>
+      </table>
+
+      <h3>13.2 Error Response Examples</h3>
+
+      <h4>Node tool execution error (returned to gateway)</h4>
+      <pre><code>// Node -> Gateway (WebSocket res frame)
+{
+  "type": "res",
+  "id": "invoke-fetch-03",
+  "ok": false,
+  "error": {
+    "code": "TOOL_EXECUTION_FAILED",
+    "message": "HTTP 403 Forbidden - access denied for URL",
+    "details": {
+      "url": "https://ieeexplore.ieee.org/stampPDF/...",
+      "httpStatus": 403,
+      "reason": "Subscription required for PDF download"
+    },
+    "retryable": false
+  }
+}</code></pre>
+
+      <h4>LLM API rate limit error</h4>
+      <pre><code>HTTP/2 429 Too Many Requests
+Content-Type: application/json
+retry-after: 30
+
+{
+  "type": "error",
+  "error": {
+    "type": "rate_limit_error",
+    "message": "Rate limit exceeded. Please retry after 30 seconds."
+  }
+}</code></pre>
+
+      <h4>Error forwarded to LLM as tool_result</h4>
+      <pre><code>// Gateway -> LLM (in next messages turn)
+{
+  "role": "user",
+  "content": [
+    {
+      "type": "tool_result",
+      "tool_use_id": "toolu_fetch_03",
+      "is_error": true,
+      "content": "Error: HTTP 403 Forbidden - Subscription required for PDF download from ieeexplore.ieee.org. The standard page HTML was downloaded successfully but the full PDF requires IEEE subscription."
+    }
+  ]
+}</code></pre>
+
+      <!-- ================================================================ -->
+      <!-- 14. SECURITY MODEL -->
+      <!-- ================================================================ -->
+      <h2 id="security">14. Security Model</h2>
+
+      <h3>14.1 Authentication Summary</h3>
+      <table>
+        <tr>
+          <th>Link</th>
+          <th>Mechanism</th>
+          <th>Credential Storage</th>
+        </tr>
+        <tr>
+          <td>Operator &harr; Gateway</td>
+          <td>Token-based auth (issued at first connect or via pairing)</td>
+          <td>Operator token in <code>~/.openclaw/credentials/</code></td>
+        </tr>
+        <tr>
+          <td>Node &harr; Gateway</td>
+          <td>Ed25519 keypair + challenge-response signature; device token for reconnection</td>
+          <td>Private key in device secure storage; device token refreshed by gateway</td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM</td>
+          <td>API key (<code>x-api-key</code> header)</td>
+          <td>API key in gateway config or environment variable</td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet</td>
+          <td>None (public endpoints) or session cookies</td>
+          <td>N/A or node&rsquo;s cookie store</td>
+        </tr>
+      </table>
+
+      <h3>14.2 Encryption</h3>
+      <table>
+        <tr>
+          <th>Link</th>
+          <th>In Transit</th>
+          <th>At Rest</th>
+        </tr>
+        <tr>
+          <td>Operator &harr; Gateway</td>
+          <td>TLS 1.3 for remote; plaintext acceptable for <code>127.0.0.1</code> loopback</td>
+          <td>N/A (ephemeral messages)</td>
+        </tr>
+        <tr>
+          <td>Node &harr; Gateway</td>
+          <td>TLS 1.3 for remote; plaintext for loopback</td>
+          <td>N/A</td>
+        </tr>
+        <tr>
+          <td>Gateway &rarr; Cloud LLM</td>
+          <td>TLS 1.2/1.3 (mandatory, <code>https://</code>)</td>
+          <td>API key encrypted at rest per provider policy</td>
+        </tr>
+        <tr>
+          <td>Node &rarr; Internet</td>
+          <td>TLS 1.2/1.3 (standard HTTPS)</td>
+          <td>Downloaded files stored unencrypted on node filesystem</td>
+        </tr>
+      </table>
+
+      <h3>14.3 Authorization &amp; Capability Gating</h3>
+      <div class="card green">
+        <div class="card-title">Tool Authorization Chain</div>
+        <p>Before the gateway dispatches a tool invocation to a node, it checks:</p>
+        <ol>
+          <li>
+            <strong>Operator scopes:</strong> Does the operator&rsquo;s session include
+            <code>operator.write</code>?
+          </li>
+          <li>
+            <strong>Node capabilities:</strong> Does the target node declare the required
+            <code>caps</code> and <code>commands</code>?
+          </li>
+          <li>
+            <strong>Node permissions:</strong> Is the specific permission (e.g.,
+            <code>fs.write</code>) enabled?
+          </li>
+          <li>
+            <strong>Approval flow:</strong> For sensitive operations, the gateway may send an
+            <code>approval.request</code> event to the operator and wait for
+            <code>approval.respond</code> before dispatching.
+          </li>
+        </ol>
+      </div>
+
+      <h3>14.4 Data Flow Trust Boundaries</h3>
+
+      <div class="diagram">
+        <svg width="780" height="200" viewBox="0 0 780 200" xmlns="http://www.w3.org/2000/svg">
+          <!-- Trust boundary 1: Local -->
+          <rect
+            x="15"
+            y="20"
+            width="460"
+            height="160"
+            rx="12"
+            fill="none"
+            stroke="#45d6b5"
+            stroke-width="2"
+            stroke-dasharray="8,4"
+          />
+          <text
+            x="30"
+            y="16"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            font-weight="bold"
+          >
+            TRUST BOUNDARY: LOCAL NETWORK / SAME MACHINE
+          </text>
+
+          <!-- Operator -->
+          <rect
+            x="30"
+            y="55"
+            width="120"
+            height="50"
+            rx="6"
+            fill="#181b24"
+            stroke="#6c8cff"
+            stroke-width="1.5"
+          />
+          <text
+            x="90"
+            y="82"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+
+          <!-- Gateway -->
+          <rect
+            x="200"
+            y="55"
+            width="120"
+            height="50"
+            rx="6"
+            fill="#181b24"
+            stroke="#45d6b5"
+            stroke-width="1.5"
+          />
+          <text
+            x="260"
+            y="82"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+
+          <!-- Node -->
+          <rect
+            x="370"
+            y="55"
+            width="100"
+            height="50"
+            rx="6"
+            fill="#181b24"
+            stroke="#f0a050"
+            stroke-width="1.5"
+          />
+          <text
+            x="420"
+            y="82"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            Node
+          </text>
+
+          <line x1="150" y1="80" x2="198" y2="80" stroke="#8b92a8" stroke-width="1.5" />
+          <line x1="320" y1="80" x2="368" y2="80" stroke="#8b92a8" stroke-width="1.5" />
+
+          <!-- Trust boundary 2: Remote -->
+          <rect
+            x="510"
+            y="20"
+            width="255"
+            height="160"
+            rx="12"
+            fill="none"
+            stroke="#f06070"
+            stroke-width="2"
+            stroke-dasharray="8,4"
+          />
+          <text
+            x="525"
+            y="16"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="10"
+            font-weight="bold"
+          >
+            TRUST BOUNDARY: EXTERNAL / INTERNET
+          </text>
+
+          <!-- Cloud LLM -->
+          <rect
+            x="530"
+            y="40"
+            width="110"
+            height="40"
+            rx="6"
+            fill="#181b24"
+            stroke="#b48cff"
+            stroke-width="1.5"
+          />
+          <text
+            x="585"
+            y="64"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Cloud LLM
+          </text>
+
+          <!-- IEEE/Web -->
+          <rect
+            x="530"
+            y="100"
+            width="110"
+            height="40"
+            rx="6"
+            fill="#181b24"
+            stroke="#f06070"
+            stroke-width="1.5"
+          />
+          <text
+            x="585"
+            y="124"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            IEEE/Web
+          </text>
+
+          <!-- Cross-boundary arrows -->
+          <line
+            x1="320"
+            y1="70"
+            x2="528"
+            y2="55"
+            stroke="#b48cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <text
+            x="425"
+            y="50"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="8"
+            text-anchor="middle"
+          >
+            HTTPS+TLS
+          </text>
+
+          <line
+            x1="470"
+            y1="90"
+            x2="528"
+            y2="115"
+            stroke="#f06070"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <text
+            x="510"
+            y="110"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="8"
+            text-anchor="middle"
+          >
+            HTTPS+TLS
+          </text>
+
+          <!-- Sensitive data label -->
+          <text
+            x="245"
+            y="140"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            API key never leaves this boundary
+          </text>
+          <text
+            x="245"
+            y="156"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            (sent only from Gateway to Cloud LLM)
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 6 &mdash; Trust boundaries: local (operator + gateway + node) vs. external (cloud
+          LLM + internet)
+        </div>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 15. DATA FLOW MATRIX -->
+      <!-- ================================================================ -->
+      <h2 id="data-flow">15. Complete Data Flow Matrix</h2>
+
+      <p>Every network communication in the end-to-end scenario, listed chronologically:</p>
+
+      <table>
+        <tr>
+          <th>#</th>
+          <th>Phase</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Protocol</th>
+          <th>Method / Path</th>
+          <th>Payload Summary</th>
+        </tr>
+        <tr>
+          <td>1</td>
+          <td>Setup</td>
+          <td>Operator</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td>HTTP Upgrade + connect</td>
+          <td>WebSocket handshake, operator auth</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>Setup</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td>challenge + hello-ok</td>
+          <td>Protocol negotiation, token</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>Setup</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td>HTTP Upgrade + connect</td>
+          <td>WebSocket handshake, device keypair auth</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>Setup</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td>challenge + hello-ok</td>
+          <td>Protocol negotiation, device token</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>1</td>
+          <td>Operator</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.run</code></td>
+          <td>Task prompt + options</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td>1</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code></td>
+          <td>Acknowledgment (accepted)</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td>2</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>System prompt + user prompt + tools</td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td>2</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>Text + web_search tool call</td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td>2</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.progress</code></td>
+          <td>Thinking text streamed</td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td>3</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code></td>
+          <td>web.search invocation</td>
+        </tr>
+        <tr>
+          <td>11</td>
+          <td>3</td>
+          <td>Node</td>
+          <td>DNS</td>
+          <td><span class="proto-tag proto-dns">DNS</span></td>
+          <td>A/AAAA query</td>
+          <td>Resolve search API hostname</td>
+        </tr>
+        <tr>
+          <td>12</td>
+          <td>3</td>
+          <td>Node</td>
+          <td>Search API</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>GET /v1/search</code></td>
+          <td>Search query</td>
+        </tr>
+        <tr>
+          <td>13</td>
+          <td>3</td>
+          <td>Search API</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td>200 OK</td>
+          <td>JSON search results</td>
+        </tr>
+        <tr>
+          <td>14</td>
+          <td>3</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code></td>
+          <td>Search results</td>
+        </tr>
+        <tr>
+          <td>15</td>
+          <td>3</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.tool_complete</code></td>
+          <td>Search completed</td>
+        </tr>
+        <tr>
+          <td>16</td>
+          <td>4</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 2 with search results</td>
+        </tr>
+        <tr>
+          <td>17</td>
+          <td>4</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>Text + 5x fs_mkdir tool calls</td>
+        </tr>
+        <tr>
+          <td>18&ndash;22</td>
+          <td>4</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code> &times;5</td>
+          <td>fs.mkdir invocations</td>
+        </tr>
+        <tr>
+          <td>23&ndash;27</td>
+          <td>4</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code> &times;5</td>
+          <td>mkdir confirmations</td>
+        </tr>
+        <tr>
+          <td>28</td>
+          <td>4</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 3 with mkdir results</td>
+        </tr>
+        <tr>
+          <td>29</td>
+          <td>4</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>Text + 4x web_fetch tool calls</td>
+        </tr>
+        <tr>
+          <td>30&ndash;33</td>
+          <td>4</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code> &times;4</td>
+          <td>web.fetch invocations</td>
+        </tr>
+        <tr>
+          <td>34&ndash;37</td>
+          <td>4</td>
+          <td>Node</td>
+          <td>DNS</td>
+          <td><span class="proto-tag proto-dns">DNS</span></td>
+          <td>A/AAAA queries</td>
+          <td>Resolve ieeexplore.ieee.org</td>
+        </tr>
+        <tr>
+          <td>38&ndash;41</td>
+          <td>4</td>
+          <td>Node</td>
+          <td>IEEE Xplore</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>GET /document/...</code> &times;4</td>
+          <td>Download standard pages</td>
+        </tr>
+        <tr>
+          <td>42&ndash;45</td>
+          <td>4</td>
+          <td>IEEE Xplore</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td>200 OK &times;4</td>
+          <td>HTML content (standard pages)</td>
+        </tr>
+        <tr>
+          <td>46&ndash;49</td>
+          <td>4</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code> &times;4</td>
+          <td>Download confirmations</td>
+        </tr>
+        <tr>
+          <td>50&ndash;53</td>
+          <td>4</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.tool_complete</code> &times;4</td>
+          <td>Download progress events</td>
+        </tr>
+        <tr>
+          <td>54</td>
+          <td>5</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 4 with download results</td>
+        </tr>
+        <tr>
+          <td>55</td>
+          <td>5</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>4x fs_read tool calls</td>
+        </tr>
+        <tr>
+          <td>56&ndash;59</td>
+          <td>5</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code> &times;4</td>
+          <td>fs.read invocations</td>
+        </tr>
+        <tr>
+          <td>60&ndash;63</td>
+          <td>5</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code> &times;4</td>
+          <td>File contents returned</td>
+        </tr>
+        <tr>
+          <td>64</td>
+          <td>5</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 5 with file contents</td>
+        </tr>
+        <tr>
+          <td>65</td>
+          <td>5</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>4x fs_write (README) tool calls</td>
+        </tr>
+        <tr>
+          <td>66&ndash;69</td>
+          <td>5</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code> &times;4</td>
+          <td>fs.write (metadata READMEs)</td>
+        </tr>
+        <tr>
+          <td>70&ndash;73</td>
+          <td>5</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code> &times;4</td>
+          <td>Write confirmations</td>
+        </tr>
+        <tr>
+          <td>74</td>
+          <td>6</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 6: report generation</td>
+        </tr>
+        <tr>
+          <td>75</td>
+          <td>6</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>Text + fs_write (report) tool call</td>
+        </tr>
+        <tr>
+          <td>76</td>
+          <td>6</td>
+          <td>Gateway</td>
+          <td>Node</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>node.invoke</code></td>
+          <td>fs.write (report.md)</td>
+        </tr>
+        <tr>
+          <td>77</td>
+          <td>6</td>
+          <td>Node</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>res</code></td>
+          <td>Report write confirmation</td>
+        </tr>
+        <tr>
+          <td>78</td>
+          <td>7</td>
+          <td>Gateway</td>
+          <td>Cloud LLM</td>
+          <td><span class="proto-tag proto-https">HTTPS</span></td>
+          <td><code>POST /v1/messages</code></td>
+          <td>Turn 7: final summary</td>
+        </tr>
+        <tr>
+          <td>79</td>
+          <td>7</td>
+          <td>Cloud LLM</td>
+          <td>Gateway</td>
+          <td><span class="proto-tag proto-https">SSE</span></td>
+          <td>Streaming response</td>
+          <td>Final text (stop_reason: end_turn)</td>
+        </tr>
+        <tr>
+          <td>80</td>
+          <td>7</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.text</code></td>
+          <td>Final summary text</td>
+        </tr>
+        <tr>
+          <td>81</td>
+          <td>7</td>
+          <td>Gateway</td>
+          <td>Operator</td>
+          <td><span class="proto-tag proto-ws">WS</span></td>
+          <td><code>agent.complete</code></td>
+          <td>Completion event with usage stats</td>
+        </tr>
+      </table>
+
+      <div class="card accent">
+        <div class="card-title">Communication Totals</div>
+        <table>
+          <tr>
+            <th>Link</th>
+            <th>Messages</th>
+            <th>Protocol</th>
+          </tr>
+          <tr>
+            <td>Operator &harr; Gateway</td>
+            <td>~15 (2 req/res + ~13 events)</td>
+            <td>WebSocket JSON-RPC</td>
+          </tr>
+          <tr>
+            <td>Node &harr; Gateway</td>
+            <td>~34 (17 req + 17 res)</td>
+            <td>WebSocket JSON-RPC</td>
+          </tr>
+          <tr>
+            <td>Gateway &rarr; Cloud LLM</td>
+            <td>7 HTTP requests + 7 SSE streams</td>
+            <td>HTTPS REST + SSE</td>
+          </tr>
+          <tr>
+            <td>Node &rarr; Internet</td>
+            <td>~5 HTTPS requests (1 search + 4 downloads)</td>
+            <td>HTTPS GET</td>
+          </tr>
+          <tr>
+            <td>DNS queries</td>
+            <td>~5 (may be cached after first lookup)</td>
+            <td>UDP/53</td>
+          </tr>
+          <tr>
+            <td><strong>Total distinct network exchanges</strong></td>
+            <td colspan="2"><strong>~81</strong></td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 16. TIMING & LATENCY -->
+      <!-- ================================================================ -->
+      <h2 id="timing">16. Timing &amp; Latency Analysis</h2>
+
+      <table>
+        <tr>
+          <th>Operation</th>
+          <th>Typical Latency</th>
+          <th>Bottleneck</th>
+        </tr>
+        <tr>
+          <td>WebSocket frame (loopback)</td>
+          <td>&lt;1 ms</td>
+          <td>JSON serialization</td>
+        </tr>
+        <tr>
+          <td>WebSocket frame (remote, same region)</td>
+          <td>5&ndash;50 ms</td>
+          <td>Network RTT + TLS</td>
+        </tr>
+        <tr>
+          <td>DNS resolution (cached)</td>
+          <td>&lt;1 ms</td>
+          <td>OS cache hit</td>
+        </tr>
+        <tr>
+          <td>DNS resolution (uncached)</td>
+          <td>10&ndash;100 ms</td>
+          <td>Recursive resolver RTT</td>
+        </tr>
+        <tr>
+          <td>TLS 1.3 handshake</td>
+          <td>30&ndash;100 ms</td>
+          <td>1-RTT key exchange</td>
+        </tr>
+        <tr>
+          <td>Cloud LLM API (first token, SSE)</td>
+          <td>500&ndash;3,000 ms</td>
+          <td>Model inference startup</td>
+        </tr>
+        <tr>
+          <td>Cloud LLM API (full response)</td>
+          <td>2&ndash;30 s</td>
+          <td>Token generation rate (~80 tok/s)</td>
+        </tr>
+        <tr>
+          <td>Web search API call</td>
+          <td>500&ndash;2,000 ms</td>
+          <td>External API latency</td>
+        </tr>
+        <tr>
+          <td>IEEE page download (HTML)</td>
+          <td>1&ndash;5 s</td>
+          <td>Server response + TLS + transfer</td>
+        </tr>
+        <tr>
+          <td>Local file write (node)</td>
+          <td>&lt;5 ms</td>
+          <td>Filesystem I/O</td>
+        </tr>
+        <tr>
+          <td>Local file read (node)</td>
+          <td>&lt;10 ms</td>
+          <td>Filesystem I/O</td>
+        </tr>
+      </table>
+
+      <h3>16.1 End-to-End Timing Estimate</h3>
+      <table>
+        <tr>
+          <th>Phase</th>
+          <th>Duration (est.)</th>
+          <th>Dominant Factor</th>
+        </tr>
+        <tr>
+          <td>Phase 1: Task submission</td>
+          <td>~50 ms</td>
+          <td>WebSocket RTT</td>
+        </tr>
+        <tr>
+          <td>Phase 2: LLM planning turn</td>
+          <td>2&ndash;5 s</td>
+          <td>Cloud LLM inference</td>
+        </tr>
+        <tr>
+          <td>Phase 3: Web search</td>
+          <td>2&ndash;4 s</td>
+          <td>Search API latency</td>
+        </tr>
+        <tr>
+          <td>Phase 4: mkdir + downloads (LLM turns 2&ndash;3)</td>
+          <td>15&ndash;30 s</td>
+          <td>LLM inference (2 turns) + 4 HTTPS downloads</td>
+        </tr>
+        <tr>
+          <td>Phase 5: Read + organize (LLM turns 4&ndash;5)</td>
+          <td>10&ndash;20 s</td>
+          <td>LLM inference (2 turns, large context)</td>
+        </tr>
+        <tr>
+          <td>Phase 6: Report generation (LLM turn 6)</td>
+          <td>10&ndash;30 s</td>
+          <td>LLM inference (large output)</td>
+        </tr>
+        <tr>
+          <td>Phase 7: Final summary (LLM turn 7)</td>
+          <td>2&ndash;5 s</td>
+          <td>LLM inference</td>
+        </tr>
+        <tr>
+          <td><strong>Total estimated wall time</strong></td>
+          <td><strong>41&ndash;94 s</strong></td>
+          <td><strong>Cloud LLM inference dominates (~70%)</strong></td>
+        </tr>
+      </table>
+
+      <div class="card warn">
+        <div class="card-title">Performance Insight</div>
+        <p>
+          The overwhelming bottleneck is <strong>Cloud LLM inference latency</strong>, accounting
+          for approximately 70% of total wall-clock time. Network latency between local components
+          (operator, gateway, node) is negligible by comparison. The second largest contributor is
+          external HTTPS downloads from IEEE servers.
+        </p>
+        <p>
+          HTTP/2 multiplexing and TCP connection reuse help reduce overhead for repeated calls to
+          the same Cloud LLM endpoint. The gateway maintains a connection pool for this purpose.
+        </p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- 17. SUMMARY -->
+      <!-- ================================================================ -->
+      <h2 id="summary">17. Summary</h2>
+
+      <div class="card green">
+        <div class="card-title">Key Takeaways</div>
+        <ol>
+          <li>
+            <strong>Four distinct protocols</strong> are involved: WebSocket JSON-RPC (operator/node
+            &harr; gateway), HTTPS REST + SSE (gateway &harr; cloud LLM), HTTPS (node &harr;
+            internet), and DNS (node &rarr; resolvers).
+          </li>
+          <li>
+            <strong>The gateway is the central orchestrator</strong>. It never directly accesses the
+            internet for content; all file operations happen on the node. The gateway&rsquo;s role
+            is to shuttle tool calls between the LLM&rsquo;s reasoning and the node&rsquo;s
+            execution capabilities.
+          </li>
+          <li>
+            <strong>The agentic loop</strong> is an iterative cycle: Gateway sends context to LLM
+            &rarr; LLM responds with tool calls &rarr; Gateway dispatches to node &rarr; Node
+            executes and returns results &rarr; Gateway feeds results back to LLM &rarr; repeat
+            until the LLM returns <code>stop_reason: "end_turn"</code>.
+          </li>
+          <li>
+            <strong>Approximately 81 distinct network exchanges</strong> occur in this scenario
+            across 7 LLM turns and 17 tool invocations.
+          </li>
+          <li>
+            <strong>Cloud LLM inference is the dominant latency</strong>, accounting for ~70% of
+            total wall-clock time. Local WebSocket communication adds minimal overhead.
+          </li>
+          <li>
+            <strong>Security is layered</strong>: TLS encrypts all cross-boundary communication,
+            device keypairs authenticate nodes, API keys authenticate the LLM, and capability gating
+            ensures nodes only execute authorized operations.
+          </li>
+          <li>
+            <strong>Error resilience</strong> is built into every link: WebSocket reconnection for
+            operator/node, retry with backoff for LLM rate limits, and error-as-tool-result for
+            failed tool executions (allowing the LLM to adapt its strategy).
+          </li>
+        </ol>
+      </div>
+
+      <h3>17.1 Protocol Stack Summary Diagram</h3>
+      <div class="diagram">
+        <svg width="900" height="280" viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg">
+          <!-- Column headers -->
+          <text
+            x="110"
+            y="20"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="11"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator&harr;Gateway
+          </text>
+          <text
+            x="340"
+            y="20"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="11"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node&harr;Gateway
+          </text>
+          <text
+            x="570"
+            y="20"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="11"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway&harr;Cloud LLM
+          </text>
+          <text
+            x="790"
+            y="20"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="11"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node&harr;Internet
+          </text>
+
+          <!-- Layer 7 -->
+          <rect
+            x="20"
+            y="40"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(108,140,255,0.15)"
+            stroke="#6c8cff"
+            stroke-width="1"
+          />
+          <text
+            x="110"
+            y="60"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            OpenClaw JSON-RPC v3
+          </text>
+
+          <rect
+            x="250"
+            y="40"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.15)"
+            stroke="#f0a050"
+            stroke-width="1"
+          />
+          <text
+            x="340"
+            y="60"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            OpenClaw JSON-RPC v3
+          </text>
+
+          <rect
+            x="480"
+            y="40"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(180,140,255,0.15)"
+            stroke="#b48cff"
+            stroke-width="1"
+          />
+          <text
+            x="570"
+            y="60"
+            fill="#b48cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            REST JSON + SSE
+          </text>
+
+          <rect
+            x="700"
+            y="40"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,96,112,0.15)"
+            stroke="#f06070"
+            stroke-width="1"
+          />
+          <text
+            x="790"
+            y="60"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP GET (HTML/PDF)
+          </text>
+
+          <!-- Layer 6 -->
+          <text x="5" y="95" fill="#8b92a8" font-family="monospace" font-size="9">L6-7</text>
+          <rect
+            x="20"
+            y="80"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(108,140,255,0.08)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="110"
+            y="100"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            WebSocket (RFC 6455)
+          </text>
+
+          <rect
+            x="250"
+            y="80"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.08)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="340"
+            y="100"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            WebSocket (RFC 6455)
+          </text>
+
+          <rect
+            x="480"
+            y="80"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(180,140,255,0.08)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="570"
+            y="100"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP/1.1 or HTTP/2
+          </text>
+
+          <rect
+            x="700"
+            y="80"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,96,112,0.08)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="790"
+            y="100"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            HTTP/1.1 or HTTP/2
+          </text>
+
+          <!-- Layer 5 (TLS) -->
+          <text x="5" y="135" fill="#8b92a8" font-family="monospace" font-size="9">L5</text>
+          <rect
+            x="20"
+            y="120"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.06)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="110"
+            y="140"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.3 (optional)
+          </text>
+
+          <rect
+            x="250"
+            y="120"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.06)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="340"
+            y="140"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.3 (optional)
+          </text>
+
+          <rect
+            x="480"
+            y="120"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.1)"
+            stroke="#f0a050"
+            stroke-width="1"
+          />
+          <text
+            x="570"
+            y="140"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.2/1.3 (required)
+          </text>
+
+          <rect
+            x="700"
+            y="120"
+            width="180"
+            height="30"
+            rx="4"
+            fill="rgba(240,160,80,0.1)"
+            stroke="#f0a050"
+            stroke-width="1"
+          />
+          <text
+            x="790"
+            y="140"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TLS 1.2/1.3 (required)
+          </text>
+
+          <!-- Layer 4 (TCP) -->
+          <text x="5" y="175" fill="#8b92a8" font-family="monospace" font-size="9">L4</text>
+          <rect
+            x="20"
+            y="160"
+            width="860"
+            height="30"
+            rx="4"
+            fill="rgba(69,214,181,0.06)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="450"
+            y="180"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            TCP (Transmission Control Protocol) &mdash; reliable, ordered byte stream
+          </text>
+
+          <!-- Layer 3 (IP) -->
+          <text x="5" y="215" fill="#8b92a8" font-family="monospace" font-size="9">L3</text>
+          <rect
+            x="20"
+            y="200"
+            width="860"
+            height="30"
+            rx="4"
+            fill="rgba(108,140,255,0.04)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="450"
+            y="220"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            IP (IPv4 / IPv6) &mdash; + DNS (UDP/53) for hostname resolution
+          </text>
+
+          <!-- Layer 1-2 -->
+          <text x="5" y="255" fill="#8b92a8" font-family="monospace" font-size="9">L1-2</text>
+          <rect
+            x="20"
+            y="240"
+            width="860"
+            height="30"
+            rx="4"
+            fill="rgba(108,140,255,0.02)"
+            stroke="#2a2f3e"
+            stroke-width="1"
+          />
+          <text
+            x="450"
+            y="260"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            Ethernet / Wi-Fi (802.11) / Cellular &mdash; Physical + Data Link
+          </text>
+        </svg>
+        <div class="diagram-caption">
+          Figure 7 &mdash; Complete protocol stack for all four communication links (OSI layers
+          1&ndash;7)
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

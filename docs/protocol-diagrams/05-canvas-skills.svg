@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 722" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/></marker>
+  </defs>
+  <rect width="1400" height="722" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Phase 5 — Canvas Capability &amp; Skills</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Node refreshes canvas capability tokens and queries skill binary availability.</text>
+
+  <!-- Actors + lifelines -->
+  <rect x="160" y="66" width="70" height="22" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="195" y="82" text-anchor="middle" font-size="9" font-weight="bold" fill="#92400e">Node</text>
+  <rect x="370" y="66" width="70" height="22" rx="4" fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="405" y="82" text-anchor="middle" font-size="9" font-weight="bold" fill="#3730a3">Gateway</text>
+  <line x1="195" y1="88" x2="195" y2="226" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="405" y1="88" x2="405" y2="226" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Step 1 -->
+  <line x1="203" y1="116" x2="397" y2="116" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="300" y="112" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">req: node.canvas.capability.refresh</text>
+  <line x1="397" y1="140" x2="203" y2="140" stroke="#16a34a" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="300" y="136" text-anchor="middle" font-size="8" font-weight="bold" fill="#15803d">res: {canvasHostUrl, expiresAtMs}</text>
+
+  <!-- Step 2 -->
+  <line x1="203" y1="178" x2="397" y2="178" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="300" y="174" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">req: skills.bins</text>
+  <line x1="397" y1="202" x2="203" y2="202" stroke="#16a34a" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="300" y="198" text-anchor="middle" font-size="8" font-weight="bold" fill="#15803d">res: {bins: [...]}</text>
+
+  <!-- ═══ MESSAGE 1: node.canvas.capability.refresh ═══ -->
+  <rect x="20" y="242" width="1360" height="236" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="242" width="1360" height="22" rx="6" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="34" y="258" font-size="12" font-weight="bold" fill="#92400e">1. req: node.canvas.capability.refresh</text>
+  <text x="400" y="258" font-size="10" fill="#94a3b8">Node → Gateway</text>
+
+  <text x="34" y="284" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"node.canvas.capability.refresh"</tspan>,  "params": {} }</text>
+
+  <text x="34" y="312" font-size="9" fill="#334155" font-weight="bold">Response:</text>
+  <text x="34" y="330" font-size="10" fill="#475569">{ "ok": <tspan fill="#2563eb">true</tspan>, "payload": {</text>
+  <text x="50" y="348" font-size="10"><tspan fill="#dc2626" font-weight="bold">"canvasHostUrl"</tspan>:  <tspan fill="#059669">"http://127.0.0.1:18789/__openclaw__/cap/abc123.../..."</tspan></text>
+  <text x="50" y="366" font-size="10"><tspan fill="#dc2626" font-weight="bold">"expiresAtMs"</tspan>:    <tspan fill="#2563eb">1711235167890</tspan>     <tspan fill="#94a3b8">// int, token expiry timestamp</tspan></text>
+  <text x="34" y="386" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="414" font-size="9" fill="#334155" font-weight="bold">Capability Token:</text>
+  <text x="34" y="432" font-size="9" fill="#475569">Generated via randomBytes(18).base64url, embedded in URL path prefix: /__openclaw__/cap/&lt;token&gt;/</text>
+  <text x="34" y="448" font-size="9" fill="#475569">TTL: 10 min (CANVAS_CAPABILITY_TTL_MS). Initial token provided in hello-ok response.</text>
+  <text x="34" y="464" font-size="9" fill="#94a3b8">This method refreshes the token before expiry. Source: src/gateway/server/methods/canvas.ts</text>
+
+  <!-- ═══ MESSAGE 2: skills.bins ═══ -->
+  <rect x="20" y="492" width="1360" height="216" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="492" width="1360" height="22" rx="6" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="34" y="508" font-size="12" font-weight="bold" fill="#92400e">2. req: skills.bins</text>
+  <text x="210" y="508" font-size="10" fill="#94a3b8">Node → Gateway (query available skill binaries)</text>
+
+  <text x="34" y="534" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"skills.bins"</tspan>,  "params": {} }</text>
+
+  <text x="34" y="562" font-size="9" fill="#334155" font-weight="bold">Response:</text>
+  <text x="34" y="580" font-size="10" fill="#475569">{ "ok": <tspan fill="#2563eb">true</tspan>, "payload": {</text>
+  <text x="50" y="598" font-size="10"><tspan fill="#dc2626" font-weight="bold">"bins"</tspan>:  [<tspan fill="#059669">"ffmpeg"</tspan>, <tspan fill="#059669">"yt-dlp"</tspan>, <tspan fill="#059669">"magick"</tspan>]    <tspan fill="#94a3b8">// str[], skill binary names</tspan></text>
+  <text x="34" y="618" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="646" font-size="9" fill="#334155" font-weight="bold">Node-side resolution:</text>
+  <text x="34" y="664" font-size="9" fill="#475569">Node resolves binary paths locally via SkillBinsCache (TTL 90s, uses PATH env).</text>
+  <text x="34" y="680" font-size="9" fill="#475569">Results populate SkillBinTrustEntry[] for exec-approvals integration.</text>
+  <text x="34" y="700" font-size="9" fill="#94a3b8">Source: src/gateway/server/methods/skills.ts, src/node/skills/skill-bins-cache.ts</text>
+</svg>

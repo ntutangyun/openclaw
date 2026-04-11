@@ -1,0 +1,231 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2192" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <rect width="1400" height="2192" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Phase 7 — Error Responses &amp; Close Codes</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Error shapes, error codes, handshake detail codes, WebSocket close codes, and role authorization.</text>
+
+  <!-- ═══ ERROR RESPONSE FORMAT ═══ -->
+  <rect x="20" y="68" width="1360" height="234" rx="6" fill="#fff" stroke="#fca5a5" stroke-width="1.5"/>
+  <rect x="20" y="68" width="1360" height="22" rx="6" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="34" y="84" font-size="12" font-weight="bold" fill="#dc2626">Error Response Format</text>
+  <text x="260" y="84" font-size="10" fill="#94a3b8">Returned when ok=false in response frame</text>
+
+  <text x="34" y="110" font-size="10" fill="#475569">{</text>
+  <text x="48" y="128" font-size="10"><tspan fill="#dc2626" font-weight="bold">"type"</tspan>:    <tspan fill="#059669">"res"</tspan>,</text>
+  <text x="48" y="146" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:      <tspan fill="#059669">"a3f8c1d2-..."</tspan>,</text>
+  <text x="48" y="164" font-size="10"><tspan fill="#dc2626" font-weight="bold">"ok"</tspan>:      <tspan fill="#2563eb">false</tspan>,</text>
+  <text x="48" y="182" font-size="10"><tspan fill="#dc2626" font-weight="bold">"error"</tspan>:   {</text>
+  <text x="66" y="200" font-size="10"><tspan fill="#dc2626" font-weight="bold">"code"</tspan>:         <tspan fill="#059669">"INVALID_REQUEST"</tspan>,       <tspan fill="#94a3b8">// str, ErrorCode enum</tspan></text>
+  <text x="66" y="218" font-size="10"><tspan fill="#dc2626" font-weight="bold">"message"</tspan>:      <tspan fill="#059669">"Unknown method: foo"</tspan>,   <tspan fill="#94a3b8">// str, human-readable</tspan></text>
+  <text x="66" y="236" font-size="10"><tspan fill="#64748b">"details"</tspan>:      { <tspan fill="#64748b">"code"</tspan>: <tspan fill="#059669">"..."</tspan>, ... },  <tspan fill="#94a3b8">// obj?, additional context</tspan></text>
+  <text x="66" y="254" font-size="10"><tspan fill="#64748b">"retryable"</tspan>:    <tspan fill="#2563eb">false</tspan>,                    <tspan fill="#94a3b8">// bool?, hint for client</tspan></text>
+  <text x="48" y="272" font-size="10" fill="#475569">}</text>
+  <text x="34" y="288" font-size="10" fill="#475569">}</text>
+
+  <text x="700" y="110" font-size="9" fill="#334155" font-weight="bold">ErrorShape fields:</text>
+  <text x="700" y="128" font-size="9" fill="#475569"><tspan fill="#dc2626">code</tspan>          str     ErrorCode enum value</text>
+  <text x="700" y="146" font-size="9" fill="#475569"><tspan fill="#dc2626">message</tspan>       str     Human-readable description</text>
+  <text x="700" y="164" font-size="9" fill="#475569"><tspan fill="#64748b">details</tspan>       obj?    Additional structured info</text>
+  <text x="700" y="182" font-size="9" fill="#475569"><tspan fill="#64748b">details.code</tspan>  str?    ConnectErrorDetailCode (handshake)</text>
+  <text x="700" y="200" font-size="9" fill="#475569"><tspan fill="#64748b">details.advice</tspan> str?   Recovery advice value</text>
+  <text x="700" y="218" font-size="9" fill="#475569"><tspan fill="#64748b">retryable</tspan>     bool?   Whether client should retry</text>
+  <text x="700" y="236" font-size="9" fill="#475569"><tspan fill="#64748b">retryAfterMs</tspan>  int?    Suggested delay before retry</text>
+
+  <!-- ═══ TOP-LEVEL ERROR CODES ═══ -->
+  <rect x="20" y="316" width="1360" height="234" rx="6" fill="#fff" stroke="#fca5a5" stroke-width="1.5"/>
+  <rect x="20" y="316" width="1360" height="22" rx="6" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="34" y="332" font-size="12" font-weight="bold" fill="#dc2626">Top-Level ErrorCodes</text>
+
+  <text x="34" y="360" font-size="10" font-weight="bold" fill="#dc2626">NOT_LINKED</text>
+  <text x="220" y="360" font-size="9" fill="#475569">No node is linked/paired to the gateway. Cannot route commands.</text>
+  <text x="220" y="376" font-size="9" fill="#94a3b8">Recovery: pair a node device via `openclaw qr` or device.pair.* flow.</text>
+
+  <text x="34" y="400" font-size="10" font-weight="bold" fill="#dc2626">NOT_PAIRED</text>
+  <text x="220" y="400" font-size="9" fill="#475569">Specific node is not paired or device identity not recognized.</text>
+  <text x="220" y="416" font-size="9" fill="#94a3b8">Recovery: re-pair the device or verify device token.</text>
+
+  <text x="34" y="440" font-size="10" font-weight="bold" fill="#dc2626">AGENT_TIMEOUT</text>
+  <text x="220" y="440" font-size="9" fill="#475569">Agent execution exceeded timeout (default 30s for invoke, configurable).</text>
+  <text x="220" y="456" font-size="9" fill="#94a3b8">Recovery: increase timeoutMs or retry. Check node connectivity.</text>
+
+  <text x="34" y="480" font-size="10" font-weight="bold" fill="#dc2626">INVALID_REQUEST</text>
+  <text x="220" y="480" font-size="9" fill="#475569">Malformed request: unknown method, missing required params, schema validation failure.</text>
+  <text x="220" y="496" font-size="9" fill="#94a3b8">Recovery: fix request payload. Check params against method schema.</text>
+
+  <text x="34" y="520" font-size="10" font-weight="bold" fill="#dc2626">UNAVAILABLE</text>
+  <text x="220" y="520" font-size="9" fill="#475569">Target node is offline and wake attempt failed. Service temporarily unavailable.</text>
+  <text x="220" y="536" font-size="9" fill="#94a3b8">Recovery: retry after delay. Check node is powered on and connected.</text>
+
+  <!-- ═══ CONNECT ERROR DETAIL CODES ═══ -->
+  <rect x="20" y="564" width="1360" height="470" rx="6" fill="#fff" stroke="#fdba74" stroke-width="1.5"/>
+  <rect x="20" y="564" width="1360" height="22" rx="6" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="34" y="580" font-size="12" font-weight="bold" fill="#c2410c">ConnectErrorDetailCodes</text>
+  <text x="300" y="580" font-size="10" fill="#94a3b8">In error.details.code during handshake (connect method)</text>
+
+  <text x="34" y="608" font-size="10" font-weight="bold" fill="#c2410c">AUTH_TOKEN_MISSING</text>
+  <text x="300" y="608" font-size="9" fill="#475569">No auth token provided but gateway requires token auth.</text>
+  <text x="300" y="624" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">update_auth_configuration</tspan>  |  Set gateway.token in config or env.</text>
+
+  <text x="34" y="648" font-size="10" font-weight="bold" fill="#c2410c">AUTH_TOKEN_MISMATCH</text>
+  <text x="300" y="648" font-size="9" fill="#475569">Token provided does not match gateway's stored token.</text>
+  <text x="300" y="664" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">retry_with_device_token</tspan>  |  Try device-specific token or re-pair.</text>
+
+  <text x="34" y="688" font-size="10" font-weight="bold" fill="#c2410c">AUTH_PASSWORD_MISSING</text>
+  <text x="300" y="688" font-size="9" fill="#475569">No password provided but gateway requires password auth.</text>
+  <text x="300" y="704" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">update_auth_credentials</tspan>  |  Set OPENCLAW_GATEWAY_PASSWORD env or config.</text>
+
+  <text x="34" y="728" font-size="10" font-weight="bold" fill="#c2410c">AUTH_PASSWORD_MISMATCH</text>
+  <text x="300" y="728" font-size="9" fill="#475569">Password does not match. Constant-time comparison used.</text>
+  <text x="300" y="744" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">update_auth_credentials</tspan>  |  Verify password value.</text>
+
+  <text x="34" y="768" font-size="10" font-weight="bold" fill="#c2410c">AUTH_BOOTSTRAP_TOKEN_INVALID</text>
+  <text x="300" y="768" font-size="9" fill="#475569">Bootstrap token expired (10 min TTL), already used (single-use), or not found.</text>
+  <text x="300" y="784" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">review_auth_configuration</tspan>  |  Generate new bootstrap via `openclaw qr`.</text>
+
+  <text x="34" y="808" font-size="10" font-weight="bold" fill="#c2410c">AUTH_RATE_LIMITED</text>
+  <text x="300" y="808" font-size="9" fill="#475569">Too many failed auth attempts. Temporary lockout.</text>
+  <text x="300" y="824" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">wait_then_retry</tspan>  |  Wait for retryAfterMs before next attempt.</text>
+
+  <text x="34" y="848" font-size="10" font-weight="bold" fill="#c2410c">DEVICE_IDENTITY_REQUIRED</text>
+  <text x="300" y="848" font-size="9" fill="#475569">Gateway requires Ed25519 device identity but none provided in connect params.</text>
+  <text x="300" y="864" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">review_auth_configuration</tspan>  |  Include device.* fields in connect.</text>
+
+  <text x="34" y="888" font-size="10" font-weight="bold" fill="#c2410c">PAIRING_REQUIRED</text>
+  <text x="300" y="888" font-size="9" fill="#475569">Device identity present but not paired/approved on this gateway.</text>
+  <text x="300" y="904" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">review_auth_configuration</tspan>  |  Pair via bootstrap token or manual approve.</text>
+
+  <text x="34" y="928" font-size="10" font-weight="bold" fill="#c2410c">CONTROL_UI_DEVICE_IDENTITY_REQUIRED</text>
+  <text x="370" y="928" font-size="9" fill="#475569">Control UI client must provide device identity.</text>
+  <text x="370" y="944" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">review_auth_configuration</tspan></text>
+
+  <text x="34" y="968" font-size="10" font-weight="bold" fill="#c2410c">CONTROL_UI_ORIGIN_NOT_ALLOWED</text>
+  <text x="340" y="968" font-size="9" fill="#475569">Control UI WebSocket origin does not match allowed origins.</text>
+  <text x="340" y="984" font-size="9" fill="#94a3b8">Advice: <tspan fill="#059669">review_auth_configuration</tspan>  |  Check gateway.controlUi.allowedOrigins config.</text>
+
+  <text x="34" y="1012" font-size="9" fill="#94a3b8">Source: src/gateway/protocol/error-codes.ts, src/gateway/server/connect-handler.ts</text>
+  <text x="34" y="1028" font-size="9" fill="#94a3b8">All detail codes are optional — error.details may be undefined for non-handshake errors.</text>
+
+  <!-- ═══ RECOVERY ADVICE VALUES ═══ -->
+  <rect x="20" y="1048" width="1360" height="166" rx="6" fill="#fff" stroke="#86efac" stroke-width="1.5"/>
+  <rect x="20" y="1048" width="1360" height="22" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="34" y="1064" font-size="12" font-weight="bold" fill="#15803d">Recovery Advice Field Values</text>
+  <text x="340" y="1064" font-size="10" fill="#94a3b8">In error.details.advice — hints for client auto-recovery</text>
+
+  <text x="34" y="1092" font-size="10" font-weight="bold" fill="#15803d">retry_with_device_token</text>
+  <text x="340" y="1092" font-size="9" fill="#475569">Client should retry using the stored per-device token instead of shared token.</text>
+  <text x="340" y="1108" font-size="9" fill="#94a3b8">Typically after AUTH_TOKEN_MISMATCH. Client reads ~/.openclaw/identity/device-auth.json.</text>
+
+  <text x="34" y="1132" font-size="10" font-weight="bold" fill="#15803d">update_auth_configuration</text>
+  <text x="340" y="1132" font-size="9" fill="#475569">Auth method or token is missing. Client should prompt user to configure auth.</text>
+
+  <text x="34" y="1156" font-size="10" font-weight="bold" fill="#15803d">update_auth_credentials</text>
+  <text x="340" y="1156" font-size="9" fill="#475569">Credentials (password) are wrong. Client should prompt for correct credentials.</text>
+
+  <text x="34" y="1180" font-size="10" font-weight="bold" fill="#15803d">wait_then_retry</text>
+  <text x="340" y="1180" font-size="9" fill="#475569">Rate limited. Wait error.retryAfterMs (or a sensible default) before retrying.</text>
+
+  <text x="34" y="1204" font-size="10" font-weight="bold" fill="#15803d">review_auth_configuration</text>
+  <text x="340" y="1204" font-size="9" fill="#475569">Generic: review gateway auth settings (device identity, pairing, origins, etc.).</text>
+
+  <!-- ═══ WEBSOCKET CLOSE CODES ═══ -->
+  <rect x="20" y="1228" width="1360" height="198" rx="6" fill="#fff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect x="20" y="1228" width="1360" height="22" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="34" y="1244" font-size="12" font-weight="bold" fill="#334155">WebSocket Close Codes</text>
+
+  <text x="34" y="1272" font-size="10" font-weight="bold" fill="#334155">1000</text>
+  <text x="100" y="1272" font-size="10" fill="#475569">Normal Closure</text>
+  <text x="280" y="1272" font-size="9" fill="#94a3b8">Clean disconnect. Both sides can initiate.</text>
+
+  <text x="34" y="1296" font-size="10" font-weight="bold" fill="#334155">1006</text>
+  <text x="100" y="1296" font-size="10" fill="#475569">Abnormal Closure</text>
+  <text x="280" y="1296" font-size="9" fill="#94a3b8">No close frame received. Network drop, process crash, etc.</text>
+
+  <text x="34" y="1320" font-size="10" font-weight="bold" fill="#334155">1008</text>
+  <text x="100" y="1320" font-size="10" fill="#475569">Policy Violation</text>
+  <text x="280" y="1320" font-size="9" fill="#94a3b8">Exceeds max buffered bytes (slow consumer), pre-auth payload too large, or auth failure.</text>
+
+  <text x="34" y="1344" font-size="10" font-weight="bold" fill="#334155">1012</text>
+  <text x="100" y="1344" font-size="10" fill="#475569">Service Restart</text>
+  <text x="280" y="1344" font-size="9" fill="#94a3b8">Gateway is restarting. Client should reconnect after brief delay.</text>
+
+  <text x="34" y="1368" font-size="10" font-weight="bold" fill="#334155">4000</text>
+  <text x="100" y="1368" font-size="10" fill="#475569">Tick Timeout</text>
+  <text x="280" y="1368" font-size="9" fill="#94a3b8">Client-initiated. No message received within tickIntervalMs x 2 (60s). Gateway presumed dead.</text>
+
+  <text x="34" y="1398" font-size="9" fill="#94a3b8">Close codes 1000-1015 are RFC 6455 standard. 4000-4999 are application-specific.</text>
+  <text x="34" y="1414" font-size="9" fill="#94a3b8">Source: src/gateway/protocol/close-codes.ts, src/gateway/client.ts (tick watcher)</text>
+
+  <!-- ═══ ROLE AUTHORIZATION ═══ -->
+  <rect x="20" y="1440" width="1360" height="374" rx="6" fill="#fff" stroke="#c084fc" stroke-width="1.5"/>
+  <rect x="20" y="1440" width="1360" height="22" rx="6" fill="#f3e8ff" stroke="#c084fc"/>
+  <text x="34" y="1456" font-size="12" font-weight="bold" fill="#7c3aed">Role Authorization</text>
+  <text x="220" y="1456" font-size="10" fill="#94a3b8">Two roles: "operator" and "node". Methods gated by role at dispatch.</text>
+
+  <text x="34" y="1484" font-size="10" font-weight="bold" fill="#7c3aed">Node Role (NODE_ROLE_METHODS)</text>
+  <text x="34" y="1504" font-size="9" fill="#475569">Nodes can ONLY call these methods. All others return authorization error.</text>
+
+  <rect x="34" y="1518" width="640" height="152" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="48" y="1538" font-size="10" font-weight="bold" fill="#475569">connect</text>
+  <text x="300" y="1538" font-size="9" fill="#94a3b8">Handshake (all roles)</text>
+  <text x="48" y="1556" font-size="10" font-weight="bold" fill="#475569">node.event</text>
+  <text x="300" y="1556" font-size="9" fill="#94a3b8">Streaming events during command execution</text>
+  <text x="48" y="1574" font-size="10" font-weight="bold" fill="#475569">node.invoke.result</text>
+  <text x="300" y="1574" font-size="9" fill="#94a3b8">Return command execution result</text>
+  <text x="48" y="1592" font-size="10" font-weight="bold" fill="#475569">node.pending.drain</text>
+  <text x="300" y="1592" font-size="9" fill="#94a3b8">Drain pending work queue</text>
+  <text x="48" y="1610" font-size="10" font-weight="bold" fill="#475569">node.pending.ack</text>
+  <text x="300" y="1610" font-size="9" fill="#94a3b8">Acknowledge processed items</text>
+  <text x="48" y="1628" font-size="10" font-weight="bold" fill="#475569">node.pending.pull</text>
+  <text x="300" y="1628" font-size="9" fill="#94a3b8">Long-poll for new work</text>
+  <text x="48" y="1646" font-size="10" font-weight="bold" fill="#475569">node.canvas.capability.refresh</text>
+  <text x="300" y="1646" font-size="9" fill="#94a3b8">Refresh canvas capability token</text>
+  <text x="48" y="1664" font-size="10" font-weight="bold" fill="#475569">skills.bins</text>
+  <text x="300" y="1664" font-size="9" fill="#94a3b8">Query available skill binaries</text>
+
+  <text x="700" y="1484" font-size="10" font-weight="bold" fill="#7c3aed">Operator Role</text>
+  <text x="700" y="1504" font-size="9" fill="#475569">Operators can call ALL methods (~115). Default role when not specified.</text>
+
+  <rect x="700" y="1518" width="660" height="136" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="714" y="1538" font-size="10" font-weight="bold" fill="#334155">Scopes (operator sub-permissions)</text>
+  <text x="714" y="1562" font-size="10" font-weight="bold" fill="#475569">operator.admin</text>
+  <text x="914" y="1562" font-size="9" fill="#94a3b8">Full access to all operator methods.</text>
+  <text x="914" y="1578" font-size="9" fill="#94a3b8">Default scope for local operators.</text>
+
+  <text x="714" y="1602" font-size="9" fill="#475569">Scoped access (for restricted API keys / control UI):</text>
+  <text x="714" y="1620" font-size="9" fill="#94a3b8">Methods like exec.approval.resolve may require specific scopes.</text>
+  <text x="714" y="1638" font-size="9" fill="#94a3b8">Scope enforcement is per-method in the gateway dispatcher.</text>
+  <text x="714" y="1652" font-size="1" fill="#fafafa">.</text>
+
+  <text x="34" y="1690" font-size="9" fill="#334155" font-weight="bold">Authorization Flow:</text>
+  <text x="34" y="1708" font-size="9" fill="#475569">1. Gateway reads role from connect params (default: "operator")</text>
+  <text x="34" y="1726" font-size="9" fill="#475569">2. Gateway reads scopes from connect params (default: [] for nodes, ["operator.admin"] for operators)</text>
+  <text x="34" y="1744" font-size="9" fill="#475569">3. On each request, gateway checks: is method in NODE_ROLE_METHODS? If not and role=node, reject.</text>
+  <text x="34" y="1762" font-size="9" fill="#475569">4. For operator methods, check scope requirements (most require operator.admin).</text>
+  <text x="34" y="1780" font-size="9" fill="#94a3b8">Unauthorized method call returns: { ok: false, error: { code: "INVALID_REQUEST", message: "Unauthorized" } }</text>
+  <text x="34" y="1800" font-size="9" fill="#94a3b8">Source: src/gateway/server/dispatcher.ts, src/gateway/protocol/roles.ts</text>
+
+  <!-- ═══ ERROR HANDLING BEST PRACTICES ═══ -->
+  <rect x="20" y="1828" width="1360" height="350" rx="6" fill="#fff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect x="20" y="1828" width="1360" height="22" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="34" y="1844" font-size="12" font-weight="bold" fill="#334155">Error Handling Best Practices</text>
+
+  <text x="34" y="1872" font-size="10" font-weight="bold" fill="#334155">Client-side error handling pattern:</text>
+  <text x="34" y="892" font-size="1" fill="#fafafa">.</text>
+
+  <text x="34" y="1896" font-size="10" fill="#475569">1. Parse response: check <tspan fill="#dc2626">ok</tspan> field first.</text>
+  <text x="34" y="1914" font-size="10" fill="#475569">2. If ok=false, read <tspan fill="#dc2626">error.code</tspan> for programmatic handling.</text>
+  <text x="34" y="1932" font-size="10" fill="#475569">3. Check <tspan fill="#64748b">error.details.code</tspan> for handshake-specific failures.</text>
+  <text x="34" y="1950" font-size="10" fill="#475569">4. Check <tspan fill="#64748b">error.details.advice</tspan> for auto-recovery hints.</text>
+  <text x="34" y="1968" font-size="10" fill="#475569">5. If <tspan fill="#64748b">error.retryable</tspan>=true, retry after <tspan fill="#64748b">error.retryAfterMs</tspan> (or exponential backoff).</text>
+
+  <text x="34" y="2000" font-size="10" font-weight="bold" fill="#334155">Reconnection strategy:</text>
+  <text x="34" y="2020" font-size="10" fill="#475569">Close 1000/1012: reconnect immediately (clean close / restart).</text>
+  <text x="34" y="2038" font-size="10" fill="#475569">Close 1006: reconnect with exponential backoff (network issue).</text>
+  <text x="34" y="2056" font-size="10" fill="#475569">Close 1008: check error details before reconnecting (may need config fix).</text>
+  <text x="34" y="2074" font-size="10" fill="#475569">Close 4000: reconnect immediately (server was unresponsive but may recover).</text>
+
+  <text x="34" y="2102" font-size="10" font-weight="bold" fill="#334155">Idempotency:</text>
+  <text x="34" y="2120" font-size="10" fill="#475569">node.invoke uses idempotencyKey for dedup. Retrying with the same key is safe.</text>
+  <text x="34" y="2138" font-size="10" fill="#475569">Other methods are generally idempotent (GET-like) or should not be blindly retried (mutations).</text>
+
+  <text x="34" y="2166" font-size="9" fill="#94a3b8">Source: src/gateway/client.ts (reconnect logic), src/gateway/protocol/error-codes.ts</text>
+</svg>

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 650" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <rect width="1400" height="650" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Wire Frame Formats &amp; Protocol Constraints</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Protocol v3 · WebSocket JSON text frames · Port 18789 · 3 frame types discriminated by "type" field</text>
+
+  <!-- Request Frame -->
+  <rect x="20" y="68" width="440" height="280" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="68" width="440" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="84" font-size="12" font-weight="bold" fill="#1d4ed8">Request Frame (req)</text>
+  <text x="34" y="108" font-size="10" fill="#475569">{</text>
+  <text x="48" y="126" font-size="10"><tspan fill="#dc2626" font-weight="bold">"type"</tspan>:   <tspan fill="#059669">"req"</tspan>,</text>
+  <text x="48" y="144" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:     <tspan fill="#059669">"a3f8c1d2-e5f6-..."</tspan>,</text>
+  <text x="48" y="162" font-size="10"><tspan fill="#dc2626" font-weight="bold">"method"</tspan>: <tspan fill="#059669">"node.invoke"</tspan>,</text>
+  <text x="48" y="180" font-size="10"><tspan fill="#64748b">"params"</tspan>: { ... }</text>
+  <text x="34" y="198" font-size="10" fill="#475569">}</text>
+
+  <text x="34" y="224" font-size="9" fill="#334155" font-weight="bold">Field Details:</text>
+  <text x="34" y="240" font-size="9" fill="#475569"><tspan fill="#dc2626">type</tspan>    str   literal "req"</text>
+  <text x="34" y="256" font-size="9" fill="#475569"><tspan fill="#dc2626">id</tspan>      str   randomUUID() — correlates req↔res</text>
+  <text x="34" y="272" font-size="9" fill="#475569"><tspan fill="#dc2626">method</tspan>  str   method name (e.g. "connect")</text>
+  <text x="34" y="288" font-size="9" fill="#475569"><tspan fill="#64748b">params</tspan>  any?  method-specific payload</text>
+
+  <text x="34" y="312" font-size="9" fill="#334155" font-weight="bold">Validation:</text>
+  <text x="34" y="328" font-size="9" fill="#94a3b8">Schema: RequestFrameSchema (AJV compiled)</text>
+  <text x="34" y="344" font-size="9" fill="#94a3b8">additionalProperties: false</text>
+
+  <!-- Response Frame -->
+  <rect x="480" y="68" width="440" height="280" rx="6" fill="#fff" stroke="#86efac" stroke-width="1.5"/>
+  <rect x="480" y="68" width="440" height="22" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="494" y="84" font-size="12" font-weight="bold" fill="#15803d">Response Frame (res)</text>
+  <text x="494" y="108" font-size="10" fill="#475569">{</text>
+  <text x="508" y="126" font-size="10"><tspan fill="#dc2626" font-weight="bold">"type"</tspan>:    <tspan fill="#059669">"res"</tspan>,</text>
+  <text x="508" y="144" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:      <tspan fill="#059669">"a3f8c1d2-e5f6-..."</tspan>,</text>
+  <text x="508" y="162" font-size="10"><tspan fill="#dc2626" font-weight="bold">"ok"</tspan>:      <tspan fill="#2563eb">true</tspan>,</text>
+  <text x="508" y="180" font-size="10"><tspan fill="#64748b">"payload"</tspan>: { ... },</text>
+  <text x="508" y="198" font-size="10"><tspan fill="#64748b">"error"</tspan>:   { ... }</text>
+  <text x="494" y="216" font-size="10" fill="#475569">}</text>
+
+  <text x="494" y="240" font-size="9" fill="#334155" font-weight="bold">Field Details:</text>
+  <text x="494" y="256" font-size="9" fill="#475569"><tspan fill="#dc2626">type</tspan>     str    literal "res"</text>
+  <text x="494" y="272" font-size="9" fill="#475569"><tspan fill="#dc2626">id</tspan>       str    must match request id</text>
+  <text x="494" y="288" font-size="9" fill="#475569"><tspan fill="#dc2626">ok</tspan>       bool   true=success, false=error</text>
+  <text x="494" y="304" font-size="9" fill="#475569"><tspan fill="#64748b">payload</tspan>  any?   result data (when ok=true)</text>
+  <text x="494" y="320" font-size="9" fill="#475569"><tspan fill="#64748b">error</tspan>    obj?   ErrorShape (when ok=false)</text>
+  <text x="494" y="340" font-size="9" fill="#94a3b8">Error: {code, message, details?, retryable?, retryAfterMs?}</text>
+
+  <!-- Event Frame -->
+  <rect x="940" y="68" width="440" height="320" rx="6" fill="#fff" stroke="#fdba74" stroke-width="1.5"/>
+  <rect x="940" y="68" width="440" height="22" rx="6" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="954" y="84" font-size="12" font-weight="bold" fill="#c2410c">Event Frame (event)</text>
+  <text x="954" y="108" font-size="10" fill="#475569">{</text>
+  <text x="968" y="126" font-size="10"><tspan fill="#dc2626" font-weight="bold">"type"</tspan>:         <tspan fill="#059669">"event"</tspan>,</text>
+  <text x="968" y="144" font-size="10"><tspan fill="#dc2626" font-weight="bold">"event"</tspan>:        <tspan fill="#059669">"tick"</tspan>,</text>
+  <text x="968" y="162" font-size="10"><tspan fill="#64748b">"payload"</tspan>:      { ... },</text>
+  <text x="968" y="180" font-size="10"><tspan fill="#64748b">"seq"</tspan>:           <tspan fill="#2563eb">42</tspan>,</text>
+  <text x="968" y="198" font-size="10"><tspan fill="#64748b">"stateVersion"</tspan>: {</text>
+  <text x="984" y="214" font-size="10">"presence": <tspan fill="#2563eb">5</tspan>, "health": <tspan fill="#2563eb">3</tspan> }</text>
+  <text x="954" y="232" font-size="10" fill="#475569">}</text>
+
+  <text x="954" y="256" font-size="9" fill="#334155" font-weight="bold">Field Details:</text>
+  <text x="954" y="272" font-size="9" fill="#475569"><tspan fill="#dc2626">type</tspan>          str   literal "event"</text>
+  <text x="954" y="288" font-size="9" fill="#475569"><tspan fill="#dc2626">event</tspan>         str   event name</text>
+  <text x="954" y="304" font-size="9" fill="#475569"><tspan fill="#64748b">payload</tspan>       any?  event-specific data</text>
+  <text x="954" y="320" font-size="9" fill="#475569"><tspan fill="#64748b">seq</tspan>           int?  global monotonic counter</text>
+  <text x="954" y="336" font-size="9" fill="#475569"><tspan fill="#64748b">stateVersion</tspan>  obj?  {presence, health}</text>
+  <text x="954" y="356" font-size="9" fill="#94a3b8">Server→client ONLY. No id, no response.</text>
+  <text x="954" y="372" font-size="9" fill="#94a3b8">seq gap (expected N, got N+2) = missed events.</text>
+
+  <!-- Constraints -->
+  <rect x="20" y="398" width="1360" height="236" rx="6" fill="#fff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect x="20" y="398" width="1360" height="22" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="34" y="414" font-size="12" font-weight="bold" fill="#334155">Protocol Constraints &amp; Limits</text>
+
+  <!-- Col 1 -->
+  <text x="34" y="442" font-size="10" font-weight="bold" fill="#334155">Payload Limits</text>
+  <text x="34" y="460" font-size="10" fill="#475569">Max frame payload:      <tspan font-weight="bold">25 MB</tspan>  (26,214,400 bytes)</text>
+  <text x="34" y="478" font-size="10" fill="#475569">Max buffered/conn:      <tspan font-weight="bold">50 MB</tspan>  (52,428,800 bytes)</text>
+  <text x="34" y="496" font-size="10" fill="#475569">Max pre-auth payload:   <tspan font-weight="bold">64 KB</tspan>  (65,536 bytes)</text>
+  <text x="34" y="516" font-size="9" fill="#94a3b8">Exceeding buffer → close code 1008 (slow consumer).</text>
+  <text x="34" y="532" font-size="9" fill="#94a3b8">Pre-auth limit applies before hello-ok completes.</text>
+  <text x="34" y="552" font-size="10" font-weight="bold" fill="#334155">Source</text>
+  <text x="34" y="570" font-size="9" fill="#94a3b8">src/gateway/server-constants.ts</text>
+  <text x="34" y="586" font-size="9" fill="#94a3b8">MAX_PAYLOAD_BYTES, MAX_BUFFERED_BYTES,</text>
+  <text x="34" y="602" font-size="9" fill="#94a3b8">MAX_PREAUTH_PAYLOAD_BYTES</text>
+
+  <!-- Col 2 -->
+  <text x="500" y="442" font-size="10" font-weight="bold" fill="#334155">Timing</text>
+  <text x="500" y="460" font-size="10" fill="#475569">Handshake timeout:    <tspan font-weight="bold">10 s</tspan></text>
+  <text x="500" y="478" font-size="10" fill="#475569">Tick interval:        <tspan font-weight="bold">30 s</tspan>  (TICK_INTERVAL_MS)</text>
+  <text x="500" y="496" font-size="10" fill="#475569">Client dead if gap:   <tspan font-weight="bold">&gt;60 s</tspan> (2× tick interval)</text>
+  <text x="500" y="514" font-size="10" fill="#475569">Health refresh:       <tspan font-weight="bold">60 s</tspan>  (HEALTH_REFRESH_INTERVAL_MS)</text>
+  <text x="500" y="532" font-size="10" fill="#475569">Request timeout:      <tspan font-weight="bold">30 s</tspan>  (default, configurable)</text>
+  <text x="500" y="552" font-size="10" font-weight="bold" fill="#334155">WebSocket Close Codes</text>
+  <text x="500" y="570" font-size="10" fill="#475569"><tspan font-weight="bold">1000</tspan> normal    <tspan font-weight="bold">1006</tspan> abnormal (no frame)</text>
+  <text x="500" y="588" font-size="10" fill="#475569"><tspan font-weight="bold">1008</tspan> policy    <tspan font-weight="bold">1012</tspan> restart</text>
+  <text x="500" y="606" font-size="10" fill="#475569"><tspan font-weight="bold">4000</tspan> tick timeout (client-initiated)</text>
+
+  <!-- Col 3 -->
+  <text x="950" y="442" font-size="10" font-weight="bold" fill="#334155">Security</text>
+  <text x="950" y="460" font-size="10" fill="#475569">Device signature skew:     <tspan font-weight="bold">± 2 min</tspan></text>
+  <text x="950" y="478" font-size="10" fill="#475569">Bootstrap token TTL:       <tspan font-weight="bold">10 min</tspan>  (single-use)</text>
+  <text x="950" y="496" font-size="10" fill="#475569">Canvas capability TTL:     <tspan font-weight="bold">10 min</tspan></text>
+  <text x="950" y="514" font-size="10" fill="#475569">Device key algorithm:      <tspan font-weight="bold">Ed25519</tspan></text>
+  <text x="950" y="532" font-size="10" fill="#475569">Token generation:          <tspan font-weight="bold">randomBytes(32)</tspan></text>
+  <text x="950" y="550" font-size="10" fill="#475569">Token comparison:          <tspan font-weight="bold">constant-time</tspan></text>
+  <text x="950" y="572" font-size="10" font-weight="bold" fill="#334155">Transport Security</text>
+  <text x="950" y="590" font-size="10" fill="#475569">ws:// allowed only for loopback (127.0.0.1)</text>
+  <text x="950" y="608" font-size="10" fill="#475569">wss:// required for all remote connections</text>
+  <text x="950" y="626" font-size="9" fill="#94a3b8">Break-glass: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1</text>
+</svg>

@@ -1,0 +1,2028 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Gateway–Node Communication Protocol Report</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --surface: #181b24;
+        --surface2: #1e2230;
+        --border: #2a2f3e;
+        --text: #e0e4ed;
+        --text-muted: #8b92a8;
+        --accent: #6c8cff;
+        --accent2: #45d6b5;
+        --accent3: #f0a050;
+        --red: #f06070;
+        --code-bg: #14161e;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.7;
+        padding: 0;
+      }
+
+      .container {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+
+      h1 {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 8px;
+        color: #fff;
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        margin-bottom: 48px;
+      }
+
+      h2 {
+        font-size: 1.35rem;
+        font-weight: 600;
+        color: #fff;
+        margin-top: 56px;
+        margin-bottom: 20px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      h3 {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--accent);
+        margin-top: 32px;
+        margin-bottom: 12px;
+      }
+
+      p {
+        margin-bottom: 14px;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* Tables */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0 24px;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+      }
+      th {
+        background: var(--surface2);
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td {
+        background: var(--surface);
+      }
+      tr:hover td {
+        background: var(--surface2);
+      }
+
+      /* Code blocks */
+      pre {
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 18px 20px;
+        overflow-x: auto;
+        font-size: 0.85rem;
+        line-height: 1.6;
+        margin: 14px 0 20px;
+      }
+      code {
+        font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+        font-size: 0.85em;
+      }
+      p code,
+      li code,
+      td code {
+        background: var(--surface2);
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: var(--accent2);
+      }
+
+      /* Sequence diagrams */
+      .diagram {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 28px 24px;
+        margin: 20px 0 28px;
+        overflow-x: auto;
+      }
+      .diagram svg {
+        display: block;
+        margin: 0 auto;
+      }
+
+      /* Info cards */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px 24px;
+        margin: 16px 0 24px;
+      }
+      .card.accent {
+        border-left: 3px solid var(--accent);
+      }
+      .card.green {
+        border-left: 3px solid var(--accent2);
+      }
+      .card.warn {
+        border-left: 3px solid var(--accent3);
+      }
+      .card.red {
+        border-left: 3px solid var(--red);
+      }
+      .card-title {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 8px;
+      }
+      .card.accent .card-title {
+        color: var(--accent);
+      }
+      .card.green .card-title {
+        color: var(--accent2);
+      }
+      .card.warn .card-title {
+        color: var(--accent3);
+      }
+      .card.red .card-title {
+        color: var(--red);
+      }
+
+      ul,
+      ol {
+        padding-left: 24px;
+        margin-bottom: 14px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+
+      /* TOC */
+      .toc {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px 28px;
+        margin-bottom: 40px;
+      }
+      .toc-title {
+        font-weight: 700;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+        margin-bottom: 14px;
+      }
+      .toc ol {
+        list-style: none;
+        padding-left: 0;
+        margin: 0;
+      }
+      .toc li {
+        margin-bottom: 6px;
+      }
+      .toc a {
+        color: var(--text);
+        font-size: 0.93rem;
+      }
+      .toc a:hover {
+        color: var(--accent);
+      }
+
+      /* Badge / tag */
+      .badge {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
+        margin-left: 6px;
+      }
+      .badge-blue {
+        background: rgba(108, 140, 255, 0.15);
+        color: var(--accent);
+      }
+      .badge-green {
+        background: rgba(69, 214, 181, 0.15);
+        color: var(--accent2);
+      }
+      .badge-amber {
+        background: rgba(240, 160, 80, 0.15);
+        color: var(--accent3);
+      }
+
+      /* Flow arrow steps */
+      .flow-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 20px 0 28px;
+      }
+      .flow-step {
+        flex: 1 1 140px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+        text-align: center;
+        position: relative;
+      }
+      .flow-step .step-num {
+        display: block;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: var(--accent);
+        margin-bottom: 4px;
+      }
+      .flow-step .step-label {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+      }
+      .flow-step .step-desc {
+        font-size: 0.88rem;
+        margin-top: 6px;
+      }
+
+      /* Responsive */
+      @media (max-width: 600px) {
+        .container {
+          padding: 20px 14px 60px;
+        }
+        h1 {
+          font-size: 1.5rem;
+        }
+        pre {
+          font-size: 0.78rem;
+          padding: 14px;
+        }
+        table {
+          font-size: 0.82rem;
+        }
+        th,
+        td {
+          padding: 8px 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>OpenClaw Gateway–Node Communication Protocol</h1>
+      <p class="subtitle">
+        Detailed protocol specification &middot; Protocol Version 3 &middot; March 2026
+      </p>
+
+      <!-- TOC -->
+      <div class="toc">
+        <div class="toc-title">Table of Contents</div>
+        <ol>
+          <li><a href="#overview">1. Overview</a></li>
+          <li><a href="#transport">2. Transport Layer</a></li>
+          <li><a href="#frames">3. Frame Types</a></li>
+          <li><a href="#lifecycle">4. Connection Lifecycle</a></li>
+          <li><a href="#auth">5. Authentication &amp; Authorization</a></li>
+          <li><a href="#registry">6. Node Registry &amp; Session Management</a></li>
+          <li><a href="#rpc">7. RPC Methods</a></li>
+          <li><a href="#invocation">8. Node Invocation Flow</a></li>
+          <li><a href="#pending">9. Pending Work Queue</a></li>
+          <li><a href="#events">10. Event Broadcasting</a></li>
+          <li><a href="#client">11. Client-Side Request/Response Pattern</a></li>
+          <li><a href="#errors">12. Error Handling</a></li>
+          <li><a href="#security">13. Security Model</a></li>
+          <li><a href="#schema">14. Protocol Schema Definitions</a></li>
+          <li><a href="#summary">15. Summary</a></li>
+        </ol>
+      </div>
+
+      <!-- 1. OVERVIEW -->
+      <h2 id="overview">1. Overview</h2>
+      <p>
+        The OpenClaw gateway–node protocol is a JSON-over-WebSocket RPC protocol that connects a
+        central
+        <strong>gateway</strong> (the control plane) with one or more
+        <strong>nodes</strong> (capability hosts such as iOS/Android devices). The protocol supports
+        bidirectional request–response, server-pushed events, challenge-based device authentication,
+        mobile wake-up via APNS, and a pending work queue for backgrounded nodes.
+      </p>
+
+      <div class="card accent">
+        <div class="card-title">Architecture</div>
+        <p>
+          Hub-and-spoke topology. The gateway is the central hub; nodes and operators connect as
+          spokes. All node-to-node communication is mediated by the gateway.
+        </p>
+      </div>
+
+      <!-- 2. TRANSPORT -->
+      <h2 id="transport">2. Transport Layer</h2>
+
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Wire protocol</td>
+          <td>WebSocket (RFC 6455), text frames</td>
+        </tr>
+        <tr>
+          <td>Serialization</td>
+          <td>JSON</td>
+        </tr>
+        <tr>
+          <td>Default bind address</td>
+          <td><code>127.0.0.1:18789</code> (loopback)</td>
+        </tr>
+        <tr>
+          <td>TLS</td>
+          <td><code>wss://</code> for remote connections</td>
+        </tr>
+        <tr>
+          <td>Max payload per frame</td>
+          <td>25 MB (~26,214,400 bytes)</td>
+        </tr>
+        <tr>
+          <td>Keepalive tick interval</td>
+          <td>30,000 ms</td>
+        </tr>
+      </table>
+
+      <div class="card green">
+        <div class="card-title">Key Source Files</div>
+        <ul>
+          <li><code>src/gateway/client.ts</code> &mdash; WebSocket client implementation</li>
+          <li>
+            <code>src/gateway/server/ws-connection.ts</code> &mdash; Server-side connection handler
+          </li>
+          <li>
+            <code>src/gateway/protocol/schema/frames.ts</code> &mdash; Frame type definitions
+            (TypeBox)
+          </li>
+          <li>
+            <code>src/gateway/protocol/schema/protocol-schemas.ts</code> &mdash; Protocol version
+            constant
+          </li>
+        </ul>
+      </div>
+
+      <!-- 3. FRAME TYPES -->
+      <h2 id="frames">3. Frame Types</h2>
+      <p>
+        All messages exchanged over the WebSocket are JSON objects conforming to one of three frame
+        types.
+      </p>
+
+      <h3>3.1 Request Frame <span class="badge badge-blue">req</span></h3>
+      <p>
+        Sent by either side to invoke a method on the peer. Each request carries a unique
+        <code>id</code> used to correlate the response.
+      </p>
+      <pre><code>{
+  "type": "req",
+  "id": "&lt;uuid&gt;",
+  "method": "&lt;method.name&gt;",
+  "params": { ... }
+}</code></pre>
+
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>type</code></td>
+          <td><code>"req"</code></td>
+          <td>Frame discriminator</td>
+        </tr>
+        <tr>
+          <td><code>id</code></td>
+          <td>string (UUID)</td>
+          <td>Unique request identifier</td>
+        </tr>
+        <tr>
+          <td><code>method</code></td>
+          <td>string</td>
+          <td>Dot-separated method name</td>
+        </tr>
+        <tr>
+          <td><code>params</code></td>
+          <td>object</td>
+          <td>Method-specific parameters</td>
+        </tr>
+      </table>
+
+      <h3>3.2 Response Frame <span class="badge badge-green">res</span></h3>
+      <p>Returned to the initiator after a request is processed. Matched by <code>id</code>.</p>
+
+      <p><strong>Success:</strong></p>
+      <pre><code>{
+  "type": "res",
+  "id": "&lt;uuid&gt;",
+  "ok": true,
+  "payload": { ... }
+}</code></pre>
+
+      <p><strong>Error:</strong></p>
+      <pre><code>{
+  "type": "res",
+  "id": "&lt;uuid&gt;",
+  "ok": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human-readable description",
+    "details": { ... },
+    "retryable": true,
+    "retryAfterMs": 1000
+  }
+}</code></pre>
+
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>type</code></td>
+          <td><code>"res"</code></td>
+          <td>Frame discriminator</td>
+        </tr>
+        <tr>
+          <td><code>id</code></td>
+          <td>string (UUID)</td>
+          <td>Matches the originating request <code>id</code></td>
+        </tr>
+        <tr>
+          <td><code>ok</code></td>
+          <td>boolean</td>
+          <td><code>true</code> for success, <code>false</code> for error</td>
+        </tr>
+        <tr>
+          <td><code>payload</code></td>
+          <td>object</td>
+          <td>Method-specific result (success only)</td>
+        </tr>
+        <tr>
+          <td><code>error.code</code></td>
+          <td>string</td>
+          <td>Machine-readable error code</td>
+        </tr>
+        <tr>
+          <td><code>error.message</code></td>
+          <td>string</td>
+          <td>Human-readable description</td>
+        </tr>
+        <tr>
+          <td><code>error.details</code></td>
+          <td>object?</td>
+          <td>Optional structured context</td>
+        </tr>
+        <tr>
+          <td><code>error.retryable</code></td>
+          <td>boolean?</td>
+          <td>Whether the client should retry</td>
+        </tr>
+        <tr>
+          <td><code>error.retryAfterMs</code></td>
+          <td>number?</td>
+          <td>Suggested retry delay in milliseconds</td>
+        </tr>
+      </table>
+
+      <h3>3.3 Event Frame <span class="badge badge-amber">event</span></h3>
+      <p>
+        Pushed from the gateway to connected clients. Events are unidirectional and do not expect a
+        response.
+      </p>
+      <pre><code>{
+  "type": "event",
+  "event": "&lt;event.name&gt;",
+  "payload": { ... },
+  "seq": 123,
+  "stateVersion": {
+    "presence": 5,
+    "health": 10
+  }
+}</code></pre>
+
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>type</code></td>
+          <td><code>"event"</code></td>
+          <td>Frame discriminator</td>
+        </tr>
+        <tr>
+          <td><code>event</code></td>
+          <td>string</td>
+          <td>Dot-separated event name</td>
+        </tr>
+        <tr>
+          <td><code>payload</code></td>
+          <td>object</td>
+          <td>Event-specific data</td>
+        </tr>
+        <tr>
+          <td><code>seq</code></td>
+          <td>number?</td>
+          <td>Monotonically increasing sequence number</td>
+        </tr>
+        <tr>
+          <td><code>stateVersion</code></td>
+          <td>object?</td>
+          <td>Per-domain version counters for gap detection</td>
+        </tr>
+      </table>
+
+      <!-- 4. CONNECTION LIFECYCLE -->
+      <h2 id="lifecycle">4. Connection Lifecycle</h2>
+
+      <h3>4.1 Handshake Sequence</h3>
+
+      <div class="diagram">
+        <svg width="720" height="370" viewBox="0 0 720 370" xmlns="http://www.w3.org/2000/svg">
+          <!-- Lifelines -->
+          <text
+            x="140"
+            y="28"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="14"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node (Client)
+          </text>
+          <text
+            x="540"
+            y="28"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="14"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway (Server)
+          </text>
+          <line
+            x1="140"
+            y1="40"
+            x2="140"
+            y2="350"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="540"
+            y1="40"
+            x2="540"
+            y2="350"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- Step 0: WS Open -->
+          <line x1="145" y1="70" x2="535" y2="70" stroke="#8b92a8" stroke-width="1.5" />
+          <polygon points="535,66 535,74 545,70" fill="#8b92a8" />
+          <text
+            x="340"
+            y="62"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            WebSocket OPEN
+          </text>
+
+          <!-- Step 1: Challenge -->
+          <line x1="535" y1="120" x2="145" y2="120" stroke="#f0a050" stroke-width="2" />
+          <polygon points="145,116 145,124 135,120" fill="#f0a050" />
+          <text
+            x="340"
+            y="112"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            connect.challenge { nonce, ts }
+          </text>
+          <rect x="592" y="108" width="18" height="18" rx="3" fill="#f0a050" opacity="0.2" />
+          <text
+            x="601"
+            y="121"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            1
+          </text>
+
+          <!-- Step 2: Connect -->
+          <line x1="145" y1="175" x2="535" y2="175" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="535,171 535,179 545,175" fill="#6c8cff" />
+          <text
+            x="340"
+            y="167"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            connect { identity, caps, signed nonce }
+          </text>
+          <rect x="92" y="163" width="18" height="18" rx="3" fill="#6c8cff" opacity="0.2" />
+          <text
+            x="101"
+            y="176"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            2
+          </text>
+
+          <!-- Step 3: Hello -->
+          <line x1="535" y1="230" x2="145" y2="230" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="145,226 145,234 135,230" fill="#45d6b5" />
+          <text
+            x="340"
+            y="222"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            hello-ok { protocol, token, features, policy }
+          </text>
+          <rect x="592" y="218" width="18" height="18" rx="3" fill="#45d6b5" opacity="0.2" />
+          <text
+            x="601"
+            y="231"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            3
+          </text>
+
+          <!-- Step 4: Authenticated -->
+          <line
+            x1="145"
+            y1="285"
+            x2="535"
+            y2="285"
+            stroke="#6c8cff"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <line
+            x1="535"
+            y1="295"
+            x2="145"
+            y2="295"
+            stroke="#45d6b5"
+            stroke-width="1.5"
+            stroke-dasharray="4,3"
+          />
+          <text
+            x="340"
+            y="277"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            Bidirectional RPC + Events
+          </text>
+          <rect
+            x="610"
+            y="278"
+            width="85"
+            height="22"
+            rx="4"
+            fill="rgba(69,214,181,0.12)"
+            stroke="#45d6b5"
+            stroke-width="1"
+          />
+          <text
+            x="652"
+            y="293"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            AUTHED
+          </text>
+
+          <!-- Step 5: Close -->
+          <line x1="145" y1="340" x2="535" y2="340" stroke="#f06070" stroke-width="1.5" />
+          <polygon points="535,336 535,344 545,340" fill="#f06070" />
+          <text
+            x="340"
+            y="332"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            close / disconnect
+          </text>
+        </svg>
+      </div>
+
+      <h3>4.2 Step 1 &mdash; Challenge (Gateway &rarr; Node)</h3>
+      <p>Immediately after the WebSocket connection opens, the gateway pushes a challenge event:</p>
+      <pre><code>{
+  "type": "event",
+  "event": "connect.challenge",
+  "payload": {
+    "nonce": "random-base64-string",
+    "ts": 1737264000000
+  }
+}</code></pre>
+      <ul>
+        <li><code>nonce</code>: cryptographically random value the node must sign.</li>
+        <li><code>ts</code>: server timestamp at challenge issuance (milliseconds since epoch).</li>
+      </ul>
+
+      <h3>4.3 Step 2 &mdash; Connect Request (Node &rarr; Gateway)</h3>
+      <p>
+        The node responds with a <code>connect</code> request containing its identity, declared
+        capabilities, and a cryptographic signature over the challenge nonce:
+      </p>
+      <pre><code>{
+  "type": "req",
+  "id": "&lt;uuid&gt;",
+  "method": "connect",
+  "params": {
+    "minProtocol": 3,
+    "maxProtocol": 3,
+    "client": {
+      "id": "ios-node",
+      "version": "1.2.3",
+      "platform": "ios",
+      "mode": "node"
+    },
+    "role": "node",
+    "caps": ["camera", "canvas", "screen", "location", "voice"],
+    "commands": ["camera.snap", "canvas.navigate"],
+    "permissions": {
+      "camera.capture": true,
+      "screen.record": false
+    },
+    "auth": {
+      "token": "previously-issued-device-token"
+    },
+    "device": {
+      "id": "stable-device-fingerprint",
+      "publicKey": "base64-encoded-public-key",
+      "signature": "base64-signature-over-nonce",
+      "signedAt": 1737264000000,
+      "nonce": "echoed-nonce"
+    }
+  }
+}</code></pre>
+
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>minProtocol</code> / <code>maxProtocol</code></td>
+          <td>Acceptable protocol version range for negotiation</td>
+        </tr>
+        <tr>
+          <td><code>client.platform</code></td>
+          <td>
+            <code>"ios"</code>, <code>"android"</code>, <code>"macos"</code>, <code>"linux"</code>,
+            <code>"windows"</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>role</code></td>
+          <td><code>"node"</code> (capability host) or <code>"operator"</code> (control plane)</td>
+        </tr>
+        <tr>
+          <td><code>caps</code></td>
+          <td>Array of capability categories the node offers</td>
+        </tr>
+        <tr>
+          <td><code>commands</code></td>
+          <td>Allowlisted commands the node can execute</td>
+        </tr>
+        <tr>
+          <td><code>permissions</code></td>
+          <td>Granular permission toggles</td>
+        </tr>
+        <tr>
+          <td><code>device.id</code></td>
+          <td>Derived from a stable keypair fingerprint</td>
+        </tr>
+        <tr>
+          <td><code>device.signature</code></td>
+          <td>Signature over the gateway's challenge nonce</td>
+        </tr>
+      </table>
+
+      <h3>4.4 Step 3 &mdash; Hello Response (Gateway &rarr; Node)</h3>
+      <pre><code>{
+  "type": "res",
+  "id": "&lt;uuid&gt;",
+  "ok": true,
+  "payload": {
+    "type": "hello-ok",
+    "protocol": 3,
+    "server": {
+      "version": "2026.3.17",
+      "connId": "&lt;connection-uuid&gt;"
+    },
+    "features": {
+      "methods": ["node.invoke", "node.pending.pull", "..."],
+      "events": ["presence", "health.snapshot", "..."]
+    },
+    "policy": {
+      "maxPayload": 26214400,
+      "tickIntervalMs": 30000
+    },
+    "auth": {
+      "deviceToken": "newly-issued-or-refreshed-token",
+      "role": "node",
+      "scopes": []
+    }
+  }
+}</code></pre>
+
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>protocol</code></td>
+          <td>Negotiated protocol version</td>
+        </tr>
+        <tr>
+          <td><code>server.connId</code></td>
+          <td>Unique connection identifier for this session</td>
+        </tr>
+        <tr>
+          <td><code>features.methods</code></td>
+          <td>Methods the gateway supports in this session</td>
+        </tr>
+        <tr>
+          <td><code>features.events</code></td>
+          <td>Events the gateway may emit</td>
+        </tr>
+        <tr>
+          <td><code>policy.maxPayload</code></td>
+          <td>Enforced max frame size in bytes</td>
+        </tr>
+        <tr>
+          <td><code>policy.tickIntervalMs</code></td>
+          <td>Expected keepalive interval</td>
+        </tr>
+        <tr>
+          <td><code>auth.deviceToken</code></td>
+          <td>Token for future reconnections</td>
+        </tr>
+      </table>
+
+      <h3>4.5 Step 4 &mdash; Authenticated Session</h3>
+      <p>
+        After <code>hello-ok</code>, the connection enters the authenticated phase. Both sides may
+        send <code>req</code> frames and the gateway may push <code>event</code> frames. The
+        connection remains open indefinitely, with keepalive ticks at <code>tickIntervalMs</code>.
+      </p>
+
+      <h3>4.6 Step 5 &mdash; Disconnection</h3>
+      <p>Either side may close the WebSocket. On close, the gateway:</p>
+      <ol>
+        <li>Removes the node from the <code>NodeRegistry</code>.</li>
+        <li>Broadcasts a <code>presence</code> event to other connected clients.</li>
+        <li>Rejects any in-flight invocations with a disconnection error.</li>
+      </ol>
+
+      <!-- 5. AUTH -->
+      <h2 id="auth">5. Authentication &amp; Authorization</h2>
+
+      <h3>5.1 Roles</h3>
+      <table>
+        <tr>
+          <th>Role</th>
+          <th>Description</th>
+          <th>Typical Clients</th>
+        </tr>
+        <tr>
+          <td><code>operator</code></td>
+          <td>Control-plane client with scoped permissions</td>
+          <td>CLI, Web UI, desktop app</td>
+        </tr>
+        <tr>
+          <td><code>node</code></td>
+          <td>Capability host, authorized by declared capabilities</td>
+          <td>iOS, Android devices</td>
+        </tr>
+      </table>
+
+      <h3>5.2 Operator Scopes</h3>
+      <table>
+        <tr>
+          <th>Scope</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>operator.read</code></td>
+          <td>Read-only access to gateway state</td>
+        </tr>
+        <tr>
+          <td><code>operator.write</code></td>
+          <td>Write access (send messages, invoke commands)</td>
+        </tr>
+        <tr>
+          <td><code>operator.admin</code></td>
+          <td>Administrative operations (config, restart)</td>
+        </tr>
+        <tr>
+          <td><code>operator.approvals</code></td>
+          <td>Approve/deny execution requests</td>
+        </tr>
+        <tr>
+          <td><code>operator.pairing</code></td>
+          <td>Manage device/node pairing</td>
+        </tr>
+      </table>
+      <p>
+        Nodes have no scopes. Their authorization is determined by the <code>caps</code>,
+        <code>commands</code>, and <code>permissions</code> declared at connect time.
+      </p>
+
+      <h3>5.3 Device Identity</h3>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <span class="step-num">1</span>
+          <span class="step-label">Keypair</span>
+          <div class="step-desc">Node generates a stable local keypair</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">2</span>
+          <span class="step-label">Fingerprint</span>
+          <div class="step-desc">Device ID derived from public key fingerprint</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">3</span>
+          <span class="step-label">Sign</span>
+          <div class="step-desc">Node signs the gateway's challenge nonce</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">4</span>
+          <span class="step-label">Verify</span>
+          <div class="step-desc">Gateway verifies signature against public key</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">5</span>
+          <span class="step-label">Token</span>
+          <div class="step-desc">Gateway issues a device token for reconnection</div>
+        </div>
+      </div>
+
+      <p><strong>Source:</strong> <code>src/gateway/auth.ts</code></p>
+
+      <!-- 6. REGISTRY -->
+      <h2 id="registry">6. Node Registry &amp; Session Management</h2>
+      <p>
+        The <code>NodeRegistry</code> class maintains the in-memory store of all live node sessions.
+      </p>
+
+      <table>
+        <tr>
+          <th>Method</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>register(client, opts)</code></td>
+          <td>Register a new node connection; maps <code>nodeId &rarr; NodeSession</code></td>
+        </tr>
+        <tr>
+          <td><code>unregister(connId)</code></td>
+          <td>Remove node on disconnect</td>
+        </tr>
+        <tr>
+          <td><code>get(nodeId)</code></td>
+          <td>Retrieve a node session by ID</td>
+        </tr>
+        <tr>
+          <td><code>listConnected()</code></td>
+          <td>Return all currently connected node sessions</td>
+        </tr>
+        <tr>
+          <td><code>invoke(params)</code></td>
+          <td>Send a command to a node and await the result</td>
+        </tr>
+        <tr>
+          <td><code>sendEvent(nodeId, event, payload)</code></td>
+          <td>Push an event to a specific node</td>
+        </tr>
+        <tr>
+          <td><code>handleInvokeResult(params)</code></td>
+          <td>Resolve a pending invocation promise with the node's result</td>
+        </tr>
+      </table>
+
+      <div class="card green">
+        <div class="card-title">Session Data</div>
+        <p>
+          Each <code>NodeSession</code> tracks: connection ID, WebSocket handle, node identity
+          (<code>nodeId</code>, <code>deviceId</code>), declared capabilities/commands/permissions,
+          client metadata (platform, version), connection timestamp, and last activity time.
+        </p>
+      </div>
+
+      <p><strong>Source:</strong> <code>src/gateway/node-registry.ts</code></p>
+
+      <!-- 7. RPC METHODS -->
+      <h2 id="rpc">7. RPC Methods</h2>
+
+      <h3>7.1 Node Pairing</h3>
+      <p>Pairing establishes trust between a gateway and a new node device.</p>
+      <table>
+        <tr>
+          <th>Method</th>
+          <th>Direction</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>node.pair.request</code></td>
+          <td>Node &rarr; Gateway</td>
+          <td>Node initiates a pairing request</td>
+        </tr>
+        <tr>
+          <td><code>node.pair.list</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>List all pending pairing requests</td>
+        </tr>
+        <tr>
+          <td><code>node.pair.approve</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>Approve a pairing request</td>
+        </tr>
+        <tr>
+          <td><code>node.pair.reject</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>Reject a pairing request</td>
+        </tr>
+        <tr>
+          <td><code>node.pair.verify</code></td>
+          <td>Either &rarr; Gateway</td>
+          <td>Verify a paired node's identity</td>
+        </tr>
+        <tr>
+          <td><code>node.rename</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>Rename a paired node</td>
+        </tr>
+      </table>
+
+      <h3>7.2 Node Invocation</h3>
+      <p>The primary mechanism for executing commands on remote nodes.</p>
+      <table>
+        <tr>
+          <th>Method</th>
+          <th>Direction</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>node.invoke</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>Request command execution on a target node</td>
+        </tr>
+        <tr>
+          <td><code>node.invoke.result</code></td>
+          <td>Node &rarr; Gateway</td>
+          <td>Return the result of a completed invocation</td>
+        </tr>
+        <tr>
+          <td><code>node.event</code></td>
+          <td>Node &rarr; Gateway</td>
+          <td>Send arbitrary events (voice transcripts, agent events)</td>
+        </tr>
+      </table>
+
+      <h3>7.3 Node Information</h3>
+      <table>
+        <tr>
+          <th>Method</th>
+          <th>Direction</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>node.list</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>List all paired/connected nodes</td>
+        </tr>
+        <tr>
+          <td><code>node.describe</code></td>
+          <td>Operator &rarr; Gateway</td>
+          <td>Get detailed info about a specific node</td>
+        </tr>
+        <tr>
+          <td><code>node.canvas.capability.refresh</code></td>
+          <td>Either &rarr; Gateway</td>
+          <td>Refresh a canvas host capability token</td>
+        </tr>
+      </table>
+
+      <h3>7.4 Pending Work Queue</h3>
+      <table>
+        <tr>
+          <th>Method</th>
+          <th>Direction</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>node.pending.pull</code></td>
+          <td>Node &rarr; Gateway</td>
+          <td>Node polls for queued work items</td>
+        </tr>
+        <tr>
+          <td><code>node.pending.ack</code></td>
+          <td>Node &rarr; Gateway</td>
+          <td>Node acknowledges received work items</td>
+        </tr>
+        <tr>
+          <td><code>node.pending.enqueue</code></td>
+          <td>Gateway (internal)</td>
+          <td>Gateway queues work for an offline/backgrounded node</td>
+        </tr>
+      </table>
+
+      <p><strong>Source:</strong> <code>src/gateway/server-methods/nodes.ts</code></p>
+
+      <!-- 8. INVOCATION FLOW -->
+      <h2 id="invocation">8. Node Invocation Flow</h2>
+
+      <h3>8.1 Normal Flow (Node Online)</h3>
+
+      <div class="diagram">
+        <svg width="720" height="280" viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg">
+          <text
+            x="100"
+            y="24"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+          <text
+            x="360"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <text
+            x="620"
+            y="24"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="13"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node
+          </text>
+          <line
+            x1="100"
+            y1="36"
+            x2="100"
+            y2="260"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="360"
+            y1="36"
+            x2="360"
+            y2="260"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="620"
+            y1="36"
+            x2="620"
+            y2="260"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- 1 -->
+          <line x1="105" y1="70" x2="355" y2="70" stroke="#f0a050" stroke-width="2" />
+          <polygon points="355,66 355,74 365,70" fill="#f0a050" />
+          <text
+            x="230"
+            y="62"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            node.invoke { nodeId, cmd }
+          </text>
+
+          <!-- 2 -->
+          <line x1="365" y1="120" x2="615" y2="120" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="615,116 615,124 625,120" fill="#45d6b5" />
+          <text
+            x="490"
+            y="112"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            node.invoke.request (event)
+          </text>
+
+          <!-- 3 -->
+          <rect
+            x="580"
+            y="140"
+            width="80"
+            height="24"
+            rx="4"
+            fill="rgba(108,140,255,0.1)"
+            stroke="#6c8cff"
+            stroke-width="1"
+          />
+          <text
+            x="620"
+            y="156"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            execute cmd
+          </text>
+
+          <!-- 4 -->
+          <line x1="615" y1="190" x2="365" y2="190" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="365,186 365,194 355,190" fill="#6c8cff" />
+          <text
+            x="490"
+            y="182"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            node.invoke.result
+          </text>
+
+          <!-- 5 -->
+          <line x1="355" y1="240" x2="105" y2="240" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="105,236 105,244 95,240" fill="#45d6b5" />
+          <text
+            x="230"
+            y="232"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="11"
+            text-anchor="middle"
+          >
+            result (res)
+          </text>
+        </svg>
+      </div>
+
+      <ol>
+        <li>
+          An <strong>operator</strong> sends a <code>node.invoke</code> request to the gateway,
+          specifying the target <code>nodeId</code> and command.
+        </li>
+        <li>
+          The <strong>gateway</strong> looks up the node in <code>NodeRegistry</code> and sends a
+          <code>node.invoke.request</code> event to the target node.
+        </li>
+        <li>
+          The <strong>node</strong> processes the command locally (camera snap, screen capture,
+          location fetch, etc.).
+        </li>
+        <li>The node sends a <code>node.invoke.result</code> request back to the gateway.</li>
+        <li>The gateway resolves the pending promise and returns the result to the operator.</li>
+      </ol>
+
+      <h3>8.2 Offline Flow (Node Disconnected + APNS Wake)</h3>
+
+      <div class="diagram">
+        <svg width="720" height="380" viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg">
+          <text
+            x="80"
+            y="24"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Operator
+          </text>
+          <text
+            x="280"
+            y="24"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Gateway
+          </text>
+          <text
+            x="480"
+            y="24"
+            fill="#e0e4ed"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            APNS
+          </text>
+          <text
+            x="650"
+            y="24"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="12"
+            font-weight="bold"
+            text-anchor="middle"
+          >
+            Node
+          </text>
+          <line
+            x1="80"
+            y1="36"
+            x2="80"
+            y2="360"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="280"
+            y1="36"
+            x2="280"
+            y2="360"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="480"
+            y1="36"
+            x2="480"
+            y2="360"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+          <line
+            x1="650"
+            y1="36"
+            x2="650"
+            y2="360"
+            stroke="#2a2f3e"
+            stroke-width="2"
+            stroke-dasharray="6,4"
+          />
+
+          <!-- Node offline indicator -->
+          <rect x="620" y="50" width="60" height="18" rx="3" fill="rgba(240,96,112,0.15)" />
+          <text
+            x="650"
+            y="63"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            OFFLINE
+          </text>
+
+          <!-- 1: invoke -->
+          <line x1="85" y1="90" x2="275" y2="90" stroke="#f0a050" stroke-width="2" />
+          <polygon points="275,86 275,94 285,90" fill="#f0a050" />
+          <text
+            x="180"
+            y="82"
+            fill="#f0a050"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            node.invoke
+          </text>
+
+          <!-- 2: detect offline, wake -->
+          <rect x="228" y="105" width="104" height="18" rx="3" fill="rgba(240,96,112,0.1)" />
+          <text
+            x="280"
+            y="118"
+            fill="#f06070"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            node offline!
+          </text>
+
+          <line x1="285" y1="140" x2="475" y2="140" stroke="#8b92a8" stroke-width="1.5" />
+          <polygon points="475,136 475,144 485,140" fill="#8b92a8" />
+          <text
+            x="380"
+            y="132"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            push notification
+          </text>
+
+          <!-- 3: APNS wakes node -->
+          <line x1="485" y1="170" x2="645" y2="170" stroke="#8b92a8" stroke-width="1.5" />
+          <polygon points="645,166 645,174 655,170" fill="#8b92a8" />
+          <text
+            x="565"
+            y="162"
+            fill="#8b92a8"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            wake
+          </text>
+
+          <!-- 4: Reconnect -->
+          <line
+            x1="645"
+            y1="210"
+            x2="285"
+            y2="210"
+            stroke="#6c8cff"
+            stroke-width="2"
+            stroke-dasharray="4,3"
+          />
+          <text
+            x="465"
+            y="202"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            WebSocket reconnect
+          </text>
+
+          <!-- Node online indicator -->
+          <rect x="620" y="222" width="60" height="18" rx="3" fill="rgba(69,214,181,0.15)" />
+          <text
+            x="650"
+            y="235"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="9"
+            text-anchor="middle"
+          >
+            ONLINE
+          </text>
+
+          <!-- 5: invoke.request -->
+          <line x1="285" y1="260" x2="645" y2="260" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="645,256 645,264 655,260" fill="#45d6b5" />
+          <text
+            x="465"
+            y="252"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            node.invoke.request
+          </text>
+
+          <!-- 6: result -->
+          <line x1="645" y1="300" x2="285" y2="300" stroke="#6c8cff" stroke-width="2" />
+          <polygon points="285,296 285,304 275,300" fill="#6c8cff" />
+          <text
+            x="465"
+            y="292"
+            fill="#6c8cff"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            node.invoke.result
+          </text>
+
+          <!-- 7: respond -->
+          <line x1="275" y1="340" x2="85" y2="340" stroke="#45d6b5" stroke-width="2" />
+          <polygon points="85,336 85,344 75,340" fill="#45d6b5" />
+          <text
+            x="180"
+            y="332"
+            fill="#45d6b5"
+            font-family="monospace"
+            font-size="10"
+            text-anchor="middle"
+          >
+            result (res)
+          </text>
+        </svg>
+      </div>
+
+      <ol>
+        <li>Gateway detects the target node is offline.</li>
+        <li>
+          Gateway calls <code>maybeWakeNodeWithApns(nodeId)</code> to send a background push
+          notification via APNS.
+        </li>
+        <li>APNS delivers the push; the node wakes and reconnects.</li>
+        <li>
+          Gateway waits 3&ndash;12 seconds for reconnection (<code>waitForNodeReconnect</code>).
+        </li>
+        <li>If reconnected, the gateway retries the invocation as in the normal flow.</li>
+        <li>
+          If the node remains offline, the gateway either returns an error or queues the work as
+          pending (see Section 9).
+        </li>
+      </ol>
+
+      <h3>8.3 Invocation Sanitization</h3>
+      <div class="card warn">
+        <div class="card-title">Security Gate</div>
+        <p>
+          Invocation parameters are validated and sanitized before dispatch
+          (<code>src/gateway/node-invoke-sanitize.ts</code>). Only allowlisted commands (declared by
+          the node at connect time) can be invoked. Parameters must conform to expected schemas.
+          Sensitive data is not forwarded unnecessarily.
+        </p>
+      </div>
+
+      <!-- 9. PENDING WORK -->
+      <h2 id="pending">9. Pending Work Queue</h2>
+      <p>
+        Handles the case where a node is backgrounded (common on iOS/Android) and cannot receive
+        real-time WebSocket messages.
+      </p>
+
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Max actions per node</td>
+          <td>64</td>
+        </tr>
+        <tr>
+          <td>Action TTL</td>
+          <td>10 minutes</td>
+        </tr>
+        <tr>
+          <td>Deduplication</td>
+          <td>Via <code>idempotencyKey</code></td>
+        </tr>
+      </table>
+
+      <h3>9.1 Action Schema</h3>
+      <pre><code>type PendingNodeAction = {
+  id: string;              // Unique action ID
+  nodeId: string;          // Target node
+  command: string;         // Command to execute
+  paramsJSON?: string;     // Serialized parameters
+  idempotencyKey: string;  // Prevents duplicate processing
+  enqueuedAtMs: number;    // Enqueue timestamp (epoch ms)
+};</code></pre>
+
+      <h3>9.2 Work Types</h3>
+      <table>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>status.request</code></td>
+          <td>Request current node status</td>
+        </tr>
+        <tr>
+          <td><code>location.request</code></td>
+          <td>Request current device location</td>
+        </tr>
+      </table>
+
+      <h3>9.3 Lifecycle</h3>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          <span class="step-num">1</span>
+          <span class="step-label">Enqueue</span>
+          <div class="step-desc">Gateway queues work for offline node</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">2</span>
+          <span class="step-label">Wake</span>
+          <div class="step-desc">APNS notification nudges node to foreground</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">3</span>
+          <span class="step-label">Pull</span>
+          <div class="step-desc">Node reconnects and calls <code>node.pending.pull</code></div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">4</span>
+          <span class="step-label">Execute</span>
+          <div class="step-desc">Node processes each action locally</div>
+        </div>
+        <div class="flow-step">
+          <span class="step-num">5</span>
+          <span class="step-label">Ack</span>
+          <div class="step-desc">Node calls <code>node.pending.ack</code>; actions removed</div>
+        </div>
+      </div>
+
+      <p>Expired actions (older than TTL) are silently discarded.</p>
+
+      <p><strong>Source:</strong> <code>src/gateway/node-pending-work.ts</code></p>
+
+      <!-- 10. EVENTS -->
+      <h2 id="events">10. Event Broadcasting</h2>
+      <p>The gateway broadcasts events to all connected clients as state changes occur.</p>
+
+      <table>
+        <tr>
+          <th>Event</th>
+          <th>Description</th>
+          <th>Recipients</th>
+        </tr>
+        <tr>
+          <td><code>connect.challenge</code></td>
+          <td>Authentication challenge on new connection</td>
+          <td>Connecting client</td>
+        </tr>
+        <tr>
+          <td><code>presence</code></td>
+          <td>Device/role/scope connection changes</td>
+          <td>All authenticated</td>
+        </tr>
+        <tr>
+          <td><code>health.snapshot</code></td>
+          <td>Gateway health state update</td>
+          <td>Operators</td>
+        </tr>
+        <tr>
+          <td><code>node.event</code></td>
+          <td>Arbitrary node-originated event</td>
+          <td>Operators</td>
+        </tr>
+        <tr>
+          <td><code>node.invoke.request</code></td>
+          <td>Command invocation dispatched to node</td>
+          <td>Target node</td>
+        </tr>
+        <tr>
+          <td><code>chat.event</code></td>
+          <td>Streaming chat message updates</td>
+          <td>Operators</td>
+        </tr>
+        <tr>
+          <td><code>exec.approval.requested</code></td>
+          <td>Execution approval needed from operator</td>
+          <td>Operators (<code>approvals</code> scope)</td>
+        </tr>
+        <tr>
+          <td><code>device.pair.requested</code></td>
+          <td>New device pairing request</td>
+          <td>Operators (<code>pairing</code> scope)</td>
+        </tr>
+      </table>
+
+      <h3>10.1 Sequence Numbers &amp; Gap Detection</h3>
+      <div class="card accent">
+        <div class="card-title">Gap Detection</div>
+        <p>
+          Events carry optional <code>seq</code> (monotonically increasing) and
+          <code>stateVersion</code> fields. Clients use these to detect missed events (gaps in
+          <code>seq</code>) and request state resync when domain-specific versions
+          (<code>presence</code>, <code>health</code>) are stale.
+        </p>
+      </div>
+
+      <!-- 11. CLIENT PATTERN -->
+      <h2 id="client">11. Client-Side Request/Response Pattern</h2>
+      <p>The <code>GatewayClient</code> class implements the client half of the protocol.</p>
+
+      <h3>11.1 Sending a Request</h3>
+      <pre><code>async request&lt;T&gt;(method: string, params: object, opts?: RequestOpts): Promise&lt;T&gt; {
+  const id = uuid();
+  const frame: RequestFrame = { type: "req", id, method, params };
+  ws.send(JSON.stringify(frame));
+
+  // Register a pending promise with a timeout (default 30s)
+  return new Promise((resolve, reject) =&gt; {
+    pending.set(id, { resolve, reject, timeout: setTimeout(...) });
+  });
+}</code></pre>
+
+      <h3>11.2 Receiving a Response</h3>
+      <pre><code>if (frame.type === "res") {
+  const entry = pending.get(frame.id);
+  if (entry) {
+    clearTimeout(entry.timeout);
+    pending.delete(frame.id);
+    if (frame.ok) {
+      entry.resolve(frame.payload);
+    } else {
+      entry.reject(new GatewayClientRequestError(frame.error));
+    }
+  }
+}</code></pre>
+
+      <h3>11.3 Timeout Handling</h3>
+      <p>
+        If no response arrives within the timeout window (default 30 seconds), the pending promise
+        is rejected with a timeout error. The client does not automatically retry.
+      </p>
+
+      <p>
+        <strong>Source:</strong> <code>src/gateway/client.ts</code>,
+        <code>src/cli/gateway-rpc.ts</code>
+      </p>
+
+      <!-- 12. ERRORS -->
+      <h2 id="errors">12. Error Handling</h2>
+
+      <h3>12.1 Error Response Fields</h3>
+      <table>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>code</code></td>
+          <td>string</td>
+          <td>Machine-readable error code</td>
+        </tr>
+        <tr>
+          <td><code>message</code></td>
+          <td>string</td>
+          <td>Human-readable description</td>
+        </tr>
+        <tr>
+          <td><code>details</code></td>
+          <td>object?</td>
+          <td>Optional structured diagnostic context</td>
+        </tr>
+        <tr>
+          <td><code>retryable</code></td>
+          <td>boolean?</td>
+          <td><code>true</code> if the client should retry after delay</td>
+        </tr>
+        <tr>
+          <td><code>retryAfterMs</code></td>
+          <td>number?</td>
+          <td>Suggested wait before retrying (milliseconds)</td>
+        </tr>
+      </table>
+
+      <h3>12.2 Common Error Scenarios</h3>
+      <table>
+        <tr>
+          <th>Scenario</th>
+          <th>Behavior</th>
+        </tr>
+        <tr>
+          <td>Protocol version mismatch</td>
+          <td>Gateway rejects during handshake</td>
+        </tr>
+        <tr>
+          <td>Invalid signature</td>
+          <td>Gateway rejects connect request</td>
+        </tr>
+        <tr>
+          <td>Node offline, APNS wake fails</td>
+          <td>Error returned to operator (or work queued)</td>
+        </tr>
+        <tr>
+          <td>Command not in node allowlist</td>
+          <td>Rejected at sanitization before dispatch</td>
+        </tr>
+        <tr>
+          <td>Request timeout (30s default)</td>
+          <td>Client-side promise rejection</td>
+        </tr>
+        <tr>
+          <td>WebSocket close during invocation</td>
+          <td>In-flight invocations rejected with disconnect error</td>
+        </tr>
+        <tr>
+          <td>Payload exceeds max size</td>
+          <td>WebSocket frame rejected by transport</td>
+        </tr>
+      </table>
+
+      <!-- 13. SECURITY -->
+      <h2 id="security">13. Security Model</h2>
+
+      <h3>13.1 Transport Security</h3>
+      <ul>
+        <li>Loopback (<code>127.0.0.1</code>) binding prevents remote access by default.</li>
+        <li>Remote deployments use <code>wss://</code> (TLS) for encryption in transit.</li>
+      </ul>
+
+      <h3>13.2 Authentication</h3>
+      <ul>
+        <li>Challenge&ndash;response handshake proves device key possession.</li>
+        <li>Device tokens are issued by the gateway for streamlined reconnections.</li>
+        <li>Tokens are scoped to a specific device identity.</li>
+      </ul>
+
+      <h3>13.3 Authorization</h3>
+      <ul>
+        <li>
+          Nodes are restricted to their declared <code>caps</code>, <code>commands</code>, and
+          <code>permissions</code>.
+        </li>
+        <li>Operators are restricted by their granted <code>scopes</code>.</li>
+        <li>Invocation parameters are sanitized before forwarding to nodes.</li>
+      </ul>
+
+      <h3>13.4 Trust Boundaries</h3>
+      <div class="card red">
+        <div class="card-title">Trust Architecture</div>
+        <ul>
+          <li>
+            The <strong>gateway</strong> is the trust anchor. Nodes and operators authenticate to
+            it.
+          </li>
+          <li>
+            Nodes <strong>cannot</strong> invoke commands on other nodes directly &mdash; all
+            routing passes through the gateway.
+          </li>
+          <li>
+            The gateway validates every RPC call against the caller's role and permissions before
+            processing.
+          </li>
+        </ul>
+      </div>
+
+      <!-- 14. SCHEMA -->
+      <h2 id="schema">14. Protocol Schema Definitions</h2>
+      <p>All schemas are defined using TypeBox (JSON Schema&ndash;compatible):</p>
+
+      <table>
+        <tr>
+          <th>File</th>
+          <th>Contents</th>
+        </tr>
+        <tr>
+          <td><code>src/gateway/protocol/schema/frames.ts</code></td>
+          <td><code>RequestFrame</code>, <code>ResponseFrame</code>, <code>EventFrame</code></td>
+        </tr>
+        <tr>
+          <td><code>src/gateway/protocol/schema/nodes.ts</code></td>
+          <td>Node-specific method params and results</td>
+        </tr>
+        <tr>
+          <td><code>src/gateway/protocol/schema/protocol-schemas.ts</code></td>
+          <td>Protocol version constant</td>
+        </tr>
+      </table>
+
+      <p>
+        Full protocol documentation is also maintained at <code>docs/gateway/protocol.md</code>.
+      </p>
+
+      <!-- 15. SUMMARY -->
+      <h2 id="summary">15. Summary</h2>
+
+      <div class="card accent">
+        <div class="card-title">Protocol at a Glance</div>
+        <ul>
+          <li>
+            <strong>Three frame types</strong> (<code>req</code>, <code>res</code>,
+            <code>event</code>) covering all communication patterns.
+          </li>
+          <li>
+            <strong>Challenge-based authentication</strong> using device keypairs for identity
+            verification.
+          </li>
+          <li>
+            <strong>Role-based authorization</strong> separating operators (control plane) from
+            nodes (capability hosts).
+          </li>
+          <li>
+            <strong>Bidirectional invocation</strong> allowing operators to execute commands on
+            remote nodes through the gateway.
+          </li>
+          <li>
+            <strong>APNS-based wake</strong> for mobile nodes that are backgrounded or disconnected.
+          </li>
+          <li>
+            <strong>Pending work queue</strong> with TTL and idempotency for deferred command
+            delivery.
+          </li>
+          <li>
+            <strong>Sequence-numbered events</strong> with domain-specific version counters for gap
+            detection and state resync.
+          </li>
+          <li>
+            <strong>Strict sanitization</strong> of invocation parameters against node-declared
+            command allowlists.
+          </li>
+        </ul>
+      </div>
+
+      <p>
+        The protocol is designed for a hub-and-spoke topology where the gateway mediates all
+        communication, enforces security policies, and manages node lifecycle &mdash; including
+        wake, reconnection, and work queuing for intermittently connected mobile devices.
+      </p>
+    </div>
+  </body>
+</html>

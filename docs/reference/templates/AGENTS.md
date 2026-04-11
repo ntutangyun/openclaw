@@ -225,6 +225,11 @@ You ALWAYS have full tool execution capabilities in this environment, regardless
 
 ## Remote Node Execution
 
+**Node operations:**
+
+- For ALL node-related tasks, use `openclaw nodes <subcommand>` (e.g., `status`, `describe`, `invoke`, `approve`, `rename`, `camera`, `screen`).
+- `openclaw status` does NOT show node information — always use `openclaw nodes` for anything node-related.
+
 When a remote node is connected, your exec commands may run on that node. Detect the node platform (use `openclaw nodes describe`) and follow these guidelines:
 
 ### Windows Nodes

@@ -1,0 +1,310 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2680" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <rect width="1400" height="2680" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Phase 6 — All Operator-Only Methods</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Complete reference of operator-facing request methods grouped by domain. Role: "operator" required.</text>
+
+  <!-- ═══ CHAT ═══ -->
+  <rect x="20" y="68" width="660" height="118" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="68" width="660" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="84" font-size="12" font-weight="bold" fill="#1d4ed8">Chat</text>
+
+  <text x="34" y="108" font-size="10" font-weight="bold" fill="#475569">chat.send</text>
+  <text x="180" y="108" font-size="9" fill="#94a3b8">{sessionKey, message, ...} — Send a chat message</text>
+  <text x="34" y="126" font-size="10" font-weight="bold" fill="#475569">chat.history</text>
+  <text x="180" y="126" font-size="9" fill="#94a3b8">{sessionKey, limit} — Retrieve chat history</text>
+  <text x="34" y="144" font-size="10" font-weight="bold" fill="#475569">chat.abort</text>
+  <text x="180" y="144" font-size="9" fill="#94a3b8">{sessionKey} — Abort active chat generation</text>
+  <text x="34" y="168" font-size="9" fill="#94a3b8">Legacy webchat interface. See sessions.* for full session management.</text>
+  <text x="34" y="178" font-size="1" fill="#fafafa">.</text>
+
+  <!-- ═══ SESSIONS ═══ -->
+  <rect x="20" y="200" width="660" height="294" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="200" width="660" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="216" font-size="12" font-weight="bold" fill="#1d4ed8">Sessions</text>
+
+  <text x="34" y="240" font-size="10" font-weight="bold" fill="#475569">sessions.list</text>
+  <text x="220" y="240" font-size="9" fill="#94a3b8">List all sessions</text>
+  <text x="34" y="258" font-size="10" font-weight="bold" fill="#475569">sessions.subscribe</text>
+  <text x="220" y="258" font-size="9" fill="#94a3b8">Subscribe to session list changes</text>
+  <text x="34" y="276" font-size="10" font-weight="bold" fill="#475569">sessions.unsubscribe</text>
+  <text x="220" y="276" font-size="9" fill="#94a3b8">Unsubscribe from session list changes</text>
+  <text x="34" y="294" font-size="10" font-weight="bold" fill="#475569">sessions.messages.subscribe</text>
+  <text x="270" y="294" font-size="9" fill="#94a3b8">{sessionKey} — Subscribe to messages</text>
+  <text x="34" y="312" font-size="10" font-weight="bold" fill="#475569">sessions.messages.unsubscribe</text>
+  <text x="270" y="312" font-size="9" fill="#94a3b8">Unsubscribe from messages</text>
+  <text x="34" y="330" font-size="10" font-weight="bold" fill="#475569">sessions.send</text>
+  <text x="220" y="330" font-size="9" fill="#94a3b8">{sessionKey, message} — Send message to session</text>
+  <text x="34" y="348" font-size="10" font-weight="bold" fill="#475569">sessions.create</text>
+  <text x="220" y="348" font-size="9" fill="#94a3b8">{sessionKey, agentId} — Create new session</text>
+  <text x="34" y="366" font-size="10" font-weight="bold" fill="#475569">sessions.abort</text>
+  <text x="220" y="366" font-size="9" fill="#94a3b8">{sessionKey} — Abort active generation</text>
+  <text x="34" y="384" font-size="10" font-weight="bold" fill="#475569">sessions.patch</text>
+  <text x="220" y="384" font-size="9" fill="#94a3b8">{sessionKey} — Patch session metadata</text>
+  <text x="34" y="402" font-size="10" font-weight="bold" fill="#475569">sessions.reset</text>
+  <text x="220" y="402" font-size="9" fill="#94a3b8">{sessionKey} — Reset session history</text>
+  <text x="34" y="420" font-size="10" font-weight="bold" fill="#475569">sessions.delete</text>
+  <text x="220" y="420" font-size="9" fill="#94a3b8">{sessionKey} — Delete a session</text>
+  <text x="34" y="438" font-size="10" font-weight="bold" fill="#475569">sessions.compact</text>
+  <text x="220" y="438" font-size="9" fill="#94a3b8">{sessionKey} — Compact session history</text>
+  <text x="34" y="456" font-size="10" font-weight="bold" fill="#475569">sessions.preview</text>
+  <text x="220" y="456" font-size="9" fill="#94a3b8">{sessionKey} — Get session preview/summary</text>
+  <text x="34" y="486" font-size="9" fill="#94a3b8">All session methods require sessionKey as primary identifier.</text>
+
+  <!-- ═══ CONFIG ═══ -->
+  <rect x="700" y="68" width="680" height="118" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="68" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="84" font-size="12" font-weight="bold" fill="#1d4ed8">Config</text>
+
+  <text x="714" y="108" font-size="10" font-weight="bold" fill="#475569">config.get</text>
+  <text x="860" y="108" font-size="9" fill="#94a3b8">Get full config</text>
+  <text x="714" y="126" font-size="10" font-weight="bold" fill="#475569">config.set</text>
+  <text x="860" y="126" font-size="9" fill="#94a3b8">{key, value} — Set single config value</text>
+  <text x="714" y="144" font-size="10" font-weight="bold" fill="#475569">config.apply</text>
+  <text x="860" y="144" font-size="9" fill="#94a3b8">{config} — Apply full config object</text>
+  <text x="714" y="162" font-size="10" font-weight="bold" fill="#475569">config.patch</text>
+  <text x="860" y="162" font-size="9" fill="#94a3b8">{ops} — Apply JSON patch operations</text>
+  <text x="714" y="178" font-size="10" font-weight="bold" fill="#475569">config.schema</text>
+  <text x="860" y="178" font-size="9" fill="#94a3b8">Get full config JSON schema</text>
+
+  <!-- ═══ NODE MANAGEMENT ═══ -->
+  <rect x="700" y="200" width="680" height="118" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="200" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="216" font-size="12" font-weight="bold" fill="#1d4ed8">Node Management</text>
+
+  <text x="714" y="240" font-size="10" font-weight="bold" fill="#475569">node.list</text>
+  <text x="880" y="240" font-size="9" fill="#94a3b8">List all known nodes</text>
+  <text x="714" y="258" font-size="10" font-weight="bold" fill="#475569">node.describe</text>
+  <text x="880" y="258" font-size="9" fill="#94a3b8">{nodeId} — Get node details</text>
+  <text x="714" y="276" font-size="10" font-weight="bold" fill="#475569">node.rename</text>
+  <text x="880" y="276" font-size="9" fill="#94a3b8">{nodeId, displayName} — Rename a node</text>
+  <text x="714" y="294" font-size="10" font-weight="bold" fill="#475569">node.invoke</text>
+  <text x="880" y="294" font-size="9" fill="#94a3b8">See Phase 3 for full invoke flow</text>
+  <text x="714" y="310" font-size="10" font-weight="bold" fill="#475569">config.schema.lookup</text>
+  <text x="880" y="310" font-size="9" fill="#94a3b8">{path} — Lookup specific config schema path</text>
+
+  <!-- ═══ DEVICE PAIRING ═══ -->
+  <rect x="20" y="508" width="660" height="166" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="508" width="660" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="524" font-size="12" font-weight="bold" fill="#1d4ed8">Device Pairing</text>
+
+  <text x="34" y="548" font-size="10" font-weight="bold" fill="#475569">device.pair.list</text>
+  <text x="220" y="548" font-size="9" fill="#94a3b8">List pending pairing requests</text>
+  <text x="34" y="566" font-size="10" font-weight="bold" fill="#475569">device.pair.approve</text>
+  <text x="220" y="566" font-size="9" fill="#94a3b8">{requestId} — Approve pairing request</text>
+  <text x="34" y="584" font-size="10" font-weight="bold" fill="#475569">device.pair.reject</text>
+  <text x="220" y="584" font-size="9" fill="#94a3b8">{requestId} — Reject pairing request</text>
+  <text x="34" y="602" font-size="10" font-weight="bold" fill="#475569">device.pair.remove</text>
+  <text x="220" y="602" font-size="9" fill="#94a3b8">{deviceId} — Remove paired device</text>
+  <text x="34" y="620" font-size="10" font-weight="bold" fill="#475569">device.token.rotate</text>
+  <text x="220" y="620" font-size="9" fill="#94a3b8">{deviceId, role} — Rotate device token</text>
+  <text x="34" y="638" font-size="10" font-weight="bold" fill="#475569">device.token.revoke</text>
+  <text x="220" y="638" font-size="9" fill="#94a3b8">{deviceId, role} — Revoke device token</text>
+  <text x="34" y="662" font-size="9" fill="#94a3b8">Ed25519 device identity + per-device token management.</text>
+
+  <!-- ═══ LEGACY NODE PAIRING ═══ -->
+  <rect x="700" y="332" width="680" height="166" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="332" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="348" font-size="12" font-weight="bold" fill="#1d4ed8">Legacy Node Pairing</text>
+
+  <text x="714" y="372" font-size="10" font-weight="bold" fill="#475569">node.pair.request</text>
+  <text x="900" y="372" font-size="9" fill="#94a3b8">{nodeId, displayName, ...} — Request pairing</text>
+  <text x="714" y="390" font-size="10" font-weight="bold" fill="#475569">node.pair.list</text>
+  <text x="900" y="390" font-size="9" fill="#94a3b8">List pending node pairing requests</text>
+  <text x="714" y="408" font-size="10" font-weight="bold" fill="#475569">node.pair.approve</text>
+  <text x="900" y="408" font-size="9" fill="#94a3b8">{requestId} — Approve node pairing</text>
+  <text x="714" y="426" font-size="10" font-weight="bold" fill="#475569">node.pair.reject</text>
+  <text x="900" y="426" font-size="9" fill="#94a3b8">{requestId} — Reject node pairing</text>
+  <text x="714" y="444" font-size="10" font-weight="bold" fill="#475569">node.pair.verify</text>
+  <text x="900" y="444" font-size="9" fill="#94a3b8">{nodeId, token} — Verify node pairing</text>
+  <text x="714" y="470" font-size="9" fill="#94a3b8">Legacy pairing flow. Prefer device.pair.* for new integrations.</text>
+  <text x="714" y="490" font-size="9" fill="#94a3b8">Source: src/gateway/server/methods/node-pairing.ts</text>
+
+  <!-- ═══ EXEC APPROVALS ═══ -->
+  <rect x="700" y="508" width="680" height="198" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="508" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="524" font-size="12" font-weight="bold" fill="#1d4ed8">Exec Approvals</text>
+
+  <text x="714" y="548" font-size="10" font-weight="bold" fill="#475569">exec.approval.request</text>
+  <text x="930" y="548" font-size="9" fill="#94a3b8">Request approval for command execution</text>
+  <text x="714" y="566" font-size="10" font-weight="bold" fill="#475569">exec.approval.waitDecision</text>
+  <text x="930" y="566" font-size="9" fill="#94a3b8">{requestId, timeoutMs} — Wait for decision</text>
+  <text x="714" y="584" font-size="10" font-weight="bold" fill="#475569">exec.approval.resolve</text>
+  <text x="930" y="584" font-size="9" fill="#94a3b8">{requestId, decision} — Resolve approval</text>
+  <text x="714" y="602" font-size="10" font-weight="bold" fill="#475569">exec.approvals.get</text>
+  <text x="930" y="602" font-size="9" fill="#94a3b8">Get gateway-side exec approvals</text>
+  <text x="714" y="620" font-size="10" font-weight="bold" fill="#475569">exec.approvals.set</text>
+  <text x="930" y="620" font-size="9" fill="#94a3b8">Set gateway-side exec approvals</text>
+  <text x="714" y="638" font-size="10" font-weight="bold" fill="#475569">exec.approvals.node.get</text>
+  <text x="930" y="638" font-size="9" fill="#94a3b8">Get node-side exec approvals (via invoke)</text>
+  <text x="714" y="656" font-size="10" font-weight="bold" fill="#475569">exec.approvals.node.set</text>
+  <text x="930" y="656" font-size="9" fill="#94a3b8">Set node-side exec approvals (via invoke)</text>
+  <text x="714" y="682" font-size="9" fill="#94a3b8">Operator-safe wrappers around node exec approval files.</text>
+  <text x="714" y="698" font-size="9" fill="#94a3b8">node.get/set invoke system.execApprovals.* on the node.</text>
+
+  <!-- ═══ HEALTH & STATUS ═══ -->
+  <rect x="20" y="688" width="660" height="262" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="688" width="660" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="704" font-size="12" font-weight="bold" fill="#1d4ed8">Health &amp; Status</text>
+
+  <text x="34" y="728" font-size="10" font-weight="bold" fill="#475569">health</text>
+  <text x="180" y="728" font-size="9" fill="#94a3b8">Get health summary snapshot</text>
+  <text x="34" y="746" font-size="10" font-weight="bold" fill="#475569">status</text>
+  <text x="180" y="746" font-size="9" fill="#94a3b8">Get gateway status overview</text>
+  <text x="34" y="764" font-size="10" font-weight="bold" fill="#475569">doctor.memory.status</text>
+  <text x="180" y="764" font-size="9" fill="#94a3b8">Get memory usage diagnostics</text>
+  <text x="34" y="782" font-size="10" font-weight="bold" fill="#475569">channels.status</text>
+  <text x="180" y="782" font-size="9" fill="#94a3b8">Get all channel connection statuses</text>
+  <text x="34" y="800" font-size="10" font-weight="bold" fill="#475569">channels.logout</text>
+  <text x="180" y="800" font-size="9" fill="#94a3b8">{channelId} — Logout from a channel</text>
+  <text x="34" y="818" font-size="10" font-weight="bold" fill="#475569">usage.status</text>
+  <text x="180" y="818" font-size="9" fill="#94a3b8">Get API usage summary</text>
+  <text x="34" y="836" font-size="10" font-weight="bold" fill="#475569">usage.cost</text>
+  <text x="180" y="836" font-size="9" fill="#94a3b8">Get cost breakdown</text>
+  <text x="34" y="854" font-size="10" font-weight="bold" fill="#475569">logs.tail</text>
+  <text x="180" y="854" font-size="9" fill="#94a3b8">Tail gateway logs</text>
+  <text x="34" y="876" font-size="9" fill="#334155" font-weight="bold">Utility</text>
+  <text x="34" y="894" font-size="10" font-weight="bold" fill="#475569">system-presence</text>
+  <text x="180" y="894" font-size="9" fill="#94a3b8">Get connected clients presence list</text>
+  <text x="34" y="912" font-size="10" font-weight="bold" fill="#475569">system-event</text>
+  <text x="180" y="912" font-size="9" fill="#94a3b8">Emit a system event</text>
+  <text x="34" y="930" font-size="10" font-weight="bold" fill="#475569">last-heartbeat</text>
+  <text x="180" y="930" font-size="9" fill="#94a3b8">Get last heartbeat timestamp</text>
+  <text x="34" y="948" font-size="10" font-weight="bold" fill="#475569">set-heartbeats</text>
+  <text x="180" y="948" font-size="9" fill="#94a3b8">Configure custom heartbeat interval</text>
+
+  <!-- ═══ MODELS, TOOLS, AGENTS ═══ -->
+  <rect x="20" y="964" width="660" height="310" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="964" width="660" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="980" font-size="12" font-weight="bold" fill="#1d4ed8">Models, Tools &amp; Agents</text>
+
+  <text x="34" y="1004" font-size="10" font-weight="bold" fill="#475569">models.list</text>
+  <text x="200" y="1004" font-size="9" fill="#94a3b8">List available AI models</text>
+  <text x="34" y="1022" font-size="10" font-weight="bold" fill="#475569">tools.catalog</text>
+  <text x="200" y="1022" font-size="9" fill="#94a3b8">List all registered tools</text>
+  <text x="34" y="1040" font-size="10" font-weight="bold" fill="#475569">tools.effective</text>
+  <text x="200" y="1040" font-size="9" fill="#94a3b8">List effective tools for current context</text>
+
+  <text x="34" y="1064" font-size="9" fill="#334155" font-weight="bold">Agents</text>
+  <text x="34" y="1082" font-size="10" font-weight="bold" fill="#475569">agents.list</text>
+  <text x="200" y="1082" font-size="9" fill="#94a3b8">List all agents</text>
+  <text x="34" y="1100" font-size="10" font-weight="bold" fill="#475569">agents.create</text>
+  <text x="200" y="1100" font-size="9" fill="#94a3b8">Create a new agent</text>
+  <text x="34" y="1118" font-size="10" font-weight="bold" fill="#475569">agents.update</text>
+  <text x="200" y="1118" font-size="9" fill="#94a3b8">Update an existing agent</text>
+  <text x="34" y="1136" font-size="10" font-weight="bold" fill="#475569">agents.delete</text>
+  <text x="200" y="1136" font-size="9" fill="#94a3b8">Delete an agent</text>
+  <text x="34" y="1154" font-size="10" font-weight="bold" fill="#475569">agents.files.list</text>
+  <text x="200" y="1154" font-size="9" fill="#94a3b8">List agent files</text>
+  <text x="34" y="1172" font-size="10" font-weight="bold" fill="#475569">agents.files.get</text>
+  <text x="200" y="1172" font-size="9" fill="#94a3b8">Get agent file content</text>
+  <text x="34" y="1190" font-size="10" font-weight="bold" fill="#475569">agents.files.set</text>
+  <text x="200" y="1190" font-size="9" fill="#94a3b8">Set/update agent file content</text>
+
+  <text x="34" y="1214" font-size="9" fill="#334155" font-weight="bold">Skills</text>
+  <text x="34" y="1232" font-size="10" font-weight="bold" fill="#475569">skills.status</text>
+  <text x="200" y="1232" font-size="9" fill="#94a3b8">Get skill installation status</text>
+  <text x="34" y="1250" font-size="10" font-weight="bold" fill="#475569">skills.install</text>
+  <text x="200" y="1250" font-size="9" fill="#94a3b8">Install a skill binary</text>
+  <text x="34" y="1268" font-size="10" font-weight="bold" fill="#475569">skills.update</text>
+  <text x="200" y="1268" font-size="9" fill="#94a3b8">Update a skill binary</text>
+
+  <!-- ═══ TTS & VOICE ═══ -->
+  <rect x="700" y="720" width="680" height="262" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="720" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="736" font-size="12" font-weight="bold" fill="#1d4ed8">TTS &amp; Voice</text>
+
+  <text x="714" y="760" font-size="10" font-weight="bold" fill="#475569">tts.status</text>
+  <text x="870" y="760" font-size="9" fill="#94a3b8">Get TTS engine status</text>
+  <text x="714" y="778" font-size="10" font-weight="bold" fill="#475569">tts.providers</text>
+  <text x="870" y="778" font-size="9" fill="#94a3b8">List available TTS providers</text>
+  <text x="714" y="796" font-size="10" font-weight="bold" fill="#475569">tts.enable</text>
+  <text x="870" y="796" font-size="9" fill="#94a3b8">Enable TTS</text>
+  <text x="714" y="814" font-size="10" font-weight="bold" fill="#475569">tts.disable</text>
+  <text x="870" y="814" font-size="9" fill="#94a3b8">Disable TTS</text>
+  <text x="714" y="832" font-size="10" font-weight="bold" fill="#475569">tts.convert</text>
+  <text x="870" y="832" font-size="9" fill="#94a3b8">Convert text to speech</text>
+  <text x="714" y="850" font-size="10" font-weight="bold" fill="#475569">tts.setProvider</text>
+  <text x="870" y="850" font-size="9" fill="#94a3b8">Set active TTS provider</text>
+
+  <text x="714" y="874" font-size="9" fill="#334155" font-weight="bold">Voice &amp; Wake</text>
+  <text x="714" y="892" font-size="10" font-weight="bold" fill="#475569">talk.config</text>
+  <text x="870" y="892" font-size="9" fill="#94a3b8">Get talk mode configuration</text>
+  <text x="714" y="910" font-size="10" font-weight="bold" fill="#475569">talk.speak</text>
+  <text x="870" y="910" font-size="9" fill="#94a3b8">Speak text aloud on node</text>
+  <text x="714" y="928" font-size="10" font-weight="bold" fill="#475569">talk.mode</text>
+  <text x="870" y="928" font-size="9" fill="#94a3b8">Set talk mode (on/off)</text>
+  <text x="714" y="946" font-size="10" font-weight="bold" fill="#475569">voicewake.get</text>
+  <text x="870" y="946" font-size="9" fill="#94a3b8">Get voice wake configuration</text>
+  <text x="714" y="964" font-size="10" font-weight="bold" fill="#475569">voicewake.set</text>
+  <text x="870" y="964" font-size="9" fill="#94a3b8">Set voice wake configuration</text>
+  <text x="714" y="978" font-size="1" fill="#fafafa">.</text>
+
+  <!-- ═══ CRON & WIZARDS ═══ -->
+  <rect x="700" y="996" width="680" height="214" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="700" y="996" width="680" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="714" y="1012" font-size="12" font-weight="bold" fill="#1d4ed8">Cron &amp; Wizards</text>
+
+  <text x="714" y="1036" font-size="9" fill="#334155" font-weight="bold">Cron Jobs</text>
+  <text x="714" y="1054" font-size="10" font-weight="bold" fill="#475569">cron.list</text>
+  <text x="870" y="1054" font-size="9" fill="#94a3b8">List cron jobs</text>
+  <text x="714" y="1072" font-size="10" font-weight="bold" fill="#475569">cron.status</text>
+  <text x="870" y="1072" font-size="9" fill="#94a3b8">Get cron scheduler status</text>
+  <text x="714" y="1090" font-size="10" font-weight="bold" fill="#475569">cron.add</text>
+  <text x="870" y="1090" font-size="9" fill="#94a3b8">Add a new cron job</text>
+  <text x="714" y="1108" font-size="10" font-weight="bold" fill="#475569">cron.update</text>
+  <text x="870" y="1108" font-size="9" fill="#94a3b8">Update existing cron job</text>
+  <text x="714" y="1126" font-size="10" font-weight="bold" fill="#475569">cron.remove</text>
+  <text x="870" y="1126" font-size="9" fill="#94a3b8">Remove a cron job</text>
+  <text x="714" y="1144" font-size="10" font-weight="bold" fill="#475569">cron.run</text>
+  <text x="870" y="1144" font-size="9" fill="#94a3b8">Manually trigger a cron job</text>
+  <text x="714" y="1162" font-size="10" font-weight="bold" fill="#475569">cron.runs</text>
+  <text x="870" y="1162" font-size="9" fill="#94a3b8">List recent cron job runs</text>
+
+  <text x="714" y="1186" font-size="9" fill="#334155" font-weight="bold">Wizards</text>
+  <text x="714" y="1202" font-size="10" font-weight="bold" fill="#475569">wizard.start / wizard.next / wizard.cancel / wizard.status</text>
+
+  <!-- ═══ AGENT & OTHER ═══ -->
+  <rect x="20" y="1288" width="1360" height="326" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="1288" width="1360" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="1304" font-size="12" font-weight="bold" fill="#1d4ed8">Agent, Browser, Identity &amp; Other</text>
+
+  <text x="34" y="1328" font-size="9" fill="#334155" font-weight="bold">Agent Execution</text>
+  <text x="34" y="1346" font-size="10" font-weight="bold" fill="#475569">agent</text>
+  <text x="200" y="1346" font-size="9" fill="#94a3b8">{sessionKey, message} — Execute agent with message</text>
+  <text x="34" y="1364" font-size="10" font-weight="bold" fill="#475569">agent.wait</text>
+  <text x="200" y="1364" font-size="9" fill="#94a3b8">Wait for agent execution to complete</text>
+  <text x="34" y="1382" font-size="10" font-weight="bold" fill="#475569">agent.identity.get</text>
+  <text x="200" y="1382" font-size="9" fill="#94a3b8">Get current agent identity/persona</text>
+
+  <text x="34" y="1406" font-size="9" fill="#334155" font-weight="bold">Browser</text>
+  <text x="34" y="1424" font-size="10" font-weight="bold" fill="#475569">browser.request</text>
+  <text x="200" y="1424" font-size="9" fill="#94a3b8">Make a browser request (via node proxy)</text>
+
+  <text x="34" y="1448" font-size="9" fill="#334155" font-weight="bold">Gateway Identity &amp; Secrets</text>
+  <text x="34" y="1466" font-size="10" font-weight="bold" fill="#475569">gateway.identity.get</text>
+  <text x="200" y="1466" font-size="9" fill="#94a3b8">Get gateway identity info</text>
+  <text x="34" y="1484" font-size="10" font-weight="bold" fill="#475569">secrets.reload</text>
+  <text x="200" y="1484" font-size="9" fill="#94a3b8">Reload secrets from disk</text>
+  <text x="34" y="1502" font-size="10" font-weight="bold" fill="#475569">secrets.resolve</text>
+  <text x="200" y="1502" font-size="9" fill="#94a3b8">Resolve a named secret</text>
+
+  <text x="700" y="1328" font-size="9" fill="#334155" font-weight="bold">Wake &amp; Updates</text>
+  <text x="700" y="1346" font-size="10" font-weight="bold" fill="#475569">wake</text>
+  <text x="860" y="1346" font-size="9" fill="#94a3b8">Send APNS wake push to node</text>
+  <text x="700" y="1364" font-size="10" font-weight="bold" fill="#475569">update.run</text>
+  <text x="860" y="1364" font-size="9" fill="#94a3b8">Trigger gateway self-update</text>
+
+  <text x="700" y="1388" font-size="9" fill="#334155" font-weight="bold">Legacy</text>
+  <text x="700" y="1406" font-size="10" font-weight="bold" fill="#475569">send</text>
+  <text x="860" y="1406" font-size="9" fill="#94a3b8">Legacy send method</text>
+
+  <text x="700" y="1430" font-size="9" fill="#334155" font-weight="bold">Pending Queue (see Phase 4)</text>
+  <text x="700" y="1448" font-size="10" font-weight="bold" fill="#475569">node.pending.enqueue</text>
+  <text x="860" y="1448" font-size="9" fill="#94a3b8">Enqueue work for offline node</text>
+
+  <text x="34" y="1540" font-size="9" fill="#334155" font-weight="bold">Note:</text>
+  <text x="34" y="1558" font-size="9" fill="#94a3b8">All methods in this diagram require role="operator". Node-role connections can only call the 7 NODE_ROLE_METHODS</text>
+  <text x="34" y="1576" font-size="9" fill="#94a3b8">(connect, node.event, node.invoke.result, node.pending.drain, node.pending.ack, node.pending.pull,</text>
+  <text x="34" y="1594" font-size="9" fill="#94a3b8">node.canvas.capability.refresh, skills.bins). All other methods return authorization error for node role.</text>
+  <text x="34" y="1608" font-size="1" fill="#fafafa">.</text>
+</svg>

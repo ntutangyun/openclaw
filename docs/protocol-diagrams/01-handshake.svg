@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2060" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/></marker>
+    <marker id="ao" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ea580c"/></marker>
+  </defs>
+  <rect width="1400" height="2060" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Phase 1 — Connection Handshake</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Gateway challenges → Node authenticates → Gateway accepts with state snapshot</text>
+
+  <!-- Actors + lifelines -->
+  <rect x="190" y="64" width="80" height="24" rx="4" fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="230" y="81" text-anchor="middle" font-size="10" font-weight="bold" fill="#3730a3">Gateway</text>
+  <rect x="440" y="64" width="80" height="24" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="480" y="81" text-anchor="middle" font-size="10" font-weight="bold" fill="#92400e">Node</text>
+  <line x1="230" y1="88" x2="230" y2="300" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="480" y1="88" x2="480" y2="300" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Step 1 -->
+  <text x="20" y="116" font-size="9" fill="#64748b">WebSocket opens</text>
+  <line x1="230" y1="128" x2="472" y2="128" stroke="#ea580c" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ao)"/>
+  <text x="351" y="124" text-anchor="middle" font-size="9" font-weight="bold" fill="#c2410c">event: connect.challenge</text>
+
+  <!-- Step 2 -->
+  <line x1="472" y1="168" x2="238" y2="168" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="355" y="164" text-anchor="middle" font-size="9" font-weight="bold" fill="#1d4ed8">req: connect</text>
+  <text x="20" y="172" font-size="9" fill="#64748b">within 10s</text>
+
+  <!-- Step 3 -->
+  <line x1="230" y1="220" x2="472" y2="220" stroke="#16a34a" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="351" y="216" text-anchor="middle" font-size="9" font-weight="bold" fill="#15803d">res: hello-ok</text>
+
+  <text x="355" y="262" text-anchor="middle" font-size="9" fill="#16a34a">═══ CONNECTED ═══</text>
+  <text x="355" y="280" text-anchor="middle" font-size="8" fill="#94a3b8">Node stores deviceToken from hello-ok.auth</text>
+  <text x="355" y="294" text-anchor="middle" font-size="8" fill="#94a3b8">Gateway registers node in NodeRegistry (if role=node)</text>
+
+  <!-- ═══ MESSAGE 1: connect.challenge ═══ -->
+  <rect x="20" y="316" width="1360" height="114" rx="6" fill="#fff" stroke="#fdba74" stroke-width="1.5"/>
+  <rect x="20" y="316" width="1360" height="22" rx="6" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="34" y="332" font-size="12" font-weight="bold" fill="#c2410c">1. event: connect.challenge</text>
+  <text x="320" y="332" font-size="10" fill="#94a3b8">Gateway → Node (immediately on WebSocket open)</text>
+
+  <text x="34" y="358" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"event"</tspan>,  "event": <tspan fill="#059669">"connect.challenge"</tspan>,  "payload": {</text>
+  <text x="50" y="378" font-size="10"><tspan fill="#dc2626" font-weight="bold">"nonce"</tspan>:  <tspan fill="#059669">"a3f8c1d2-4b56-4e7f-9a1b-2c3d4e5f6a7b"</tspan>,     <tspan fill="#94a3b8">// str, randomUUID()</tspan></text>
+  <text x="50" y="398" font-size="10"><tspan fill="#dc2626" font-weight="bold">"ts"</tspan>:     <tspan fill="#2563eb">1711234567890</tspan>                                   <tspan fill="#94a3b8">// int, Date.now() milliseconds</tspan></text>
+  <text x="34" y="418" font-size="10" fill="#475569">} }</text>
+
+  <text x="750" y="358" font-size="9" fill="#334155" font-weight="bold">Purpose:</text>
+  <text x="750" y="374" font-size="9" fill="#94a3b8">Nonce is included in the node's device signature payload</text>
+  <text x="750" y="390" font-size="9" fill="#94a3b8">to prevent replay attacks. Node must echo this nonce back</text>
+  <text x="750" y="406" font-size="9" fill="#94a3b8">in device.nonce of the connect request.</text>
+  <text x="750" y="422" font-size="9" fill="#94a3b8">Source: src/gateway/server/ws-connection.ts</text>
+
+  <!-- ═══ MESSAGE 2: connect ═══ -->
+  <rect x="20" y="444" width="1360" height="880" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="444" width="1360" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="460" font-size="12" font-weight="bold" fill="#1d4ed8">2. req: connect</text>
+  <text x="200" y="460" font-size="10" fill="#94a3b8">Node → Gateway (must arrive within 10s handshake timeout)</text>
+
+  <text x="34" y="486" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"connect"</tspan>,  "params": {</text>
+
+  <!-- protocol -->
+  <text x="50" y="510" font-size="10"><tspan fill="#dc2626" font-weight="bold">"minProtocol"</tspan>:  <tspan fill="#2563eb">3</tspan>,          <tspan fill="#94a3b8">// int, minimum supported version. Currently always 3.</tspan></text>
+  <text x="50" y="528" font-size="10"><tspan fill="#dc2626" font-weight="bold">"maxProtocol"</tspan>:  <tspan fill="#2563eb">3</tspan>,          <tspan fill="#94a3b8">// int, maximum supported version. Currently always 3.</tspan></text>
+  <text x="870" y="510" font-size="9" fill="#94a3b8">Source: PROTOCOL_VERSION constant</text>
+  <text x="870" y="528" font-size="9" fill="#94a3b8">from src/gateway/protocol/index.ts</text>
+
+  <!-- client -->
+  <rect x="42" y="544" width="1326" height="200" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="50" y="562" font-size="10" font-weight="bold" fill="#334155">"client": {</text>
+  <text x="66" y="580" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:           <tspan fill="#059669">"node-host"</tspan>          <tspan fill="#94a3b8">// str, enum: "node-host"|"gateway-client"|"openclaw-macos"|"openclaw-ios"|</tspan></text>
+  <text x="66" y="596" font-size="10">                                    <tspan fill="#94a3b8">//       "openclaw-android"|"cli"|"webchat-ui"|"openclaw-control-ui"|</tspan></text>
+  <text x="66" y="612" font-size="10">                                    <tspan fill="#94a3b8">//       "webchat"|"test"|"fingerprint"|"openclaw-probe"</tspan></text>
+  <text x="66" y="632" font-size="10"><tspan fill="#64748b">"displayName"</tspan>:  <tspan fill="#059669">"My MacBook Pro"</tspan>    <tspan fill="#94a3b8">// str?, macOS: scutil --get ComputerName. Linux: os.hostname()</tspan></text>
+  <text x="66" y="650" font-size="10"><tspan fill="#dc2626" font-weight="bold">"version"</tspan>:      <tspan fill="#059669">"2026.3.12"</tspan>         <tspan fill="#94a3b8">// str, from package.json → build-info.json → env → "0.0.0"</tspan></text>
+  <text x="66" y="668" font-size="10"><tspan fill="#dc2626" font-weight="bold">"platform"</tspan>:     <tspan fill="#059669">"linux"</tspan>             <tspan fill="#94a3b8">// str, process.platform ("darwin"|"linux"|"win32"|"android")</tspan></text>
+  <text x="66" y="686" font-size="10"><tspan fill="#64748b">"deviceFamily"</tspan>: <tspan fill="#059669">"iPhone15,2"</tspan>        <tspan fill="#94a3b8">// str?, mobile device model identifier. undefined for desktop.</tspan></text>
+  <text x="66" y="704" font-size="10"><tspan fill="#dc2626" font-weight="bold">"mode"</tspan>:         <tspan fill="#059669">"node"</tspan>              <tspan fill="#94a3b8">// str, enum: "node"|"backend"|"cli"|"ui"|"webchat"|"probe"|"test"</tspan></text>
+  <text x="66" y="722" font-size="10"><tspan fill="#64748b">"instanceId"</tspan>:   <tspan fill="#059669">"b4e5f6..."</tspan>         <tspan fill="#94a3b8">// str?, nodeId for nodes, randomUUID() for UI clients</tspan></text>
+  <text x="50" y="740" font-size="10" fill="#475569">},</text>
+
+  <!-- caps, commands, permissions, pathEnv, role, scopes -->
+  <text x="50" y="764" font-size="10"><tspan fill="#64748b">"caps"</tspan>:        [<tspan fill="#059669">"system"</tspan>, <tspan fill="#059669">"browser"</tspan>],             <tspan fill="#94a3b8">// str[], "system" always, "browser" if proxy enabled</tspan></text>
+  <text x="50" y="782" font-size="10"><tspan fill="#64748b">"commands"</tspan>:    [<tspan fill="#059669">"system.run"</tspan>, <tspan fill="#059669">"system.run.prepare"</tspan>,  <tspan fill="#94a3b8">// str[]?, commands from NODE_SYSTEM_RUN_COMMANDS +</tspan></text>
+  <text x="50" y="800" font-size="10">                  <tspan fill="#059669">"system.which"</tspan>, <tspan fill="#059669">"system.execApprovals.get"</tspan>,  <tspan fill="#94a3b8">//   NODE_EXEC_APPROVALS_COMMANDS + browser.proxy</tspan></text>
+  <text x="50" y="818" font-size="10">                  <tspan fill="#059669">"system.execApprovals.set"</tspan>],</text>
+  <text x="50" y="838" font-size="10"><tspan fill="#64748b">"permissions"</tspan>: <tspan fill="#2563eb">undefined</tspan>,                       <tspan fill="#94a3b8">// Record&lt;str,bool&gt;?, node-host passes undefined</tspan></text>
+  <text x="50" y="856" font-size="10"><tspan fill="#64748b">"pathEnv"</tspan>:     <tspan fill="#059669">"/usr/local/bin:/usr/bin:/bin"</tspan>,    <tspan fill="#94a3b8">// str?, process.env.PATH on node host</tspan></text>
+  <text x="50" y="874" font-size="10"><tspan fill="#64748b">"role"</tspan>:        <tspan fill="#059669">"node"</tspan>,                            <tspan fill="#94a3b8">// str?, "node"|"operator" (default: "operator")</tspan></text>
+  <text x="50" y="892" font-size="10"><tspan fill="#64748b">"scopes"</tspan>:      [],                                 <tspan fill="#94a3b8">// str[], nodes: []. operators: ["operator.admin"]</tspan></text>
+
+  <!-- device -->
+  <rect x="42" y="908" width="1326" height="108" rx="4" fill="#fefce8" stroke="#fde68a"/>
+  <text x="50" y="926" font-size="10" font-weight="bold" fill="#334155">"device": {                                           <tspan font-weight="normal" fill="#94a3b8">// obj?, Ed25519 cryptographic identity. Required for nodes.</tspan></text>
+  <text x="66" y="944" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:        <tspan fill="#059669">"a1b2c3d4..."</tspan>       <tspan fill="#94a3b8">// str, SHA-256 hex of raw public key. Persisted: ~/.openclaw/identity/device.json</tspan></text>
+  <text x="66" y="962" font-size="10"><tspan fill="#dc2626" font-weight="bold">"publicKey"</tspan>: <tspan fill="#059669">"xYzABC..."</tspan>        <tspan fill="#94a3b8">// str, base64url raw Ed25519 pub key (32 bytes, SPKI prefix stripped)</tspan></text>
+  <text x="66" y="980" font-size="10"><tspan fill="#dc2626" font-weight="bold">"signature"</tspan>: <tspan fill="#059669">"sig123..."</tspan>        <tspan fill="#94a3b8">// str, base64url Ed25519 sig. Payload below. Max skew: ±2 min.</tspan></text>
+  <text x="66" y="998" font-size="10"><tspan fill="#dc2626" font-weight="bold">"signedAt"</tspan>:  <tspan fill="#2563eb">1711234567890</tspan>     <tspan fill="#94a3b8">// int, Date.now() when signature was created</tspan></text>
+  <text x="66" y="1016" font-size="10"><tspan fill="#dc2626" font-weight="bold">"nonce"</tspan>:     <tspan fill="#059669">"a3f8c1d2-..."</tspan>   <tspan fill="#94a3b8">// str, MUST match connect.challenge nonce</tspan></text>
+  <text x="50" y="1034" font-size="10" fill="#475569">},</text>
+
+  <!-- Signature payload -->
+  <rect x="42" y="1040" width="1326" height="32" rx="4" fill="#fef9c3" stroke="#fde68a"/>
+  <text x="50" y="1060" font-size="9" fill="#713f12" font-weight="bold">Signature payload (V3):</text>
+  <text x="240" y="1060" font-size="9" fill="#713f12">"v3|{deviceId}|{clientId}|{clientMode}|{role}|{scopes,joined}|{signedAtMs}|{token}|{nonce}|{platform}|{deviceFamily}"</text>
+
+  <!-- auth -->
+  <rect x="42" y="1080" width="1326" height="108" rx="4" fill="#fef2f2" stroke="#fecaca"/>
+  <text x="50" y="1098" font-size="10" font-weight="bold" fill="#334155">"auth": {                                             <tspan font-weight="normal" fill="#94a3b8">// obj?, undefined for unauthenticated local connections</tspan></text>
+  <text x="66" y="1116" font-size="10"><tspan fill="#64748b">"token"</tspan>:          <tspan fill="#059669">"gw-tok-..."</tspan>   <tspan fill="#94a3b8">// str?, shared gateway token (config) OR resolved device token (fallback)</tspan></text>
+  <text x="66" y="1134" font-size="10"><tspan fill="#64748b">"bootstrapToken"</tspan>: <tspan fill="#059669">"boot-..."</tspan>    <tspan fill="#94a3b8">// str?, single-use 10-min onboarding token from `openclaw qr`</tspan></text>
+  <text x="66" y="1152" font-size="10"><tspan fill="#64748b">"deviceToken"</tspan>:    <tspan fill="#059669">"dev-..."</tspan>     <tspan fill="#94a3b8">// str?, explicit per-device token (used in retry after token mismatch)</tspan></text>
+  <text x="66" y="1170" font-size="10"><tspan fill="#64748b">"password"</tspan>:       <tspan fill="#059669">"pw-..."</tspan>      <tspan fill="#94a3b8">// str?, shared gateway password (OPENCLAW_GATEWAY_PASSWORD / config)</tspan></text>
+  <text x="50" y="1188" font-size="10" fill="#475569">}</text>
+
+  <text x="34" y="1210" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="1234" font-size="9" fill="#334155" font-weight="bold">Auth Resolution Priority (selectConnectAuth):</text>
+  <text x="34" y="1250" font-size="9" fill="#475569">1. Explicit shared token (gateway.token / env)  →  auth.token</text>
+  <text x="34" y="1266" font-size="9" fill="#475569">2. Explicit password (gateway.password / env)    →  auth.password</text>
+  <text x="34" y="1282" font-size="9" fill="#475569">3. Stored device token (~/.openclaw/identity/device-auth.json)  →  auth.token (legacy compat)</text>
+  <text x="34" y="1298" font-size="9" fill="#475569">4. Bootstrap token (one-time from `openclaw qr`) →  auth.bootstrapToken</text>
+  <text x="34" y="1314" font-size="9" fill="#94a3b8">Only one primary mechanism is sent per attempt. Source: src/gateway/client.ts selectConnectAuth()</text>
+
+  <!-- ═══ MESSAGE 3: hello-ok ═══ -->
+  <rect x="20" y="1330" width="1360" height="716" rx="6" fill="#fff" stroke="#86efac" stroke-width="1.5"/>
+  <rect x="20" y="1330" width="1360" height="22" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="34" y="1346" font-size="12" font-weight="bold" fill="#15803d">3. res: hello-ok</text>
+  <text x="200" y="1346" font-size="10" fill="#94a3b8">Gateway → Node (connection accepted, full state snapshot)</text>
+
+  <text x="34" y="1372" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"res"</tspan>,  "id": <tspan fill="#059669">"&lt;matching-connect-id&gt;"</tspan>,  "ok": <tspan fill="#2563eb">true</tspan>,  "payload": {</text>
+
+  <text x="50" y="1396" font-size="10"><tspan fill="#dc2626" font-weight="bold">"type"</tspan>:     <tspan fill="#059669">"hello-ok"</tspan>,            <tspan fill="#94a3b8">// str literal</tspan></text>
+  <text x="50" y="1414" font-size="10"><tspan fill="#dc2626" font-weight="bold">"protocol"</tspan>: <tspan fill="#2563eb">3</tspan>,                      <tspan fill="#94a3b8">// int, negotiated version</tspan></text>
+
+  <!-- server -->
+  <rect x="42" y="1428" width="660" height="56" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="50" y="1446" font-size="10" font-weight="bold" fill="#334155">"server": {</text>
+  <text x="66" y="1464" font-size="10"><tspan fill="#dc2626" font-weight="bold">"version"</tspan>: <tspan fill="#059669">"2026.3.12"</tspan>,   <tspan fill="#94a3b8">// resolveRuntimeServiceVersion()</tspan></text>
+  <text x="66" y="1482" font-size="10"><tspan fill="#dc2626" font-weight="bold">"connId"</tspan>:  <tspan fill="#059669">"b4e5f6..."</tspan>    <tspan fill="#94a3b8">// randomUUID() at WS open</tspan></text>
+
+  <!-- features -->
+  <rect x="720" y="1428" width="648" height="56" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="728" y="1446" font-size="10" font-weight="bold" fill="#334155">"features": {</text>
+  <text x="744" y="1464" font-size="10"><tspan fill="#dc2626" font-weight="bold">"methods"</tspan>: [<tspan fill="#059669">"health"</tspan>,<tspan fill="#059669">"chat.send"</tspan>,<tspan fill="#059669">"node.invoke"</tspan>,...]  <tspan fill="#94a3b8">// ~115</tspan></text>
+  <text x="744" y="1482" font-size="10"><tspan fill="#dc2626" font-weight="bold">"events"</tspan>:  [<tspan fill="#059669">"tick"</tspan>,<tspan fill="#059669">"health"</tspan>,<tspan fill="#059669">"chat"</tspan>,<tspan fill="#059669">"agent"</tspan>,...]    <tspan fill="#94a3b8">// ~22</tspan></text>
+
+  <!-- snapshot -->
+  <rect x="42" y="1496" width="1326" height="196" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="50" y="1514" font-size="10" font-weight="bold" fill="#334155">"snapshot": {</text>
+  <text x="66" y="1534" font-size="10"><tspan fill="#dc2626" font-weight="bold">"presence"</tspan>:        <tspan fill="#94a3b8">// PresenceEntry[] — all connected clients</tspan></text>
+  <text x="82" y="1552" font-size="10">[{ <tspan fill="#059669">"host"</tspan>: <tspan fill="#059669">"MacBook"</tspan>, <tspan fill="#059669">"version"</tspan>: <tspan fill="#059669">"2026.3.12"</tspan>, <tspan fill="#059669">"platform"</tspan>: <tspan fill="#059669">"darwin"</tspan>, <tspan fill="#059669">"mode"</tspan>: <tspan fill="#059669">"node"</tspan>,</text>
+  <text x="98" y="1570" font-size="10"><tspan fill="#059669">"deviceId"</tspan>: <tspan fill="#059669">"a1b2..."</tspan>, <tspan fill="#059669">"roles"</tspan>: [<tspan fill="#059669">"node"</tspan>], <tspan fill="#059669">"ts"</tspan>: <tspan fill="#2563eb">1711234567890</tspan> }]</text>
+  <text x="66" y="1594" font-size="10"><tspan fill="#475569">"health"</tspan>:          {<tspan fill="#94a3b8">/* HealthSummary or {} if not cached yet */</tspan>}</text>
+  <text x="66" y="1614" font-size="10"><tspan fill="#dc2626" font-weight="bold">"stateVersion"</tspan>:    { <tspan fill="#059669">"presence"</tspan>: <tspan fill="#2563eb">5</tspan>, <tspan fill="#059669">"health"</tspan>: <tspan fill="#2563eb">3</tspan> }    <tspan fill="#94a3b8">// monotonic counters, in-memory</tspan></text>
+  <text x="66" y="1634" font-size="10"><tspan fill="#dc2626" font-weight="bold">"uptimeMs"</tspan>:        <tspan fill="#2563eb">123456</tspan>                             <tspan fill="#94a3b8">// Math.round(process.uptime()*1000)</tspan></text>
+  <text x="66" y="1656" font-size="10"><tspan fill="#64748b">"configPath"</tspan>:      <tspan fill="#059669">"~/.openclaw/config.json"</tspan>        <tspan fill="#94a3b8">// resolved config file location</tspan></text>
+  <text x="66" y="1674" font-size="10"><tspan fill="#64748b">"stateDir"</tspan>:        <tspan fill="#059669">"~/.openclaw"</tspan>                    <tspan fill="#94a3b8">// resolved state directory</tspan></text>
+  <text x="66" y="1692" font-size="10"><tspan fill="#64748b">"sessionDefaults"</tspan>: { defaultAgentId, mainKey, mainSessionKey, scope: <tspan fill="#059669">"per-sender"</tspan> }</text>
+  <text x="66" y="1710" font-size="10"><tspan fill="#64748b">"authMode"</tspan>:        <tspan fill="#059669">"token"</tspan>                          <tspan fill="#94a3b8">// "none"|"token"|"password"|"trusted-proxy"</tspan></text>
+  <text x="66" y="1728" font-size="10"><tspan fill="#64748b">"updateAvailable"</tspan>: { currentVersion: <tspan fill="#059669">"..."</tspan>, latestVersion: <tspan fill="#059669">"..."</tspan>, channel: <tspan fill="#059669">"stable"</tspan> }</text>
+  <text x="50" y="1746" font-size="10" fill="#475569">},</text>
+
+  <!-- canvasHostUrl -->
+  <text x="50" y="1772" font-size="10"><tspan fill="#64748b">"canvasHostUrl"</tspan>:  <tspan fill="#059669">"http://127.0.0.1:18789/__openclaw__/cap/abc123..."</tspan>  <tspan fill="#94a3b8">// str?, node-only</tspan></text>
+  <text x="50" y="1790" font-size="9" fill="#94a3b8">Capability token: randomBytes(18).base64url. Embedded in URL path. Expires in 10 min.</text>
+
+  <!-- auth -->
+  <rect x="42" y="1802" width="1326" height="76" rx="4" fill="#fef2f2" stroke="#fecaca"/>
+  <text x="50" y="1820" font-size="10" font-weight="bold" fill="#334155">"auth": {                                                  <tspan font-weight="normal" fill="#94a3b8">// obj?, only when device identity present</tspan></text>
+  <text x="66" y="1838" font-size="10"><tspan fill="#dc2626" font-weight="bold">"deviceToken"</tspan>:  <tspan fill="#059669">"xYz123..."</tspan>    <tspan fill="#94a3b8">// str, randomBytes(32).base64url — client stores to ~/.openclaw/identity/device-auth.json</tspan></text>
+  <text x="66" y="1856" font-size="10"><tspan fill="#dc2626" font-weight="bold">"role"</tspan>:         <tspan fill="#059669">"node"</tspan>          <tspan fill="#dc2626" font-weight="bold">"scopes"</tspan>: []          <tspan fill="#64748b">"issuedAtMs"</tspan>: <tspan fill="#2563eb">1711234567890</tspan></text>
+  <text x="50" y="1876" font-size="10" fill="#475569">},</text>
+  <text x="66" y="1896" font-size="9" fill="#94a3b8">Generated by ensureDeviceToken(). Returns existing token if valid, or generates new. Persisted in pairing DB.</text>
+
+  <!-- policy -->
+  <rect x="42" y="1908" width="1326" height="64" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="50" y="1926" font-size="10" font-weight="bold" fill="#334155">"policy": {</text>
+  <text x="66" y="1944" font-size="10"><tspan fill="#dc2626" font-weight="bold">"maxPayload"</tspan>: <tspan fill="#2563eb">26214400</tspan>  <tspan fill="#94a3b8">(25MB)</tspan>,   <tspan fill="#dc2626" font-weight="bold">"maxBufferedBytes"</tspan>: <tspan fill="#2563eb">52428800</tspan>  <tspan fill="#94a3b8">(50MB)</tspan>,   <tspan fill="#dc2626" font-weight="bold">"tickIntervalMs"</tspan>: <tspan fill="#2563eb">30000</tspan></text>
+  <text x="50" y="1962" font-size="10" fill="#475569">}</text>
+
+  <text x="34" y="1988" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="2012" font-size="9" fill="#334155" font-weight="bold">After hello-ok:</text>
+  <text x="34" y="2028" font-size="9" fill="#94a3b8">Client stores auth.deviceToken → disk. Starts tick watcher (close if no msg in tickIntervalMs×2).</text>
+  <text x="34" y="2044" font-size="9" fill="#94a3b8">Gateway registers node in NodeRegistry, records presence, sends voicewake.changed event, triggers health refresh.</text>
+</svg>

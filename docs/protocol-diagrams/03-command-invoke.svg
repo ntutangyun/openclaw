@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2540" font-family="Consolas,'Courier New',monospace" font-size="11">
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/></marker>
+    <marker id="ao" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ea580c"/></marker>
+  </defs>
+  <rect width="1400" height="2540" fill="#fafafa"/>
+  <text x="700" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#0f172a">Phase 3 — Command Invoke</text>
+  <text x="700" y="48" text-anchor="middle" font-size="11" fill="#64748b">Operator invokes a command on a node via the gateway. Streaming events + final result.</text>
+
+  <!-- Actors + lifelines -->
+  <rect x="30" y="66" width="70" height="22" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="65" y="82" text-anchor="middle" font-size="9" font-weight="bold" fill="#1e40af">Operator</text>
+  <rect x="210" y="66" width="70" height="22" rx="4" fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="245" y="82" text-anchor="middle" font-size="9" font-weight="bold" fill="#3730a3">Gateway</text>
+  <rect x="400" y="66" width="70" height="22" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="435" y="82" text-anchor="middle" font-size="9" font-weight="bold" fill="#92400e">Node</text>
+  <line x1="65" y1="88" x2="65" y2="380" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="245" y1="88" x2="245" y2="380" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="435" y1="88" x2="435" y2="380" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Step 1: Operator -> Gateway -->
+  <line x1="73" y1="116" x2="237" y2="116" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="155" y="112" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">req: node.invoke</text>
+
+  <!-- Step 2: Gateway -> Node (event) -->
+  <line x1="245" y1="152" x2="427" y2="152" stroke="#ea580c" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ao)"/>
+  <text x="336" y="148" text-anchor="middle" font-size="8" font-weight="bold" fill="#c2410c">event: node.invoke.request</text>
+
+  <!-- Step 3: Node -> Gateway (0..N streaming) -->
+  <line x1="427" y1="192" x2="253" y2="192" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="340" y="188" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">req: node.event (0..N)</text>
+  <text x="340" y="204" text-anchor="middle" font-size="7" fill="#94a3b8">streaming output events</text>
+
+  <!-- Step 4: Node -> Gateway (result) -->
+  <line x1="427" y1="240" x2="253" y2="240" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="340" y="236" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">req: node.invoke.result</text>
+
+  <!-- Step 5: Gateway -> Operator (response) -->
+  <line x1="237" y1="276" x2="73" y2="276" stroke="#16a34a" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="155" y="272" text-anchor="middle" font-size="8" font-weight="bold" fill="#15803d">res: {ok, payload}</text>
+
+  <text x="250" y="316" text-anchor="middle" font-size="8" fill="#94a3b8">If node offline, gateway attempts APNS wake with retry.</text>
+  <text x="250" y="332" text-anchor="middle" font-size="8" fill="#94a3b8">Commands "system.execApprovals.*" blocked via node.invoke.</text>
+  <text x="250" y="348" text-anchor="middle" font-size="8" fill="#94a3b8">Late results after timeout: gateway returns {ok:true, ignored:true}.</text>
+
+  <!-- ═══ MESSAGE 1: node.invoke ═══ -->
+  <rect x="20" y="390" width="1360" height="310" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="390" width="1360" height="22" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="34" y="406" font-size="12" font-weight="bold" fill="#1d4ed8">1. req: node.invoke</text>
+  <text x="220" y="406" font-size="10" fill="#94a3b8">Operator → Gateway</text>
+
+  <text x="34" y="432" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"node.invoke"</tspan>,  "params": {</text>
+
+  <text x="50" y="456" font-size="10"><tspan fill="#dc2626" font-weight="bold">"nodeId"</tspan>:          <tspan fill="#059669">"a1b2c3d4..."</tspan>         <tspan fill="#94a3b8">// str, target node device ID</tspan></text>
+  <text x="50" y="474" font-size="10"><tspan fill="#dc2626" font-weight="bold">"command"</tspan>:         <tspan fill="#059669">"system.run"</tspan>           <tspan fill="#94a3b8">// str, must be in node's allowlist</tspan></text>
+  <text x="50" y="492" font-size="10"><tspan fill="#64748b">"params"</tspan>:          { ... }                   <tspan fill="#94a3b8">// any?, command-specific payload</tspan></text>
+  <text x="50" y="510" font-size="10"><tspan fill="#64748b">"timeoutMs"</tspan>:       <tspan fill="#2563eb">30000</tspan>                    <tspan fill="#94a3b8">// int?, default 30000</tspan></text>
+  <text x="50" y="528" font-size="10"><tspan fill="#dc2626" font-weight="bold">"idempotencyKey"</tspan>:  <tspan fill="#059669">"c7d8e9f0-..."</tspan>        <tspan fill="#94a3b8">// str, client UUID for dedup</tspan></text>
+  <text x="34" y="548" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="576" font-size="9" fill="#334155" font-weight="bold">Allowed commands (node's advertised allowlist):</text>
+  <text x="34" y="594" font-size="9" fill="#475569">system.run, system.run.prepare, system.which, browser.proxy</text>
+  <text x="34" y="612" font-size="9" fill="#475569">system.execApprovals.get, system.execApprovals.set  <tspan fill="#dc2626">(blocked via node.invoke — use exec.approvals.* operator methods)</tspan></text>
+
+  <text x="34" y="640" font-size="9" fill="#334155" font-weight="bold">Response (from gateway after node completes):</text>
+  <text x="34" y="658" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"res"</tspan>, "id": <tspan fill="#059669">"..."</tspan>, "ok": <tspan fill="#2563eb">true</tspan>, "payload": { ... } }</text>
+  <text x="34" y="676" font-size="9" fill="#94a3b8">On timeout: gateway returns error. On APNS wake: gateway retries delivery to newly connected node.</text>
+  <text x="34" y="692" font-size="9" fill="#94a3b8">Source: src/gateway/server/methods/node-invoke.ts</text>
+
+  <!-- ═══ MESSAGE 2: node.invoke.request ═══ -->
+  <rect x="20" y="714" width="1360" height="262" rx="6" fill="#fff" stroke="#fdba74" stroke-width="1.5"/>
+  <rect x="20" y="714" width="1360" height="22" rx="6" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="34" y="730" font-size="12" font-weight="bold" fill="#c2410c">2. event: node.invoke.request</text>
+  <text x="310" y="730" font-size="10" fill="#94a3b8">Gateway → Node (EVENT frame, no wire-level response)</text>
+
+  <text x="34" y="756" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"event"</tspan>,  "event": <tspan fill="#059669">"node.invoke.request"</tspan>,  "payload": {</text>
+
+  <text x="50" y="780" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:              <tspan fill="#059669">"f1e2d3c4-..."</tspan>         <tspan fill="#94a3b8">// str, randomUUID() — correlation ID</tspan></text>
+  <text x="50" y="798" font-size="10"><tspan fill="#dc2626" font-weight="bold">"nodeId"</tspan>:          <tspan fill="#059669">"a1b2c3d4..."</tspan>          <tspan fill="#94a3b8">// str, target node device ID</tspan></text>
+  <text x="50" y="816" font-size="10"><tspan fill="#dc2626" font-weight="bold">"command"</tspan>:         <tspan fill="#059669">"system.run"</tspan>            <tspan fill="#94a3b8">// str, the command to execute</tspan></text>
+  <text x="50" y="834" font-size="10"><tspan fill="#64748b">"paramsJSON"</tspan>:      <tspan fill="#059669">"{ ... }"</tspan>               <tspan fill="#94a3b8">// str?, JSON.stringify(params) or null</tspan></text>
+  <text x="50" y="852" font-size="10"><tspan fill="#64748b">"timeoutMs"</tspan>:       <tspan fill="#2563eb">30000</tspan>                    <tspan fill="#94a3b8">// int?, passed through from operator</tspan></text>
+  <text x="50" y="870" font-size="10"><tspan fill="#64748b">"idempotencyKey"</tspan>:  <tspan fill="#059669">"c7d8e9f0-..."</tspan>         <tspan fill="#94a3b8">// str?, for dedup on node side</tspan></text>
+  <text x="34" y="890" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="918" font-size="9" fill="#334155" font-weight="bold">Important:</text>
+  <text x="34" y="936" font-size="9" fill="#94a3b8">This is an EVENT frame (not a request). No wire-level response is expected.</text>
+  <text x="34" y="952" font-size="9" fill="#94a3b8">Node responds asynchronously via node.invoke.result request. Streaming via node.event requests.</text>
+  <text x="34" y="968" font-size="9" fill="#94a3b8">Source: src/gateway/server/methods/node-invoke.ts → sendInvokeEvent()</text>
+
+  <!-- ═══ MESSAGE 3: node.event ═══ -->
+  <rect x="20" y="990" width="1360" height="278" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="990" width="1360" height="22" rx="6" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="34" y="1006" font-size="12" font-weight="bold" fill="#92400e">3. req: node.event</text>
+  <text x="220" y="1006" font-size="10" fill="#94a3b8">Node → Gateway (0..N during command execution, streaming output)</text>
+
+  <text x="34" y="1032" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"node.event"</tspan>,  "params": {</text>
+
+  <text x="50" y="1056" font-size="10"><tspan fill="#dc2626" font-weight="bold">"event"</tspan>:        <tspan fill="#059669">"system.run.output"</tspan>          <tspan fill="#94a3b8">// str, event type</tspan></text>
+  <text x="50" y="1074" font-size="10"><tspan fill="#64748b">"payload"</tspan>:      { ... }                       <tspan fill="#94a3b8">// any?, inline payload</tspan></text>
+  <text x="50" y="1092" font-size="10"><tspan fill="#64748b">"payloadJSON"</tspan>:  <tspan fill="#059669">"{ ... }"</tspan>                   <tspan fill="#94a3b8">// str?, preferred for large payloads (stringified JSON)</tspan></text>
+  <text x="34" y="1112" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="1140" font-size="9" fill="#334155" font-weight="bold">Response:</text>
+  <text x="34" y="1158" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"res"</tspan>, "id": <tspan fill="#059669">"..."</tspan>, "ok": <tspan fill="#2563eb">true</tspan> }   <tspan fill="#94a3b8">// always ack'd, best-effort delivery</tspan></text>
+
+  <text x="34" y="1186" font-size="9" fill="#334155" font-weight="bold">Common event types:</text>
+  <text x="34" y="1204" font-size="9" fill="#475569">system.run.output          <tspan fill="#94a3b8">— streaming stdout/stderr chunks during execution</tspan></text>
+  <text x="34" y="1222" font-size="9" fill="#475569">system.run.finished        <tspan fill="#94a3b8">— process completed (exitCode, timedOut, etc.)</tspan></text>
+  <text x="34" y="1240" font-size="9" fill="#475569">browser.proxy.response     <tspan fill="#94a3b8">— browser automation response chunks</tspan></text>
+  <text x="34" y="1260" font-size="9" fill="#94a3b8">Gateway forwards events to subscribed operators as session.message broadcasts.</text>
+
+  <!-- ═══ MESSAGE 4: node.invoke.result ═══ -->
+  <rect x="20" y="1282" width="1360" height="310" rx="6" fill="#fff" stroke="#93c5fd" stroke-width="1.5"/>
+  <rect x="20" y="1282" width="1360" height="22" rx="6" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="34" y="1298" font-size="12" font-weight="bold" fill="#92400e">4. req: node.invoke.result</text>
+  <text x="280" y="1298" font-size="10" fill="#94a3b8">Node → Gateway (final result of command execution)</text>
+
+  <text x="34" y="1324" font-size="10" fill="#475569">{ "type": <tspan fill="#059669">"req"</tspan>,  "id": <tspan fill="#059669">"&lt;uuid&gt;"</tspan>,  "method": <tspan fill="#059669">"node.invoke.result"</tspan>,  "params": {</text>
+
+  <text x="50" y="1348" font-size="10"><tspan fill="#dc2626" font-weight="bold">"id"</tspan>:           <tspan fill="#059669">"f1e2d3c4-..."</tspan>              <tspan fill="#94a3b8">// str, MUST match invoke request correlation ID</tspan></text>
+  <text x="50" y="1366" font-size="10"><tspan fill="#dc2626" font-weight="bold">"nodeId"</tspan>:       <tspan fill="#059669">"a1b2c3d4..."</tspan>               <tspan fill="#94a3b8">// str, MUST match caller device ID (spoofing check)</tspan></text>
+  <text x="50" y="1384" font-size="10"><tspan fill="#dc2626" font-weight="bold">"ok"</tspan>:           <tspan fill="#2563eb">true</tspan>                          <tspan fill="#94a3b8">// bool, success or failure</tspan></text>
+  <text x="50" y="1402" font-size="10"><tspan fill="#64748b">"payload"</tspan>:      { ... }                        <tspan fill="#94a3b8">// any?, inline result data</tspan></text>
+  <text x="50" y="1420" font-size="10"><tspan fill="#64748b">"payloadJSON"</tspan>:  <tspan fill="#059669">"{ ... }"</tspan>                    <tspan fill="#94a3b8">// str?, alternative stringified result</tspan></text>
+  <text x="50" y="1438" font-size="10"><tspan fill="#64748b">"error"</tspan>:        {                              <tspan fill="#94a3b8">// obj?, only when ok=false</tspan></text>
+  <text x="66" y="1456" font-size="10"><tspan fill="#64748b">"code"</tspan>:    <tspan fill="#059669">"EXEC_FAILED"</tspan>,   <tspan fill="#64748b">"message"</tspan>: <tspan fill="#059669">"Process exited with code 1"</tspan></text>
+  <text x="50" y="1474" font-size="10" fill="#475569">}</text>
+  <text x="34" y="1494" font-size="10" fill="#475569">} }</text>
+
+  <text x="34" y="1522" font-size="9" fill="#334155" font-weight="bold">Response from gateway:</text>
+  <text x="34" y="1540" font-size="10" fill="#475569">Normal:   { "ok": <tspan fill="#2563eb">true</tspan> }</text>
+  <text x="34" y="1558" font-size="10" fill="#475569">Late:     { "ok": <tspan fill="#2563eb">true</tspan>, "ignored": <tspan fill="#2563eb">true</tspan> }   <tspan fill="#94a3b8">// result arrived after timeout</tspan></text>
+  <text x="34" y="1576" font-size="10" fill="#475569">Mismatch: error <tspan fill="#059669">"nodeId mismatch"</tspan>         <tspan fill="#94a3b8">// nodeId does not match caller's device ID</tspan></text>
+
+  <!-- ═══ COMMAND DISPATCH REFERENCE ═══ -->
+  <rect x="20" y="1606" width="1360" height="320" rx="6" fill="#fff" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect x="20" y="1606" width="1360" height="22" rx="6" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="34" y="1622" font-size="12" font-weight="bold" fill="#334155">Command Dispatch Reference</text>
+  <text x="300" y="1622" font-size="10" fill="#94a3b8">What each invokable command does on the node</text>
+
+  <!-- system.run.prepare -->
+  <text x="34" y="1652" font-size="10" font-weight="bold" fill="#1d4ed8">system.run.prepare</text>
+  <text x="34" y="1670" font-size="9" fill="#475569">Resolves command path, checks exec approvals before running.</text>
+  <text x="34" y="1688" font-size="9" fill="#94a3b8">Returns: { argv: str[], cwd: str, env: obj, security: obj }</text>
+
+  <!-- system.run -->
+  <text x="34" y="1716" font-size="10" font-weight="bold" fill="#1d4ed8">system.run</text>
+  <text x="34" y="1734" font-size="9" fill="#475569">Spawns child process. Streams output via node.event during execution.</text>
+  <text x="34" y="1752" font-size="9" fill="#94a3b8">Returns: { exitCode: int, stdout: str, stderr: str, truncated: bool, timedOut: bool }</text>
+
+  <!-- system.which -->
+  <text x="34" y="1780" font-size="10" font-weight="bold" fill="#1d4ed8">system.which</text>
+  <text x="34" y="1798" font-size="9" fill="#475569">Resolves binary paths via PATH environment variable.</text>
+  <text x="34" y="1816" font-size="9" fill="#94a3b8">Returns: { bins: [{ name: str, path: str, exists: bool }] }</text>
+
+  <!-- system.execApprovals.get -->
+  <text x="700" y="1652" font-size="10" font-weight="bold" fill="#1d4ed8">system.execApprovals.get</text>
+  <text x="700" y="1670" font-size="9" fill="#475569">Reads exec approvals file from node.</text>
+  <text x="700" y="1688" font-size="9" fill="#94a3b8">Returns: { path: str, exists: bool, hash: str, file: str }</text>
+
+  <!-- system.execApprovals.set -->
+  <text x="700" y="1716" font-size="10" font-weight="bold" fill="#1d4ed8">system.execApprovals.set</text>
+  <text x="700" y="1734" font-size="9" fill="#475569">Writes exec approvals to node.</text>
+  <text x="700" y="1752" font-size="9" fill="#94a3b8">Returns: { path: str, exists: bool, hash: str, file: str }</text>
+
+  <!-- browser.proxy -->
+  <text x="700" y="1780" font-size="10" font-weight="bold" fill="#1d4ed8">browser.proxy</text>
+  <text x="700" y="1798" font-size="9" fill="#475569">Browser automation — proxied request/response via headless browser.</text>
+  <text x="700" y="1816" font-size="9" fill="#94a3b8">Returns: proxied response (varies by request)</text>
+
+  <text x="34" y="1848" font-size="9" fill="#334155" font-weight="bold">Security note:</text>
+  <text x="34" y="1866" font-size="9" fill="#94a3b8">system.execApprovals.get and system.execApprovals.set are advertised in node's commands list</text>
+  <text x="34" y="1884" font-size="9" fill="#94a3b8">but BLOCKED when invoked via node.invoke. Use operator-side exec.approvals.node.get/set instead.</text>
+  <text x="34" y="1902" font-size="9" fill="#94a3b8">This prevents direct manipulation of exec approvals via the generic invoke path.</text>
+  <text x="34" y="1918" font-size="9" fill="#94a3b8">Source: src/gateway/server/methods/node-invoke.ts, src/node/commands/</text>
+</svg>
