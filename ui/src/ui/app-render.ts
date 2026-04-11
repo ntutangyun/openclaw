@@ -2020,6 +2020,7 @@ export function renderApp(state: AppViewState) {
                 autoScroll: state.protocolAutoScroll,
                 disabledTypes: state.protocolDisabledTypes,
                 subTab: state.protocolSubTab,
+                modelFilter: state.protocolModelFilter,
                 usageTotals: state.usageResult?.totals ?? null,
                 usageAggregates: state.usageResult?.aggregates ?? null,
                 usageSessions: state.usageResult?.sessions ?? [],
@@ -2031,6 +2032,7 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadProtocolTraces(state),
                 onExport: () => exportProtocolTraces(state),
                 onReset: () => clearProtocolTraces(state),
+                onModelFilterChange: (model) => (state.protocolModelFilter = model),
                 onToggleType: (key) => {
                   const next = new Set(state.protocolDisabledTypes);
                   if (next.has(key)) {

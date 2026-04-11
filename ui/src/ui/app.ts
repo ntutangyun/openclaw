@@ -501,6 +501,7 @@ export class OpenClawApp extends LitElement {
   @state() protocolAutoScroll = true;
   @state() protocolDisabledTypes: Set<string> = new Set(DEFAULT_DISABLED_TYPES);
   @state() protocolSubTab: "protocol" | "settings" = "protocol";
+  @state() protocolModelFilter: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;

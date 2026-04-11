@@ -21,6 +21,9 @@ import {
   computeNetworkStats,
   extractChatMessages,
   extractToolCalls,
+  extractModels,
+  buildRunModelMap,
+  filterTracesByModel,
 } from "../controllers/protocol-monitor.ts";
 import { renderProtocolMonitorDetail } from "./protocol-monitor-detail.ts";
 import {
@@ -44,6 +47,7 @@ export type ProtocolMonitorProps = {
   autoScroll: boolean;
   disabledTypes: Set<string>;
   subTab: ProtocolMonitorSubTab;
+  modelFilter: string | null;
   usageTotals: UsageTotals | null;
   usageAggregates: UsageAggregates | null;
   usageSessions: unknown[];
@@ -56,6 +60,7 @@ export type ProtocolMonitorProps = {
   onExport: () => void;
   onReset: () => void;
   onToggleType: (key: string) => void;
+  onModelFilterChange: (model: string | null) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -678,11 +683,14 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
 }
 
 function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResult {
-  const filtered = filterTraces(props.traces, props.disabledTypes);
+  const allModels = extractModels(props.traces);
+  const runModelMap = buildRunModelMap(props.traces);
+  const modelFiltered = filterTracesByModel(props.traces, props.modelFilter, runModelMap);
+  const filtered = filterTraces(modelFiltered, props.disabledTypes);
   const coalesced = coalesceTraces(filtered);
-  const netStats = computeNetworkStats(props.traces);
-  const chatMessages = extractChatMessages(props.traces).slice(-5);
-  const toolCalls = extractToolCalls(props.traces).slice(-5);
+  const netStats = computeNetworkStats(modelFiltered, props.modelFilter, runModelMap);
+  const chatMessages = extractChatMessages(modelFiltered).slice(-5);
+  const toolCalls = extractToolCalls(modelFiltered).slice(-5);
   return html`
     <div class="pm-protocol-layout">
       <!-- Left half: messages, tool calls, sequence diagram -->
@@ -716,14 +724,42 @@ function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResu
           ${renderSequenceDiagram(coalesced, props)}
         </div>
       </div>
-      <!-- Right half: usage, network, latency (scrolls independently) -->
+      <!-- Right half: model filter, usage, network, latency -->
       <div class="pm-right-half">
+        ${renderModelFilter(allModels, props)}
         <div class="pm-usage-banner">${renderUsageOverview(props)}</div>
         <div class="pm-right-cols">
           <div class="pm-stats-col">${renderNetworkCombined(netStats)}</div>
           <div class="pm-stats-col">${renderLatencyCombined(netStats)}</div>
         </div>
       </div>
+    </div>
+  `;
+}
+
+function renderModelFilter(models: string[], props: ProtocolMonitorProps): TemplateResult {
+  if (models.length === 0) {
+    return html``;
+  }
+  return html`
+    <div class="pm-model-filter">
+      <span class="pm-model-filter-label">Model:</span>
+      <button
+        class="pm-model-btn ${props.modelFilter === null ? "active" : ""}"
+        @click=${() => props.onModelFilterChange(null)}
+      >
+        All
+      </button>
+      ${models.map(
+        (m) => html`
+          <button
+            class="pm-model-btn ${props.modelFilter === m ? "active" : ""}"
+            @click=${() => props.onModelFilterChange(m)}
+          >
+            ${m}
+          </button>
+        `,
+      )}
     </div>
   `;
 }
@@ -807,13 +843,29 @@ function renderToolCallCards(calls: ToolCallMessage[]): TemplateResult {
 // ---------------------------------------------------------------------------
 
 function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
-  const totals = props.usageTotals;
   const agg = props.usageAggregates;
 
-  if (props.usageLoading && !totals) {
+  if (props.usageLoading && !props.usageTotals) {
     return html`<div class="pm-stats-bar">
       <span class="pm-muted">Loading usage data...</span>
     </div>`;
+  }
+
+  // When a model filter is active, use the per-model breakdown from aggregates
+  const modelFilter = props.modelFilter;
+  let totals = props.usageTotals;
+  if (modelFilter && agg) {
+    const byModel = (agg as Record<string, unknown>).byModel as
+      | Array<{ provider?: string; model?: string; count: number; totals: Record<string, unknown> }>
+      | undefined;
+    if (byModel) {
+      const match = byModel.find(
+        (m) => m.model === modelFilter || `${m.provider ?? ""}/${m.model ?? ""}` === modelFilter,
+      );
+      if (match) {
+        totals = match.totals as typeof totals;
+      }
+    }
   }
 
   // Compute insight stats from usage data
@@ -842,8 +894,13 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
   const cacheTone = cacheHitRate > 60 ? "good" : cacheHitRate > 30 ? "warn" : "bad";
   const errorTone = errorRate > 5 ? "bad" : errorRate > 1 ? "warn" : "good";
 
+  const modelLabel = modelFilter
+    ? html`<span class="pm-model-filter-active">${modelFilter}</span>`
+    : nothing;
+
   return html`
     <div class="pm-overview">
+      <div class="pm-filters-title">Usage Overview ${modelLabel}</div>
       <div class="pm-overview-grid">
         ${usageCard(
           "Messages",
@@ -2023,6 +2080,54 @@ const STYLES = /* css */ `
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+  }
+  .pm-model-filter {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid #d4d8e8;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .pm-model-filter-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6b7280;
+    margin-right: 4px;
+  }
+  .pm-model-btn {
+    background: #ffffff;
+    color: #374151;
+    border: 1px solid #d4d8e8;
+    border-radius: 12px;
+    padding: 2px 10px;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+    font-weight: 500;
+    transition: all 0.1s;
+  }
+  .pm-model-btn:hover {
+    background: #eef0f6;
+    border-color: #93a3c0;
+  }
+  .pm-model-btn.active {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+    font-weight: 600;
+  }
+  .pm-model-filter-active {
+    font-size: 9px;
+    font-weight: 600;
+    background: #2563eb;
+    color: #ffffff;
+    padding: 1px 8px;
+    border-radius: 8px;
+    margin-left: 6px;
   }
   .pm-usage-banner {
     padding: 8px;

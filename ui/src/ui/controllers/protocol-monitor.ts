@@ -91,6 +91,7 @@ export type LatencySample = {
   ts: number;
   latencyMs: number;
   label?: string;
+  model?: string;
 };
 
 export type LatencyStats = {
@@ -101,6 +102,66 @@ export type LatencyStats = {
   peakMs: number | null;
   count: number;
 };
+
+// ---------------------------------------------------------------------------
+// Model tracking — extract active model from lifecycle events per runId
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a map of runId → model name from lifecycle events in the trace buffer.
+ * Each lifecycle start/request event carries the model name.
+ */
+export function buildRunModelMap(traces: ProtocolTraceRecord[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const t of traces) {
+    if (!t.runId || t.kind !== "event" || t.stream !== "lifecycle") {
+      continue;
+    }
+    const p = t.payload as Record<string, unknown> | undefined;
+    const data = p?.data && typeof p.data === "object" ? (p.data as Record<string, unknown>) : p;
+    if (!data) {
+      continue;
+    }
+    const model = data.model ?? data.activeModel ?? data.selectedModel;
+    if (typeof model === "string" && model.trim()) {
+      map.set(t.runId, model.trim());
+    }
+  }
+  return map;
+}
+
+/**
+ * Extract the list of distinct models seen in the trace buffer.
+ */
+export function extractModels(traces: ProtocolTraceRecord[]): string[] {
+  const models = new Set<string>();
+  const runModelMap = buildRunModelMap(traces);
+  for (const model of runModelMap.values()) {
+    models.add(model);
+  }
+  return [...models].toSorted();
+}
+
+/**
+ * Filter traces to only those associated with a specific model.
+ * Traces without a runId (e.g., operator↔gateway RPC) are always included.
+ * Traces with a runId are included only if that run used the specified model.
+ */
+export function filterTracesByModel(
+  traces: ProtocolTraceRecord[],
+  model: string | null,
+  runModelMap: Map<string, string>,
+): ProtocolTraceRecord[] {
+  if (!model) {
+    return traces;
+  }
+  return traces.filter((t) => {
+    if (!t.runId) {
+      return true; // Non-run traces (RPC, etc.) always included
+    }
+    return runModelMap.get(t.runId) === model;
+  });
+}
 
 export type DirectionalThroughputSamples = {
   combined: ThroughputSample[];
@@ -420,7 +481,11 @@ export function computeMessageTypes(
 
 const THROUGHPUT_BUCKET_MS = 2000;
 
-export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats {
+export function computeNetworkStats(
+  traces: ProtocolTraceRecord[],
+  modelFilter?: string | null,
+  runModelMap?: Map<string, string>,
+): NetworkStats {
   let totalBytesIn = 0;
   let totalBytesOut = 0;
 
@@ -497,8 +562,11 @@ export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats
     operatorGateway: toDirectional(ogCombined, ogFwd, ogRev),
     agentLlm: toDirectional(alCombined, alFwd, alRev),
     gatewayNode: toDirectional(gnCombined, gnFwd, gnRev),
-    agentLlmTtft: computeAgentLlmTtft(traces),
-    agentLlmGeneration: computeAgentLlmGeneration(traces),
+    agentLlmTtft: filterLatencyByModel(computeAgentLlmTtft(traces, runModelMap), modelFilter),
+    agentLlmGeneration: filterLatencyByModel(
+      computeAgentLlmGeneration(traces, runModelMap),
+      modelFilter,
+    ),
     gatewayNodeLatency: computeGatewayNodeLatency(traces),
   };
 }
@@ -506,6 +574,14 @@ export function computeNetworkStats(traces: ProtocolTraceRecord[]): NetworkStats
 // ---------------------------------------------------------------------------
 // Latency computation helpers
 // ---------------------------------------------------------------------------
+
+function filterLatencyByModel(stats: LatencyStats, modelFilter?: string | null): LatencyStats {
+  if (!modelFilter) {
+    return stats;
+  }
+  const filtered = stats.samples.filter((s) => !s.model || s.model === modelFilter);
+  return buildLatencyStats(filtered);
+}
 
 function buildLatencyStats(samples: LatencySample[]): LatencyStats {
   if (samples.length === 0) {
@@ -564,6 +640,7 @@ type GenRunState = {
   /** Trace id of the last assistant event in the current burst. */
   burstLastId: string | null;
   callIndex: number;
+  runId?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -607,7 +684,10 @@ function trimProcessedSet(processed: Set<string>) {
  * Uses a persistent cache so samples survive trace buffer eviction.
  * Only processes traces not yet seen (by trace id).
  */
-function computeAgentLlmTtft(traces: ProtocolTraceRecord[]): LatencyStats {
+function computeAgentLlmTtft(
+  traces: ProtocolTraceRecord[],
+  runModelMap?: Map<string, string>,
+): LatencyStats {
   for (const t of traces) {
     if (ttftProcessed.has(t.id)) {
       continue;
@@ -665,6 +745,7 @@ function computeAgentLlmTtft(traces: ProtocolTraceRecord[]): LatencyStats {
             ts: t.ts,
             latencyMs: ttft,
             label: `TTFT #${state.callIndex}`,
+            model: t.runId ? runModelMap?.get(t.runId) : undefined,
           });
         }
       } else if (!state.inBurst) {
@@ -694,7 +775,10 @@ function computeAgentLlmTtft(traces: ProtocolTraceRecord[]): LatencyStats {
  * Uses a persistent cache so samples survive trace buffer eviction.
  * Only processes traces not yet seen (by trace id).
  */
-function computeAgentLlmGeneration(traces: ProtocolTraceRecord[]): LatencyStats {
+function computeAgentLlmGeneration(
+  traces: ProtocolTraceRecord[],
+  runModelMap?: Map<string, string>,
+): LatencyStats {
   const flushBurst = (state: GenRunState) => {
     if (state.burstStartTs !== null && state.burstLastTs !== null) {
       const duration = state.burstLastTs - state.burstStartTs;
@@ -703,16 +787,18 @@ function computeAgentLlmGeneration(traces: ProtocolTraceRecord[]): LatencyStats 
           ts: state.burstLastTs,
           latencyMs: duration,
           label: `gen #${state.callIndex}`,
+          model: state.runId ? runModelMap?.get(state.runId) : undefined,
         });
       }
     }
   };
 
-  const initGenState = (): GenRunState => ({
+  const initGenState = (runId?: string): GenRunState => ({
     burstStartTs: null,
     burstLastTs: null,
     burstLastId: null,
     callIndex: 0,
+    runId,
   });
 
   for (const t of traces) {
@@ -727,7 +813,7 @@ function computeAgentLlmGeneration(traces: ProtocolTraceRecord[]): LatencyStats 
 
     // Lifecycle start: begin tracking
     if (t.stream === "lifecycle" && resolvePhase(t.payload) === "start") {
-      genRunState.set(t.runId, initGenState());
+      genRunState.set(t.runId, initGenState(t.runId));
       continue;
     }
 
@@ -735,7 +821,7 @@ function computeAgentLlmGeneration(traces: ProtocolTraceRecord[]): LatencyStats 
     if (t.stream === "assistant") {
       let state = genRunState.get(t.runId);
       if (!state) {
-        state = initGenState();
+        state = initGenState(t.runId);
         genRunState.set(t.runId, state);
       }
       if (state.burstStartTs === null) {
@@ -779,6 +865,7 @@ function computeAgentLlmGeneration(traces: ProtocolTraceRecord[]): LatencyStats 
           ts: state.burstLastTs,
           latencyMs: duration,
           label: `gen #${state.callIndex} (live)`,
+          model: state.runId ? runModelMap?.get(state.runId) : undefined,
         });
       }
     }
@@ -974,20 +1061,19 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
 }
 
 export function exportProtocolTraces(host: ProtocolMonitorHost) {
-  const wsUrl = (host as Record<string, unknown>).settings as { gatewayUrl?: string } | undefined;
-  const gwUrl = wsUrl?.gatewayUrl;
-  let base = "";
-  if (gwUrl) {
-    try {
-      const u = new URL(gwUrl);
-      u.protocol = u.protocol === "wss:" ? "https:" : "http:";
-      base = u.origin;
-    } catch {
-      // fall through to same-origin
-    }
+  // Export traces from the in-memory buffer as a JSONL download.
+  // This avoids the HTTP auth/CORS issue with the /protocol-traces/export endpoint.
+  const traces = host.protocolTraces;
+  if (traces.length === 0) {
+    return;
   }
+  const lines = traces.map((t) => JSON.stringify(t)).join("\n");
+  const blob = new Blob([lines], { type: "application/x-ndjson" });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const blobUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = `${base}/protocol-traces/export`;
-  a.download = "";
+  a.href = blobUrl;
+  a.download = `protocol-traces-${ts}.jsonl`;
   a.click();
+  URL.revokeObjectURL(blobUrl);
 }
