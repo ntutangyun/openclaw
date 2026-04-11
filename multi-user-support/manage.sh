@@ -39,11 +39,16 @@ Info:
   token     <username>                              Show gateway token for a user
   info      <username>                              Show connection details
 
+Ollama:
+  sync-ollama <username> [ollama-host]                  Sync Ollama models to user gateway
+  list-ollama [ollama-host]                             List available Ollama models
+
 Environment variables:
   OPENCLAW_IMAGE              Docker image (default: openclaw:local)
   OPENCLAW_MULTI_BASE_PORT    Base port for auto-assignment (default: 19000)
   OPENCLAW_EXTENSIONS         Space-separated extensions to include in build
   OPENCLAW_VARIANT            Image variant: "default" or "slim"
+  OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
 EOF
   exit 1
 }
@@ -209,7 +214,7 @@ services:
     command:
       [
         "node",
-        "--max-old-space-size=2048",
+        "--max-old-space-size=4096",
         "dist/index.js",
         "gateway",
         "--bind",
@@ -217,8 +222,6 @@ services:
         "--port",
         "18789",
         "--verbose",
-        "--ws-log",
-        "full",
       ]
     healthcheck:
       test:
@@ -907,6 +910,208 @@ cmd_info() {
   echo "  $(basename "$0") logs ${username} -f"
 }
 
+# ── Ollama ────────────────────────────────────────────────────
+
+# Resolve the Ollama API base URL.
+# Priority: argument > OLLAMA_HOST env > default localhost.
+resolve_ollama_host() {
+  local arg="${1:-}"
+  if [[ -n "$arg" ]]; then
+    echo "$arg"
+  elif [[ -n "${OLLAMA_HOST:-}" ]]; then
+    echo "$OLLAMA_HOST"
+  else
+    echo "http://localhost:11434"
+  fi
+}
+
+# Resolve the Ollama URL reachable from inside Docker containers.
+# The host's localhost isn't reachable from Docker; use the Docker bridge gateway IP.
+resolve_ollama_docker_url() {
+  local host_url="$1"
+  local bridge_ip
+  bridge_ip="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || echo "172.17.0.1")"
+  # Replace localhost / 127.0.0.1 with the bridge IP using Python for reliability
+  python3 -c "
+import sys, re
+url = sys.argv[1]
+bridge = sys.argv[2]
+url = re.sub(r'://localhost([:/]|$)', '://' + bridge + r'\1', url)
+url = re.sub(r'://127\.0\.0\.1([:/]|$)', '://' + bridge + r'\1', url)
+print(url)
+" "$host_url" "$bridge_ip"
+}
+
+# Query Ollama for available models and return JSON array.
+query_ollama_models() {
+  local ollama_url="$1"
+  curl -sf --connect-timeout 5 "${ollama_url}/api/tags" 2>/dev/null \
+    || { echo ""; return 1; }
+}
+
+cmd_list_ollama() {
+  local ollama_url
+  ollama_url="$(resolve_ollama_host "${1:-}")"
+
+  echo "==> Querying Ollama at ${ollama_url}"
+  local raw
+  raw="$(query_ollama_models "$ollama_url")"
+  if [[ -z "$raw" ]]; then
+    fail "Cannot reach Ollama at ${ollama_url}. Is Ollama running?"
+  fi
+
+  echo ""
+  echo "$raw" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+models = data.get('models', [])
+if not models:
+    print('  No models found.')
+else:
+    print(f'  Found {len(models)} model(s):')
+    print()
+    for m in models:
+        name = m['name']
+        size_gb = m.get('size', 0) / (1024**3)
+        family = m.get('details', {}).get('family', '?')
+        params = m.get('details', {}).get('parameter_size', '?')
+        quant = m.get('details', {}).get('quantization_level', '?')
+        print(f'    {name:<30s}  {params:<10s}  {quant:<10s}  {size_gb:.1f} GB  ({family})')
+"
+}
+
+cmd_sync_ollama() {
+  local username="${1:?Username required}"
+  local ollama_url
+  ollama_url="$(resolve_ollama_host "${2:-}")"
+
+  validate_username "$username"
+  user_exists "$username" || fail "User '$username' does not exist."
+
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    fail "Gateway for '$username' is not running. Start it first."
+  fi
+
+  echo "==> Querying Ollama at ${ollama_url}"
+  local raw
+  raw="$(query_ollama_models "$ollama_url")"
+  if [[ -z "$raw" ]]; then
+    fail "Cannot reach Ollama at ${ollama_url}. Is Ollama running?"
+  fi
+
+  local docker_url
+  docker_url="$(resolve_ollama_docker_url "$ollama_url")"
+
+  # Build the config JSON using Python, write to temp files to avoid shell quoting issues
+  local tmp_provider tmp_models
+  tmp_provider="$(mktemp)"
+  tmp_models="$(mktemp)"
+  echo "$raw" | python3 -c "
+import json, sys
+
+data = json.load(sys.stdin)
+models = data.get('models', [])
+
+docker_url = sys.argv[1]
+provider_file = sys.argv[2]
+models_file = sys.argv[3]
+
+provider_models = []
+for m in models:
+    name = m['name']
+    params = m.get('details', {}).get('parameter_size', '')
+    provider_models.append({
+        'id': name,
+        'name': f'{name} ({params})' if params else name,
+        'contextWindow': 32768,
+    })
+
+with open(provider_file, 'w') as f:
+    json.dump({'baseUrl': docker_url, 'models': provider_models}, f)
+
+ollama_models = {}
+for m in models:
+    name = m['name']
+    params = m.get('details', {}).get('parameter_size', '')
+    alias = f'{name} ({params})' if params else name
+    ollama_models[f'ollama/{name}'] = {'alias': alias}
+
+with open(models_file, 'w') as f:
+    json.dump(ollama_models, f)
+" "$docker_url" "$tmp_provider" "$tmp_models"
+
+  local provider_config models_config
+  provider_config="$(cat "$tmp_provider")"
+  models_config="$(cat "$tmp_models")"
+  rm -f "$tmp_provider" "$tmp_models"
+
+  echo "==> Updating Ollama provider config for '$username'"
+  echo "    Docker Ollama URL: ${docker_url}"
+  docker exec "$container" node dist/index.js config set \
+    models.providers.ollama "$provider_config" 2>&1 | grep -v DEP0040
+
+  # Merge ollama models into existing agents.defaults.models (preserve non-ollama entries)
+  echo "==> Updating model selection list"
+  docker exec "$container" node -e "
+    const fs = require('fs');
+    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const existing = cfg.agents?.defaults?.models || {};
+    // Remove old ollama entries
+    for (const key of Object.keys(existing)) {
+      if (key.startsWith('ollama/')) delete existing[key];
+    }
+    // Add new ollama entries
+    const newOllama = JSON.parse(process.argv[1]);
+    Object.assign(existing, newOllama);
+    if (!cfg.agents) cfg.agents = {};
+    if (!cfg.agents.defaults) cfg.agents.defaults = {};
+    cfg.agents.defaults.models = existing;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log('  Models updated:', Object.keys(existing).join(', '));
+  " "$models_config" 2>&1 | grep -v DEP0040
+
+  # Ensure OLLAMA env vars are set in the user .env
+  local env_file
+  env_file="$(user_env_file "$username")"
+  if ! grep -q 'OLLAMA_API_KEY' "$env_file" 2>/dev/null; then
+    echo "OLLAMA_API_KEY=ollama-local" >> "$env_file"
+    echo "  Added OLLAMA_API_KEY to env"
+  fi
+  if ! grep -q 'OLLAMA_HOST' "$env_file" 2>/dev/null; then
+    echo "OLLAMA_HOST=${docker_url}" >> "$env_file"
+    echo "  Added OLLAMA_HOST=${docker_url} to env"
+  else
+    sed -i "s#^OLLAMA_HOST=.*#OLLAMA_HOST=${docker_url}#" "$env_file"
+  fi
+  # Ensure compose file has OLLAMA env vars in gateway service
+  local compose_file
+  compose_file="$(user_compose_file "$username")"
+  if ! grep -q 'OLLAMA_API_KEY' "$compose_file" 2>/dev/null; then
+    sed -i '/OPENCLAW_DIAGNOSTICS/a\      OLLAMA_HOST: ${OLLAMA_HOST:-}\n      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-ollama-local}' "$compose_file"
+    echo "  Added OLLAMA env vars to compose file"
+  fi
+
+  # Show summary
+  echo ""
+  echo "$raw" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+models = data.get('models', [])
+print(f'  Synced {len(models)} Ollama model(s):')
+for m in models:
+    name = m['name']
+    params = m.get('details', {}).get('parameter_size', '?')
+    print(f'    ollama/{name} ({params})')
+"
+  echo ""
+  echo "==> Restarting gateway for '$username' to apply changes..."
+  cmd_restart "$username"
+  echo ""
+  echo "Done. Select Ollama models from the control UI model picker."
+}
+
 # ── Main ──────────────────────────────────────────────────────
 
 require_cmd docker
@@ -937,6 +1142,8 @@ case "$command" in
   cli)       cmd_cli "${1:?Username required}" "${@:2}" ;;
   token)     cmd_token "${1:?Username required}" ;;
   info)      cmd_info "${1:?Username required}" ;;
+  sync-ollama)  cmd_sync_ollama "${1:?Username required}" "${2:-}" ;;
+  list-ollama)  cmd_list_ollama "${1:-}" ;;
   help|-h|--help) usage ;;
   *)         fail "Unknown command: $command. Run '$(basename "$0") help' for usage." ;;
 esac
