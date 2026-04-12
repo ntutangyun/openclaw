@@ -29,6 +29,7 @@ User management:
   start-all                                         Start all user gateways
   stop-all                                          Stop all user gateways
   pair-device <username> [timeout]                    Watch and auto-approve pairing requests
+  ask-off     <username> [node-name]                  Disable exec approval prompts (security=full, ask=off)
 
 Info:
   status    [username]                              Show status (all users or one)
@@ -797,6 +798,134 @@ except:
   echo "Pair-device watch ended (${timeout}s elapsed)."
 }
 
+cmd_ask_off() {
+  local username="$1"
+  local node_name="${2:-}"
+  validate_username "$username"
+  user_exists "$username" || fail "User '$username' does not exist."
+
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    fail "Gateway for '$username' is not running. Start it first."
+  fi
+
+  echo "==> Disabling exec approval prompts for '$username'..."
+
+  # Build the tools.exec override, optionally including node name and host=auto
+  # Use host=auto (not host=node) so the agent can run commands on both the
+  # gateway and the remote node.  The "node" field sets the default node target.
+  local exec_override='{"security":"full","ask":"off"}'
+  if [[ -n "$node_name" ]]; then
+    exec_override="{\"security\":\"full\",\"ask\":\"off\",\"host\":\"auto\",\"node\":\"${node_name}\"}"
+  fi
+
+  # Write the exec override JSON to a temp file to avoid shell quoting issues
+  local tmp_override
+  tmp_override="$(mktemp)"
+  echo "$exec_override" > "$tmp_override"
+
+  # Copy the override file into the container
+  docker cp "$tmp_override" "${container}:/tmp/exec-override.json"
+  rm -f "$tmp_override"
+
+  # Update openclaw.json tools.exec and exec-approvals.json in a single container exec
+  docker exec "$container" sh -c '
+    CFG=/home/node/.openclaw/openclaw.json
+    APPROVALS=/home/node/.openclaw/exec-approvals.json
+    OVERRIDE=/tmp/exec-override.json
+
+    # Merge tools.exec into openclaw.json
+    node -e "
+      const fs = require(\"fs\");
+      let cfg = {};
+      try { cfg = JSON.parse(fs.readFileSync(process.argv[1], \"utf8\")); } catch {}
+      const execOverride = JSON.parse(fs.readFileSync(process.argv[2], \"utf8\"));
+      if (!cfg.tools) cfg.tools = {};
+      cfg.tools.exec = { ...cfg.tools.exec, ...execOverride };
+      fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + \"\n\");
+    " "$CFG" "$OVERRIDE"
+
+    rm -f "$OVERRIDE"
+
+    # Write exec-approvals.json
+    cat > "$APPROVALS" <<APPROVALS
+{
+  "version": 1,
+  "defaults": {
+    "security": "full",
+    "ask": "off",
+    "askFallback": "full",
+    "autoAllowSkills": true
+  }
+}
+APPROVALS
+  '
+
+  echo "  tools.exec: $exec_override"
+  echo "  exec-approvals.json: defaults.ask=off, defaults.security=full"
+
+  # Write agent tools.md with host-selection instructions when a node is configured
+  if [[ -n "$node_name" ]]; then
+    echo "==> Writing agent tools.md (exec host-selection instructions)..."
+    local tmp_tools
+    tmp_tools="$(mktemp)"
+    cat > "$tmp_tools" <<TOOLS_MD
+# TOOLS.md - Local Notes
+
+## Exec Tool — Host Selection
+
+You have access to two execution environments via the \`host\` parameter:
+
+- **gateway** (Linux): The default host. Use Linux commands (\`ls\`, \`cat\`, \`grep\`, \`bash\`, etc.). This is the machine running your gateway process.
+- **node** (Windows): A remote Windows desktop. The exact node name is \`${node_name}\` (case-sensitive). Use Windows commands (\`dir\`, \`type\`, \`findstr\`, etc.) and Windows-style paths (\`C:\\Users\\...\`).
+
+### Rules
+
+1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for Linux commands and \`"host": "node"\` for Windows commands.
+2. **The node name is case-sensitive.** Always use \`"node": "${node_name}"\` — do not change the casing.
+3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** Run executables directly (e.g. \`dir C:\\Users\\...\` not \`cmd /c dir C:\\Users\\...\`).
+4. **Never send Windows commands to the gateway** — it runs Linux and does not have \`cmd.exe\`.
+5. **Never send Linux commands to the node** — it runs Windows and does not have \`bash\` or \`ls\`.
+6. When checking connectivity or status, use \`"host": "gateway"\` to run gateway-side commands like \`openclaw nodes status\`.
+7. **Never run bare interpreter commands** like \`node -v\`, \`python --version\`, or \`ruby -e ...\` on the node — these are blocked by the security policy. Run concrete tools or scripts instead (e.g. \`markitdown file.pptx\`, \`node script.js\`, \`python script.py\`).
+
+## Document Extraction (Windows Node)
+
+The \`markitdown\` tool is installed globally on the Windows node. Use it to extract text content from Microsoft Office documents (pptx, docx, xlsx, etc.).
+
+- **Print content to terminal:** \`markitdown document.pptx\`
+- **Save content to markdown:** \`markitdown document.pptx > document.md\`
+
+Always run \`markitdown\` on the node host (\`"host": "node"\`), since it is installed on the Windows machine.
+
+## Environment-Specific Notes
+
+Add your own notes below (cameras, SSH hosts, voices, etc.)
+TOOLS_MD
+    docker cp "$tmp_tools" "${container}:/home/node/.openclaw/workspace/TOOLS.md"
+    rm -f "$tmp_tools"
+    echo "  TOOLS.md written to workspace for node '${node_name}'"
+  fi
+
+  # Restart gateway to pick up config changes
+  echo "==> Restarting gateway to apply changes..."
+  compose_cmd "$username" up -d --force-recreate openclaw-gateway
+
+  echo ""
+  echo "Exec approval prompts disabled for '$username' (gateway side)."
+  if [[ -n "$node_name" ]]; then
+    echo "  Exec host: auto (gateway + node)"
+    echo "  Default node target: $node_name"
+  fi
+  echo ""
+  echo "IMPORTANT: The node host has its own independent approval layer."
+  echo "  On the Windows machine, run node-ask-off.bat (in multi-user-support/):"
+  echo ""
+  echo "    node-ask-off.bat"
+  echo ""
+  echo "  Then restart the node."
+}
+
 cmd_export_logs() {
   local username="$1"
   validate_username "$username"
@@ -1008,23 +1137,44 @@ cmd_sync_ollama() {
   tmp_provider="$(mktemp)"
   tmp_models="$(mktemp)"
   echo "$raw" | python3 -c "
-import json, sys
+import json, sys, urllib.request
 
 data = json.load(sys.stdin)
 models = data.get('models', [])
 
-docker_url = sys.argv[1]
-provider_file = sys.argv[2]
-models_file = sys.argv[3]
+ollama_url = sys.argv[1]
+docker_url = sys.argv[2]
+provider_file = sys.argv[3]
+models_file = sys.argv[4]
+
+DEFAULT_CTX = 131072
+
+def get_context_window(model_name, base_url):
+    \"\"\"Query /api/show to get the model's actual context_length.\"\"\"
+    try:
+        req = urllib.request.Request(
+            base_url.rstrip('/') + '/api/show',
+            data=json.dumps({'name': model_name}).encode(),
+            headers={'Content-Type': 'application/json'},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            info = json.load(resp)
+        for key, value in (info.get('model_info') or {}).items():
+            if key.endswith('.context_length') and isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    except Exception:
+        pass
+    return DEFAULT_CTX
 
 provider_models = []
 for m in models:
     name = m['name']
     params = m.get('details', {}).get('parameter_size', '')
+    ctx = get_context_window(name, ollama_url)
     provider_models.append({
         'id': name,
         'name': f'{name} ({params})' if params else name,
-        'contextWindow': 32768,
+        'contextWindow': ctx,
     })
 
 with open(provider_file, 'w') as f:
@@ -1039,7 +1189,7 @@ for m in models:
 
 with open(models_file, 'w') as f:
     json.dump(ollama_models, f)
-" "$docker_url" "$tmp_provider" "$tmp_models"
+" "$ollama_url" "$docker_url" "$tmp_provider" "$tmp_models"
 
   local provider_config models_config
   provider_config="$(cat "$tmp_provider")"
@@ -1095,15 +1245,14 @@ with open(models_file, 'w') as f:
 
   # Show summary
   echo ""
-  echo "$raw" | python3 -c "
+  echo "$provider_config" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 models = data.get('models', [])
 print(f'  Synced {len(models)} Ollama model(s):')
 for m in models:
-    name = m['name']
-    params = m.get('details', {}).get('parameter_size', '?')
-    print(f'    ollama/{name} ({params})')
+    ctx_k = m.get('contextWindow', 0) // 1024
+    print(f'    ollama/{m[\"id\"]} — {ctx_k}k context')
 "
   echo ""
   echo "==> Restarting gateway for '$username' to apply changes..."
@@ -1135,6 +1284,7 @@ case "$command" in
   start-all) cmd_start_all ;;
   stop-all)  cmd_stop_all ;;
   pair-device) cmd_pair_device "${1:?Username required}" "${2:-120}" ;;
+  ask-off)   cmd_ask_off "${1:?Username required}" "${2:-}" ;;
   status)    cmd_status "${1:-}" ;;
   list)      cmd_list ;;
   logs)      cmd_logs "${1:?Username required}" "${@:2}" ;;
