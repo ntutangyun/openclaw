@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -128,8 +128,12 @@ async function pushFile(
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -279,9 +283,7 @@ export function registerNodesFilesCommands(nodes: Command) {
                   path: remotePath,
                 });
                 if (remoteStat.exists) {
-                  throw new Error(
-                    `remote file already exists: ${remotePath} (use --overwrite)`,
-                  );
+                  throw new Error(`remote file already exists: ${remotePath} (use --overwrite)`);
                 }
               }
               const bytes = await pushFile(opts, nodeId, localPath, remotePath);
@@ -314,7 +316,9 @@ function collectLocalFiles(dir: string, prefix = ""): string[] {
   const results: string[] = [];
   const SKIP = new Set(["node_modules", ".git", "__pycache__", ".DS_Store"]);
   for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (SKIP.has(dirent.name)) continue;
+    if (SKIP.has(dirent.name)) {
+      continue;
+    }
     const relPath = prefix ? `${prefix}/${dirent.name}` : dirent.name;
     if (dirent.isFile()) {
       results.push(relPath);
