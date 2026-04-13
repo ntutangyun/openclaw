@@ -264,7 +264,21 @@ async function runCommand(
         .slice(1, -1)
         .map((a) => a.toLowerCase())
         .join(" ") === "/d /s /c";
-    if (isWindowsCmdWrap) {
+
+    // OPENCLAW_NODE_SHELL overrides the default Windows shell (cmd.exe) with a
+    // custom shell such as Git Bash.  When set, we spawn the shell directly with
+    // -c instead of relying on Node.js shell:true (which always uses cmd.exe
+    // flags /d /s /c that are incompatible with bash-like shells).
+    const customShell = process.platform === "win32"
+      ? (process.env.OPENCLAW_NODE_SHELL?.trim() || null)
+      : null;
+
+    if (customShell && (isWindowsCmdWrap || argv.length === 1)) {
+      // Extract the raw command string to pass to the custom shell via -c
+      const rawCommand = isWindowsCmdWrap ? argv[argv.length - 1] : argv[0];
+      spawnCmd = customShell;
+      spawnArgs = ["-c", rawCommand];
+    } else if (isWindowsCmdWrap) {
       // Pass the raw command string to shell:true which handles it natively
       spawnCmd = argv[argv.length - 1];
       spawnArgs = [];
@@ -278,7 +292,9 @@ async function runCommand(
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-      ...(process.platform === "win32" ? { shell: true } : {}),
+      // When using a custom shell we spawn it directly; skip shell:true to avoid
+      // Node.js re-wrapping with cmd.exe.
+      ...(process.platform === "win32" && !customShell ? { shell: true } : {}),
     });
 
     const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {

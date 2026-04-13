@@ -90,6 +90,17 @@ if not exist "dist\entry.mjs" if not exist "dist\entry.js" (
     call pnpm build || exit /b 1
 )
 
+REM Override the default command shell with Git Bash when available.
+REM Set OPENCLAW_NODE_SHELL to the path of any bash-compatible shell.
+if not defined OPENCLAW_NODE_SHELL (
+    if exist "C:\Program Files\Git\bin\bash.exe" (
+        set "OPENCLAW_NODE_SHELL=C:\Program Files\Git\bin\bash.exe"
+    )
+)
+if defined OPENCLAW_NODE_SHELL (
+    echo [start-node] Using shell: %OPENCLAW_NODE_SHELL%
+)
+
 echo [start-node] Connecting node host to %GATEWAY_HOST%:%GATEWAY_PORT%
 node "%~dp0openclaw.mjs" node run --host %GATEWAY_HOST% --port %GATEWAY_PORT%
 

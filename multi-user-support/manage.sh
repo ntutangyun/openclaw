@@ -877,15 +877,15 @@ APPROVALS
 You have access to two execution environments via the \`host\` parameter:
 
 - **gateway** (Linux): The default host. Use Linux commands (\`ls\`, \`cat\`, \`grep\`, \`bash\`, etc.). This is the machine running your gateway process.
-- **node** (Windows): A remote Windows desktop. The exact node name is \`${node_name}\` (case-sensitive). Use Windows commands (\`dir\`, \`type\`, \`findstr\`, etc.) and Windows-style paths (\`C:\\Users\\...\`).
+- **node** (Windows + Git Bash): A remote Windows desktop running Git Bash as its shell. The exact node name is \`${node_name}\` (case-sensitive). Use Unix-style commands (\`ls\`, \`cat\`, \`grep\`, \`find\`, etc.) and **forward-slash paths** (e.g. \`/c/Users/...\` or relative paths). Native Windows executables (\`node\`, \`python\`, \`markitdown\`, etc.) are also available on PATH.
 
 ### Rules
 
-1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for Linux commands and \`"host": "node"\` for Windows commands.
+1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for gateway commands and \`"host": "node"\` for node commands.
 2. **The node name is case-sensitive.** Always use \`"node": "${node_name}"\` — do not change the casing.
-3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** Run executables directly (e.g. \`dir C:\\Users\\...\` not \`cmd /c dir C:\\Users\\...\`).
-4. **Never send Windows commands to the gateway** — it runs Linux and does not have \`cmd.exe\`.
-5. **Never send Linux commands to the node** — it runs Windows and does not have \`bash\` or \`ls\`.
+3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** The node runs Git Bash — run commands directly.
+4. **Use Unix-style commands on the node.** The node shell is Git Bash, so \`ls\`, \`cat\`, \`grep\`, \`find\`, \`bash\` all work. Avoid \`dir\`, \`type\`, \`findstr\` and other cmd.exe builtins.
+5. **Use forward-slash paths on the node.** Git Bash uses \`/c/Users/...\` not \`C:\\Users\\...\`. Relative paths also work.
 6. When checking connectivity or status, use \`"host": "gateway"\` to run gateway-side commands like \`openclaw nodes status\`.
 7. **Never run bare interpreter commands** like \`node -v\`, \`python --version\`, or \`ruby -e ...\` on the node — these are blocked by the security policy. Run concrete tools or scripts instead (e.g. \`markitdown file.pptx\`, \`node script.js\`, \`python script.py\`).
 
