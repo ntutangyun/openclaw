@@ -272,12 +272,30 @@ function looksLikePathToken(token: string): boolean {
   );
 }
 
+/**
+ * On Windows, convert a Git Bash / MSYS2 absolute path like `/c/Users/...`
+ * to the native Windows form `C:\Users\...` so that `path.resolve` and
+ * `fs.*` can find the file.  Non-matching paths are returned unchanged.
+ */
+function normalizeGitBashPath(p: string): string {
+  if (process.platform !== "win32") {
+    return p;
+  }
+  const match = /^\/([a-zA-Z])(\/.*)?$/.exec(p);
+  if (match) {
+    const drive = match[1].toUpperCase();
+    const rest = (match[2] ?? "").replace(/\//g, "\\");
+    return `${drive}:${rest || "\\"}`;
+  }
+  return p;
+}
+
 function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined): boolean {
   if (!rawOperand) {
     return false;
   }
   try {
-    return fs.statSync(path.resolve(cwd ?? process.cwd(), rawOperand)).isFile();
+    return fs.statSync(path.resolve(cwd ?? process.cwd(), normalizeGitBashPath(rawOperand))).isFile();
   } catch {
     return false;
   }
@@ -946,7 +964,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
       message: "SYSTEM_RUN_DENIED: approval requires a stable script operand",
     };
   }
-  const resolvedPath = path.resolve(params.cwd ?? process.cwd(), rawOperand);
+  const resolvedPath = path.resolve(params.cwd ?? process.cwd(), normalizeGitBashPath(rawOperand));
   let realPath: string;
   let stat: fs.Stats;
   try {
@@ -1050,7 +1068,7 @@ export function revalidateApprovedMutableFileOperand(params: {
   if (!operand) {
     return false;
   }
-  const resolvedPath = path.resolve(params.cwd ?? process.cwd(), operand);
+  const resolvedPath = path.resolve(params.cwd ?? process.cwd(), normalizeGitBashPath(operand));
   let realPath: string;
   try {
     realPath = fs.realpathSync(resolvedPath);
