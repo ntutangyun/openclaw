@@ -199,6 +199,20 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
 
+# Install Python environment and document processing tools.
+# markitdown[all] converts Office/PDF/HTML/etc to Markdown.
+# python-docx and python-pptx provide direct .docx/.pptx manipulation.
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-venv && \
+    python3 -m venv /opt/python-tools && \
+    /opt/python-tools/bin/pip install --no-cache-dir \
+      'markitdown[all]' python-docx python-pptx && \
+    ln -sf /opt/python-tools/bin/markitdown /usr/local/bin/markitdown && \
+    ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python-tools
+
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
