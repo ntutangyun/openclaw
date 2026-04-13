@@ -877,17 +877,18 @@ APPROVALS
 You have access to two execution environments via the \`host\` parameter:
 
 - **gateway** (Linux): The default host. Use Linux commands (\`ls\`, \`cat\`, \`grep\`, \`bash\`, etc.). This is the machine running your gateway process.
-- **node** (Windows + Git Bash): A remote Windows desktop running Git Bash as its shell. The exact node name is \`${node_name}\` (case-sensitive). Use Unix-style commands (\`ls\`, \`cat\`, \`grep\`, \`find\`, etc.) and **forward-slash paths** (e.g. \`/c/Users/...\` or relative paths). Native Windows executables (\`node\`, \`python\`, \`markitdown\`, etc.) are also available on PATH.
+- **node** (Windows): A remote Windows desktop. The exact node name is \`${node_name}\` (case-sensitive). Use Windows commands (\`dir\`, \`type\`, \`findstr\`, etc.) and Windows-style paths (\`C:\\Users\\...\`).
 
 ### Rules
 
-1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for gateway commands and \`"host": "node"\` for node commands.
+1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for Linux commands and \`"host": "node"\` for Windows commands.
 2. **The node name is case-sensitive.** Always use \`"node": "${node_name}"\` — do not change the casing.
-3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** The node runs Git Bash — run commands directly.
-4. **Use Unix-style commands on the node.** The node shell is Git Bash, so \`ls\`, \`cat\`, \`grep\`, \`find\`, \`bash\` all work. Avoid \`dir\`, \`type\`, \`findstr\` and other cmd.exe builtins.
-5. **Use forward-slash paths on the node.** Git Bash uses \`/c/Users/...\` not \`C:\\Users\\...\`. Relative paths also work.
+3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** Run executables directly (e.g. \`dir C:\\Users\\...\` not \`cmd /c dir C:\\Users\\...\`).
+4. **Never send Windows commands to the gateway** — it runs Linux and does not have \`cmd.exe\`.
+5. **Never send Linux commands to the node** — it runs Windows and does not have \`bash\` or \`ls\`.
 6. When checking connectivity or status, use \`"host": "gateway"\` to run gateway-side commands like \`openclaw nodes status\`.
 7. **Never run bare interpreter commands** like \`node -v\`, \`python --version\`, or \`ruby -e ...\` on the node — these are blocked by the security policy. Run concrete tools or scripts instead (e.g. \`markitdown file.pptx\`, \`node script.js\`, \`python script.py\`).
+8. **For complex file work, use \`openclaw nodes pull/push\` on the gateway** to transfer files to your local workspace, work on them locally, then push results back. This avoids shell quoting and approval issues on the node.
 
 ## Document Extraction (Windows Node)
 
@@ -897,6 +898,32 @@ The \`markitdown\` tool is installed globally on the Windows node. Use it to ext
 - **Save content to markdown:** \`markitdown document.pptx > document.md\`
 
 Always run \`markitdown\` on the node host (\`"host": "node"\`), since it is installed on the Windows machine.
+
+## File Transfer Between Gateway and Node
+
+For complex tasks involving files on the Windows node (Python scripts, document generation, etc.),
+**pull the files to your local gateway workspace first**, work on them locally, then push the results back.
+This avoids shell quoting issues, path format problems, and exec approval restrictions on the node.
+
+### Commands (run on the gateway with \`"host": "gateway"\`)
+
+- **List remote files:**
+  \`openclaw nodes ls --node ${node_name} --path "C:\\Users\\capyb\\Desktop\\folder"\`
+
+- **Pull files to local workspace:**
+  \`openclaw nodes pull --node ${node_name} --remote "C:\\Users\\capyb\\Desktop\\folder" --local ./working-copy\`
+
+- **Push results back to the node:**
+  \`openclaw nodes push --node ${node_name} --local ./output.docx --remote "C:\\Users\\capyb\\Desktop\\folder\\output.docx" --overwrite\`
+
+### When to use pull/push vs. direct node execution
+
+- **Use \`host: "node"\` directly** for simple, quick commands: \`dir\`, \`type\`, \`markitdown\`
+- **Use pull/push** when you need to:
+  - Run Python scripts or other interpreters on files
+  - Build or generate documents (docx, xlsx, etc.)
+  - Process multiple files in a pipeline
+  - Do any work that requires complex shell commands
 
 ## Environment-Specific Notes
 

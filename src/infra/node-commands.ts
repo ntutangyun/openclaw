@@ -11,3 +11,10 @@ export const NODE_EXEC_APPROVALS_COMMANDS = [
   "system.execApprovals.get",
   "system.execApprovals.set",
 ] as const;
+
+export const NODE_FS_COMMANDS = [
+  "fs.stat",
+  "fs.list",
+  "fs.read",
+  "fs.write",
+] as const;

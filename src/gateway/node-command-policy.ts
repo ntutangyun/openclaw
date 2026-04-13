@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_FS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -52,6 +53,7 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_FS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];

@@ -4,6 +4,7 @@ import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
 import { registerNodesCanvasCommands } from "./register.canvas.js";
+import { registerNodesFilesCommands } from "./register.files.js";
 import { registerNodesInvokeCommands } from "./register.invoke.js";
 import { registerNodesLocationCommands } from "./register.location.js";
 import { registerNodesNotifyCommand } from "./register.notify.js";
@@ -33,6 +34,7 @@ export function registerNodesCli(program: Command) {
   registerNodesStatusCommands(nodes);
   registerNodesPairingCommands(nodes);
   registerNodesInvokeCommands(nodes);
+  registerNodesFilesCommands(nodes);
   registerNodesNotifyCommand(nodes);
   registerNodesPushCommand(nodes);
   registerNodesCanvasCommands(nodes);

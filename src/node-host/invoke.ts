@@ -30,6 +30,9 @@ import type {
 } from "./invoke-types.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
+const FS_READ_CHUNK_SIZE = 16 * 1024 * 1024; // 16MB raw → ~21MB base64, fits 25MB WS limit
+const FS_LIST_SKIP_DIRS = new Set(["node_modules", ".git", "__pycache__", ".DS_Store"]);
+
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -58,6 +61,67 @@ const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
  */
 function wrapForCmdBash(arg: string): string {
   return '"' + arg.replace(/"/g, '\\"') + '"';
+}
+
+/**
+ * Convert a Git Bash / MSYS2 path like `/c/Users/...` to Windows `C:\Users\...`.
+ * Also normalizes forward slashes to backslashes on Windows. Non-matching paths
+ * are returned unchanged.
+ */
+function normalizeNodeFsPath(p: string): string {
+  if (process.platform !== "win32") {
+    return p;
+  }
+  const trimmed = p.trim();
+  const match = /^\/([a-zA-Z])(\/.*)?$/.exec(trimmed);
+  if (match) {
+    const drive = match[1].toUpperCase();
+    const rest = (match[2] ?? "").replace(/\//g, "\\");
+    return `${drive}:${rest || "\\"}`;
+  }
+  return trimmed;
+}
+
+/** Recursively collect directory entries up to a maximum count. */
+function collectDirectoryEntries(
+  rootDir: string,
+  currentDir: string,
+  recursive: boolean,
+  maxEntries: number,
+  entries: Array<{ relativePath: string; isFile: boolean; size: number }>,
+): void {
+  let dirents: fs.Dirent[];
+  try {
+    dirents = fs.readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const dirent of dirents) {
+    if (entries.length >= maxEntries) {
+      return;
+    }
+    if (FS_LIST_SKIP_DIRS.has(dirent.name)) {
+      continue;
+    }
+    const fullPath = path.join(currentDir, dirent.name);
+    const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, "/");
+    const isFile = dirent.isFile();
+    const isDir = dirent.isDirectory();
+    if (isFile) {
+      let size = 0;
+      try {
+        size = fs.statSync(fullPath).size;
+      } catch {
+        // skip files we can't stat
+      }
+      entries.push({ relativePath, isFile: true, size });
+    } else if (isDir) {
+      entries.push({ relativePath, isFile: false, size: 0 });
+      if (recursive) {
+        collectDirectoryEntries(rootDir, fullPath, true, maxEntries, entries);
+      }
+    }
+  }
 }
 
 type SystemWhichParams = {
@@ -579,6 +643,110 @@ export async function handleInvoke(
     }
     return;
   }
+
+  // ── fs.* file transfer commands ──────────────────────────────────────
+
+  if (command === "fs.stat") {
+    try {
+      const params = decodeParams<{ path: string }>(frame.paramsJSON);
+      const filePath = normalizeNodeFsPath(params.path);
+      try {
+        const stat = fs.statSync(filePath);
+        await sendJsonPayloadResult(client, frame, {
+          exists: true,
+          isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
+          size: stat.size,
+          mtime: stat.mtime.toISOString(),
+        });
+      } catch {
+        await sendJsonPayloadResult(client, frame, { exists: false });
+      }
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === "fs.list") {
+    try {
+      const params = decodeParams<{
+        path: string;
+        recursive?: boolean;
+        maxEntries?: number;
+      }>(frame.paramsJSON);
+      const dirPath = normalizeNodeFsPath(params.path);
+      const maxEntries = params.maxEntries ?? 10_000;
+      const entries: Array<{ relativePath: string; isFile: boolean; size: number }> = [];
+      collectDirectoryEntries(dirPath, dirPath, params.recursive !== false, maxEntries, entries);
+      await sendJsonPayloadResult(client, frame, { entries });
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === "fs.read") {
+    try {
+      const params = decodeParams<{
+        path: string;
+        offset?: number;
+        length?: number;
+      }>(frame.paramsJSON);
+      const filePath = normalizeNodeFsPath(params.path);
+      const stat = fs.statSync(filePath);
+      const totalSize = stat.size;
+      const offset = params.offset ?? 0;
+      const length = Math.min(params.length ?? totalSize, FS_READ_CHUNK_SIZE, totalSize - offset);
+      const fd = fs.openSync(filePath, "r");
+      try {
+        const buf = Buffer.alloc(length);
+        const bytesRead = fs.readSync(fd, buf, 0, length, offset);
+        await sendJsonPayloadResult(client, frame, {
+          data: buf.subarray(0, bytesRead).toString("base64"),
+          totalSize,
+          offset,
+          length: bytesRead,
+        });
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === "fs.write") {
+    try {
+      const params = decodeParams<{
+        path: string;
+        data: string;
+        append?: boolean;
+        mkdirp?: boolean;
+      }>(frame.paramsJSON);
+      const filePath = normalizeNodeFsPath(params.path);
+      if (params.mkdirp) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      }
+      const buf = Buffer.from(params.data, "base64");
+      if (params.append) {
+        fs.appendFileSync(filePath, buf);
+      } else {
+        fs.writeFileSync(filePath, buf);
+      }
+      await sendJsonPayloadResult(client, frame, {
+        ok: true,
+        bytesWritten: buf.length,
+        path: filePath,
+      });
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  // ── Plugin commands ────────────────────────────────────────────────
 
   try {
     const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
