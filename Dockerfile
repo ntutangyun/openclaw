@@ -211,7 +211,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     /opt/python-tools/bin/pip install --no-cache-dir \
       'markitdown[all]' python-docx python-pptx && \
     ln -sf /opt/python-tools/bin/markitdown /usr/local/bin/markitdown && \
-    ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python-tools
+    ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python-tools && \
+    ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python3 && \
+    ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
