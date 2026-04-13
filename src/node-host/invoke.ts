@@ -50,6 +50,16 @@ const execHostFallbackAllowed =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
 const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
+/**
+ * Wrap a command string in double quotes for use as a bash -c argument that
+ * passes through cmd.exe (shell:true on Windows).  Only double quotes inside
+ * the command need escaping — cmd.exe does not treat backslashes specially
+ * inside quoted strings.
+ */
+function wrapForCmdBash(arg: string): string {
+  return '"' + arg.replace(/"/g, '\\"') + '"';
+}
+
 type SystemWhichParams = {
   bins: string[];
 };
@@ -274,10 +284,14 @@ async function runCommand(
       : null;
 
     if (customShell && (isWindowsCmdWrap || argv.length === 1)) {
-      // Extract the raw command string to pass to the custom shell via -c
+      // Extract the raw command string and route it through the custom shell.
+      // We keep shell:true (which uses cmd.exe) and let cmd.exe launch the
+      // custom shell — this avoids ENOENT on paths with spaces like
+      // "C:\Program Files\Git\bin\bash.exe" that spawn without shell:true
+      // cannot handle on Windows.
       const rawCommand = isWindowsCmdWrap ? argv[argv.length - 1] : argv[0];
-      spawnCmd = customShell;
-      spawnArgs = ["-c", rawCommand];
+      spawnCmd = `"${customShell}" -c ${wrapForCmdBash(rawCommand)}`;
+      spawnArgs = [];
     } else if (isWindowsCmdWrap) {
       // Pass the raw command string to shell:true which handles it natively
       spawnCmd = argv[argv.length - 1];
@@ -292,9 +306,7 @@ async function runCommand(
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
-      // When using a custom shell we spawn it directly; skip shell:true to avoid
-      // Node.js re-wrapping with cmd.exe.
-      ...(process.platform === "win32" && !customShell ? { shell: true } : {}),
+      ...(process.platform === "win32" ? { shell: true } : {}),
     });
 
     const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
