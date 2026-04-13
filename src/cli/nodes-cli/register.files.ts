@@ -53,7 +53,7 @@ async function invokeNodeFs<T>(
   return result as T;
 }
 
-async function pullFile(
+async function downloadFile(
   opts: NodesRpcOpts,
   nodeId: string,
   remotePath: string,
@@ -86,7 +86,7 @@ async function pullFile(
   return offset;
 }
 
-async function pushFile(
+async function uploadFile(
   opts: NodesRpcOpts,
   nodeId: string,
   localPath: string,
@@ -137,6 +137,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function collectLocalFiles(dir: string, prefix = ""): string[] {
+  const results: string[] = [];
+  const SKIP = new Set(["node_modules", ".git", "__pycache__", ".DS_Store"]);
+  for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP.has(dirent.name)) {
+      continue;
+    }
+    const relPath = prefix ? `${prefix}/${dirent.name}` : dirent.name;
+    if (dirent.isFile()) {
+      results.push(relPath);
+    } else if (dirent.isDirectory()) {
+      results.push(...collectLocalFiles(path.join(dir, dirent.name), relPath));
+    }
+  }
+  return results;
+}
+
 export function registerNodesFilesCommands(nodes: Command) {
   // ── openclaw nodes ls ──────────────────────────────────────────────
 
@@ -172,138 +189,58 @@ export function registerNodesFilesCommands(nodes: Command) {
     { timeoutMs: 60_000 },
   );
 
-  // ── openclaw nodes pull ────────────────────────────────────────────
+  // ── openclaw nodes copy ────────────────────────────────────────────
+  //
+  // Copies files between the gateway (local) and a remote node.
+  //   --from node:<path>   --to <local-path>     (download from node)
+  //   --from <local-path>  --to node:<path>      (upload to node)
+  //
+  // The "node:" prefix on either --from or --to indicates the remote side.
 
   nodesCallOpts(
     nodes
-      .command("pull")
-      .description("Pull files from a remote node to the local workspace")
+      .command("copy")
+      .description("Copy files between gateway and a remote node (prefix remote paths with node:)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .requiredOption("--remote <remotePath>", "Remote path on the node")
-      .option("--local <localPath>", "Local destination path")
-      .option("--overwrite", "Overwrite existing local files", false)
+      .requiredOption("--from <source>", "Source path (prefix with node: for remote)")
+      .requiredOption("--to <destination>", "Destination path (prefix with node: for remote)")
+      .option("--overwrite", "Overwrite existing files", false)
       .action(
         async (
           opts: NodesRpcOpts & {
-            remote: string;
-            local?: string;
+            from: string;
+            to: string;
             overwrite: boolean;
           },
         ) => {
-          await runNodesCommand("pull", async () => {
+          await runNodesCommand("copy", async () => {
             const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-            const remotePath = opts.remote;
-            if (!nodeId || !remotePath) {
+            if (!nodeId) {
               const { error } = getNodesTheme();
-              defaultRuntime.error(error("--node and --remote required"));
+              defaultRuntime.error(error("--node required"));
               defaultRuntime.exit(1);
               return;
             }
 
-            const stat = await invokeNodeFs<FsStatResult>(opts, nodeId, "fs.stat", {
-              path: remotePath,
-            });
-            if (!stat.exists) {
-              throw new Error(`remote path does not exist: ${remotePath}`);
-            }
+            const fromRemote = opts.from.startsWith("node:");
+            const toRemote = opts.to.startsWith("node:");
 
-            if (stat.isFile) {
-              // Pull single file
-              const localPath = opts.local ?? path.basename(remotePath);
-              if (fs.existsSync(localPath) && !opts.overwrite) {
-                throw new Error(`local file already exists: ${localPath} (use --overwrite)`);
-              }
-              const bytes = await pullFile(opts, nodeId, remotePath, localPath, stat.size ?? 0);
-              defaultRuntime.log(`Pulled ${localPath} (${formatBytes(bytes)})`);
-            } else if (stat.isDirectory) {
-              // Pull directory
-              const localDir = opts.local ?? path.basename(remotePath);
-              const listing = await invokeNodeFs<FsListResult>(opts, nodeId, "fs.list", {
-                path: remotePath,
-                recursive: true,
-              });
-              const files = listing.entries.filter((e) => e.isFile);
-              let totalBytes = 0;
-              for (const entry of files) {
-                const localPath = path.join(localDir, entry.relativePath);
-                if (fs.existsSync(localPath) && !opts.overwrite) {
-                  defaultRuntime.error(`  skip (exists): ${entry.relativePath}`);
-                  continue;
-                }
-                const remoteFilePath = remotePath + "/" + entry.relativePath;
-                const bytes = await pullFile(opts, nodeId, remoteFilePath, localPath, entry.size);
-                totalBytes += bytes;
-                defaultRuntime.log(`  ${entry.relativePath} (${formatBytes(bytes)})`);
-              }
-              defaultRuntime.log(
-                `\nPulled ${files.length} files (${formatBytes(totalBytes)}) to ${localDir}`,
+            if (fromRemote === toRemote) {
+              throw new Error(
+                'exactly one of --from or --to must have a "node:" prefix (e.g. --from node:C:\\path --to ./local)',
               );
             }
-          });
-        },
-      ),
-    { timeoutMs: 120_000 },
-  );
 
-  // ── openclaw nodes push ────────────────────────────────────────────
-
-  nodesCallOpts(
-    nodes
-      .command("push")
-      .description("Push files from the local workspace to a remote node")
-      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .requiredOption("--local <localPath>", "Local source path")
-      .requiredOption("--remote <remotePath>", "Remote destination path on the node")
-      .option("--overwrite", "Overwrite existing remote files", false)
-      .action(
-        async (
-          opts: NodesRpcOpts & {
-            local: string;
-            remote: string;
-            overwrite: boolean;
-          },
-        ) => {
-          await runNodesCommand("push", async () => {
-            const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-            const localPath = opts.local;
-            const remotePath = opts.remote;
-            if (!nodeId || !localPath || !remotePath) {
-              const { error } = getNodesTheme();
-              defaultRuntime.error(error("--node, --local, and --remote required"));
-              defaultRuntime.exit(1);
-              return;
-            }
-
-            const localStat = fs.statSync(localPath);
-
-            if (localStat.isFile()) {
-              // Push single file
-              if (!opts.overwrite) {
-                const remoteStat = await invokeNodeFs<FsStatResult>(opts, nodeId, "fs.stat", {
-                  path: remotePath,
-                });
-                if (remoteStat.exists) {
-                  throw new Error(`remote file already exists: ${remotePath} (use --overwrite)`);
-                }
-              }
-              const bytes = await pushFile(opts, nodeId, localPath, remotePath);
-              defaultRuntime.log(`Pushed ${localPath} → ${remotePath} (${formatBytes(bytes)})`);
-            } else if (localStat.isDirectory()) {
-              // Push directory
-              const localFiles = collectLocalFiles(localPath);
-              let totalBytes = 0;
-              for (const relPath of localFiles) {
-                const fullLocal = path.join(localPath, relPath);
-                const fullRemote = remotePath + "/" + relPath.replace(/\\/g, "/");
-                const bytes = await pushFile(opts, nodeId, fullLocal, fullRemote);
-                totalBytes += bytes;
-                defaultRuntime.log(`  ${relPath} (${formatBytes(bytes)})`);
-              }
-              defaultRuntime.log(
-                `\nPushed ${localFiles.length} files (${formatBytes(totalBytes)}) to ${remotePath}`,
-              );
+            if (fromRemote) {
+              // Download: node → gateway
+              const remotePath = opts.from.slice("node:".length);
+              const localPath = opts.to;
+              await copyFromNode(opts, nodeId, remotePath, localPath, opts.overwrite);
             } else {
-              throw new Error(`unsupported local path type: ${localPath}`);
+              // Upload: gateway → node
+              const localPath = opts.from;
+              const remotePath = opts.to.slice("node:".length);
+              await copyToNode(opts, nodeId, localPath, remotePath, opts.overwrite);
             }
           });
         },
@@ -312,19 +249,82 @@ export function registerNodesFilesCommands(nodes: Command) {
   );
 }
 
-function collectLocalFiles(dir: string, prefix = ""): string[] {
-  const results: string[] = [];
-  const SKIP = new Set(["node_modules", ".git", "__pycache__", ".DS_Store"]);
-  for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (SKIP.has(dirent.name)) {
-      continue;
-    }
-    const relPath = prefix ? `${prefix}/${dirent.name}` : dirent.name;
-    if (dirent.isFile()) {
-      results.push(relPath);
-    } else if (dirent.isDirectory()) {
-      results.push(...collectLocalFiles(path.join(dir, dirent.name), relPath));
-    }
+async function copyFromNode(
+  opts: NodesRpcOpts,
+  nodeId: string,
+  remotePath: string,
+  localPath: string,
+  overwrite: boolean,
+): Promise<void> {
+  const stat = await invokeNodeFs<FsStatResult>(opts, nodeId, "fs.stat", {
+    path: remotePath,
+  });
+  if (!stat.exists) {
+    throw new Error(`remote path does not exist: ${remotePath}`);
   }
-  return results;
+
+  if (stat.isFile) {
+    if (fs.existsSync(localPath) && !overwrite) {
+      throw new Error(`local file already exists: ${localPath} (use --overwrite)`);
+    }
+    const bytes = await downloadFile(opts, nodeId, remotePath, localPath, stat.size ?? 0);
+    defaultRuntime.log(`Copied ${remotePath} → ${localPath} (${formatBytes(bytes)})`);
+  } else if (stat.isDirectory) {
+    const listing = await invokeNodeFs<FsListResult>(opts, nodeId, "fs.list", {
+      path: remotePath,
+      recursive: true,
+    });
+    const files = listing.entries.filter((e) => e.isFile);
+    let totalBytes = 0;
+    for (const entry of files) {
+      const dest = path.join(localPath, entry.relativePath);
+      if (fs.existsSync(dest) && !overwrite) {
+        defaultRuntime.error(`  skip (exists): ${entry.relativePath}`);
+        continue;
+      }
+      const remoteFilePath = remotePath + "/" + entry.relativePath;
+      const bytes = await downloadFile(opts, nodeId, remoteFilePath, dest, entry.size);
+      totalBytes += bytes;
+      defaultRuntime.log(`  ${entry.relativePath} (${formatBytes(bytes)})`);
+    }
+    defaultRuntime.log(`\nCopied ${files.length} files (${formatBytes(totalBytes)}) to ${localPath}`);
+  }
+}
+
+async function copyToNode(
+  opts: NodesRpcOpts,
+  nodeId: string,
+  localPath: string,
+  remotePath: string,
+  overwrite: boolean,
+): Promise<void> {
+  const localStat = fs.statSync(localPath);
+
+  if (localStat.isFile()) {
+    if (!overwrite) {
+      const remoteStat = await invokeNodeFs<FsStatResult>(opts, nodeId, "fs.stat", {
+        path: remotePath,
+      });
+      if (remoteStat.exists) {
+        throw new Error(`remote file already exists: ${remotePath} (use --overwrite)`);
+      }
+    }
+    const bytes = await uploadFile(opts, nodeId, localPath, remotePath);
+    defaultRuntime.log(`Copied ${localPath} → ${remotePath} (${formatBytes(bytes)})`);
+  } else if (localStat.isDirectory()) {
+    const localFiles = collectLocalFiles(localPath);
+    let totalBytes = 0;
+    for (const relPath of localFiles) {
+      const fullLocal = path.join(localPath, relPath);
+      const fullRemote = remotePath + "/" + relPath.replace(/\\/g, "/");
+      const bytes = await uploadFile(opts, nodeId, fullLocal, fullRemote);
+      totalBytes += bytes;
+      defaultRuntime.log(`  ${relPath} (${formatBytes(bytes)})`);
+    }
+    defaultRuntime.log(
+      `\nCopied ${localFiles.length} files (${formatBytes(totalBytes)}) to ${remotePath}`,
+    );
+  } else {
+    throw new Error(`unsupported local path type: ${localPath}`);
+  }
 }

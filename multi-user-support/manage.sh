@@ -888,7 +888,7 @@ You have access to two execution environments via the \`host\` parameter:
 5. **Never send Linux commands to the node** — it runs Windows and does not have \`bash\` or \`ls\`.
 6. When checking connectivity or status, use \`"host": "gateway"\` to run gateway-side commands like \`openclaw nodes status\`.
 7. **Never run bare interpreter commands** like \`node -v\`, \`python --version\`, or \`ruby -e ...\` on the node — these are blocked by the security policy. Run concrete tools or scripts instead (e.g. \`markitdown file.pptx\`, \`node script.js\`, \`python script.py\`).
-8. **For complex file work, use \`openclaw nodes pull/push\` on the gateway** to transfer files to your local workspace, work on them locally, then push results back. This avoids shell quoting and approval issues on the node.
+8. **For complex file work, use \`openclaw nodes copy\` on the gateway** to transfer files to your local workspace, work on them locally, then copy results back. This avoids shell quoting and approval issues on the node.
 
 ## Document Extraction (Windows Node)
 
@@ -910,11 +910,11 @@ This avoids shell quoting issues, path format problems, and exec approval restri
 - **List remote files:**
   \`openclaw nodes ls --node ${node_name} --path "C:\\Users\\capyb\\Desktop\\folder"\`
 
-- **Pull files to local workspace:**
-  \`openclaw nodes pull --node ${node_name} --remote "C:\\Users\\capyb\\Desktop\\folder" --local ./working-copy\`
+- **Copy from node to gateway:**
+  \`openclaw nodes copy --node ${node_name} --from node:C:\\Users\\capyb\\Desktop\\folder --to ./working-copy\`
 
-- **Push results back to the node:**
-  \`openclaw nodes push --node ${node_name} --local ./output.docx --remote "C:\\Users\\capyb\\Desktop\\folder\\output.docx" --overwrite\`
+- **Copy from gateway back to node:**
+  \`openclaw nodes copy --node ${node_name} --from ./output.docx --to node:C:\\Users\\capyb\\Desktop\\folder\\output.docx --overwrite\`
 
 ### When to use pull/push vs. direct node execution
 
