@@ -142,6 +142,12 @@ export const RequestFrameSchema = Type.Object(
     id: NonEmptyString,
     method: NonEmptyString,
     params: Type.Optional(Type.Unknown()),
+    /**
+     * Sender wall-clock at frame send time (ms since epoch). Optional, additive.
+     * Older clients omit it; the Protocol Monitor uses it to derive one-way
+     * latency on the receiver. Assumes clocks are synced across peers.
+     */
+    sentAt: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -153,6 +159,8 @@ export const ResponseFrameSchema = Type.Object(
     ok: Type.Boolean(),
     payload: Type.Optional(Type.Unknown()),
     error: Type.Optional(ErrorShapeSchema),
+    /** See RequestFrameSchema.sentAt. */
+    sentAt: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -164,6 +172,8 @@ export const EventFrameSchema = Type.Object(
     payload: Type.Optional(Type.Unknown()),
     seq: Type.Optional(Type.Integer({ minimum: 0 })),
     stateVersion: Type.Optional(StateVersionSchema),
+    /** See RequestFrameSchema.sentAt. */
+    sentAt: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

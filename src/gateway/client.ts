@@ -908,7 +908,7 @@ export class GatewayClient {
       throw new Error("gateway not connected");
     }
     const id = randomUUID();
-    const frame: RequestFrame = { type: "req", id, method, params };
+    const frame: RequestFrame = { type: "req", id, method, params, sentAt: Date.now() };
     if (!validateRequestFrame(frame)) {
       throw new Error(
         `invalid request frame: ${JSON.stringify(validateRequestFrame.errors, null, 2)}`,

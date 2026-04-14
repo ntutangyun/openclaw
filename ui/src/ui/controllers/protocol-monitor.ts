@@ -25,6 +25,13 @@ export type ProtocolTraceRecord = {
   payloadSize?: number;
   /** Protocol-level request id (shared between matching req and res). */
   reqId?: string | number;
+  /**
+   * One-way wire latency in ms, computed by the gateway as
+   * `Date.now() - frame.sentAt` for inbound traces only. Undefined for
+   * outbound traces (the gateway can't observe peer recv time) and for
+   * inbound traces from peers that don't stamp `sentAt`.
+   */
+  oneWayLatencyMs?: number;
 };
 
 export type CoalescedGroup = {
@@ -179,8 +186,16 @@ export type NetworkStats = {
   agentLlmTtft: LatencyStats;
   /** Agent-LLM full generation latency samples (one per LLM call). */
   agentLlmGeneration: LatencyStats;
-  /** Gateway-Node request-response latency samples. */
-  gatewayNodeLatency: LatencyStats;
+  /**
+   * Operator → Gateway WS one-way latency samples, derived from
+   * `frame.sentAt` stamped by the operator client. Assumes synced clocks.
+   */
+  operatorGatewayOneWayLatency: LatencyStats;
+  /**
+   * Node → Gateway WS one-way latency samples, derived from `frame.sentAt`
+   * stamped by the node client. Assumes synced clocks.
+   */
+  nodeGatewayOneWayLatency: LatencyStats;
 };
 
 // ---------------------------------------------------------------------------
@@ -297,6 +312,80 @@ export function extractToolCalls(traces: ProtocolTraceRecord[]): ToolCallMessage
     });
   }
   return calls;
+}
+
+/**
+ * Methods (req/res) and events that the protocol monitor should NOT ingest
+ * into its trace buffer at all. These are UI/control-plane housekeeping calls
+ * (periodic polls, presence pings, etc.) that aren't part of the user's task
+ * flow and would otherwise crowd the fixed-length buffer (MAX_VISIBLE = 1000)
+ * out of useful agent traces.
+ *
+ * The traffic still flows on the wire — this only filters what the UI keeps
+ * locally for the Protocol Monitor view. Other parts of the UI (overview,
+ * usage, nodes list, etc.) are unaffected because they consume those
+ * responses through their own controllers, not through `protocolTraces`.
+ */
+export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
+  // Periodic polls
+  "node.list",
+  "nodes.list",
+  "device.pair.list",
+  "device.pair.status",
+  "session.usage",
+  "sessions.usage",
+  "sessions.list",
+  "sessions.subscribe",
+  "sessions.unsubscribe",
+  "sessions.messages.subscribe",
+  "sessions.messages.unsubscribe",
+  "agent.identity.get",
+  "agents.list",
+  "presence.list",
+  "system-presence",
+  "channels.list",
+  "channels.status",
+  "cron.list",
+  "cron.status",
+  "config.get",
+  "models.list",
+  "tools.catalog",
+  "tools.effective",
+  "usage.status",
+  "usage.cost",
+  "debug.snapshot",
+  // Health / liveness
+  "health",
+  "last-heartbeat",
+  "set-heartbeats",
+  "status",
+  // Connection lifecycle
+  "connect",
+  "hello",
+  // The protocol monitor's own RPCs
+  "protocol-traces.list",
+  "protocol-traces.clear",
+  // Periodic broadcast events
+  "tick",
+  "heartbeat",
+  "presence",
+  "open",
+  "hello-ok",
+  "protocol.trace",
+]);
+
+/** Returns true if a trace record should be dropped before ingestion. */
+export function isIngestBlocklisted(
+  record: { method?: string; event?: string },
+  blocklist: ReadonlySet<string> = DEFAULT_INGEST_BLOCKLIST,
+): boolean {
+  if (record.method && blocklist.has(record.method)) {
+    return true;
+  }
+  if (record.event && blocklist.has(record.event)) {
+    return true;
+  }
+  return false;
 }
 
 /** Default disabled message types for cleaner agentic task view. */
@@ -567,8 +656,38 @@ export function computeNetworkStats(
       computeAgentLlmGeneration(traces, runModelMap),
       modelFilter,
     ),
-    gatewayNodeLatency: computeGatewayNodeLatency(traces),
+    operatorGatewayOneWayLatency: computeWsOneWayLatency(traces, "operator"),
+    nodeGatewayOneWayLatency: computeWsOneWayLatency(traces, "node"),
   };
+}
+
+/**
+ * One-way WS latency from a specific source entity to the gateway, derived
+ * from the `oneWayLatencyMs` field that the gateway populates at trace
+ * capture time using `Date.now() - frame.sentAt`. Assumes peer clocks are
+ * synchronized (NTP).
+ */
+function computeWsOneWayLatency(traces: ProtocolTraceRecord[], source: TraceEntity): LatencyStats {
+  const samples: LatencySample[] = [];
+  for (const t of traces) {
+    if (t.source !== source) {
+      continue;
+    }
+    if (t.target !== "gateway") {
+      continue;
+    }
+    if (typeof t.oneWayLatencyMs !== "number") {
+      continue;
+    }
+    const label =
+      t.kind === "event" && t.event
+        ? `event.${t.event}`
+        : t.method
+          ? `${t.kind}.${t.method}`
+          : t.kind;
+    samples.push({ ts: t.ts, latencyMs: t.oneWayLatencyMs, label });
+  }
+  return buildLatencyStats(samples);
 }
 
 // ---------------------------------------------------------------------------
@@ -886,52 +1005,37 @@ export function clearLatencyCaches() {
   genProcessed.clear();
 }
 
-const STALE_REQUEST_MS = 60_000;
+export type LatencyCacheSnapshot = {
+  ttft: LatencySample[];
+  gen: LatencySample[];
+};
 
 /**
- * Gateway-Node latency: match req (node→gateway) to res (gateway→node)
- * by connId + reqId (the protocol-level request id).
- *
- * Direction note: node sends a request *to* the gateway (source=node,
- * target=gateway, kind=req) and the gateway replies (source=gateway,
- * target=node, kind=res). The latency measures gateway processing time
- * for that RPC. We also capture the reverse direction (gateway→node req
- * answered by node→gateway res) when it occurs.
+ * Snapshot the persistent latency sample caches for export. Only the samples
+ * themselves are captured — the in-flight run-state Maps and processed-id Sets
+ * are intentionally omitted: the exported viewer does not feed new traces
+ * through the state machines, so it only needs the final samples.
  */
-function computeGatewayNodeLatency(traces: ProtocolTraceRecord[]): LatencyStats {
-  const inflight = new Map<string, { ts: number; method?: string }>();
-  const samples: LatencySample[] = [];
+export function snapshotLatencyCaches(): LatencyCacheSnapshot {
+  return {
+    ttft: ttftCache.map((s) => ({ ...s })),
+    gen: genCache.map((s) => ({ ...s })),
+  };
+}
 
-  for (const t of traces) {
-    const isGatewayNode =
-      (t.source === "gateway" && t.target === "node") ||
-      (t.source === "node" && t.target === "gateway");
-    if (!isGatewayNode || t.reqId === undefined) {
-      continue;
-    }
-
-    const key = `${t.connId ?? ""}:${t.reqId}`;
-
-    if (t.kind === "req") {
-      inflight.set(key, { ts: t.ts, method: t.method });
-    } else if (t.kind === "res") {
-      const req = inflight.get(key);
-      if (req) {
-        samples.push({ ts: t.ts, latencyMs: t.ts - req.ts, label: req.method });
-        inflight.delete(key);
-      }
-    }
+/**
+ * Rehydrate the latency caches from a previously-taken snapshot. Called once
+ * by the exported HTML viewer before first render so `computeNetworkStats`
+ * reproduces the exact latency stats that were on screen at export time.
+ */
+export function rehydrateLatencyCaches(snapshot: LatencyCacheSnapshot) {
+  clearLatencyCaches();
+  for (const s of snapshot.ttft) {
+    ttftCache.push({ ...s });
   }
-
-  // Expire stale entries (avoid unbounded growth across recomputations)
-  const now = Date.now();
-  for (const [key, req] of inflight) {
-    if (now - req.ts > STALE_REQUEST_MS) {
-      inflight.delete(key);
-    }
+  for (const s of snapshot.gen) {
+    genCache.push({ ...s });
   }
-
-  return buildLatencyStats(samples);
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1098,7 @@ export type ProtocolMonitorHost = {
   protocolSelectedTrace: ProtocolTraceRecord | CoalescedGroup | null;
   protocolAutoScroll: boolean;
   protocolDisabledTypes: Set<string>;
+  protocolMonitoringPaused: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -1026,7 +1131,8 @@ export async function loadProtocolTraces(host: ProtocolMonitorHost) {
       "protocol-traces.list",
       { limit: MAX_VISIBLE },
     );
-    host.protocolTraces = res.traces ?? [];
+    const incoming = res.traces ?? [];
+    host.protocolTraces = incoming.filter((t) => !isIngestBlocklisted(t));
   } catch {
     // ignore
   } finally {
@@ -1035,11 +1141,17 @@ export async function loadProtocolTraces(host: ProtocolMonitorHost) {
 }
 
 export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unknown) {
+  if (host.protocolMonitoringPaused) {
+    return;
+  }
   if (!payload || typeof payload !== "object") {
     return;
   }
   const record = payload as ProtocolTraceRecord;
   if (record.event === "protocol.trace") {
+    return;
+  }
+  if (isIngestBlocklisted(record)) {
     return;
   }
   const next = [...host.protocolTraces, record];
@@ -1060,20 +1172,80 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
   }
 }
 
-export function exportProtocolTraces(host: ProtocolMonitorHost) {
-  // Export traces from the in-memory buffer as a JSONL download.
-  // This avoids the HTTP auth/CORS issue with the /protocol-traces/export endpoint.
-  const traces = host.protocolTraces;
-  if (traces.length === 0) {
+/**
+ * Destructive reset for the Protocol Monitor page. In addition to
+ * `clearProtocolTraces`, this asks the gateway to unlink every session
+ * transcript file on disk, then clears the locally-cached usage result so the
+ * "Usage Overview" metrics zero out. Session transcripts are persistent agent
+ * memory — the user is warned with exact counts from a dry-run before anything
+ * is touched.
+ *
+ * Host type is widened so we can also clear the two cached usage fields that
+ * back the usage overview cards.
+ */
+export async function purgeAllProtocolMonitorState(
+  host: ProtocolMonitorHost & {
+    usageResult: unknown;
+    usageCostSummary: unknown;
+  },
+): Promise<void> {
+  if (!host.client || !host.connected) {
     return;
   }
-  const lines = traces.map((t) => JSON.stringify(t)).join("\n");
-  const blob = new Blob([lines], { type: "application/x-ndjson" });
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const blobUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = blobUrl;
-  a.download = `protocol-traces-${ts}.jsonl`;
-  a.click();
-  URL.revokeObjectURL(blobUrl);
+
+  // Step 1: dry-run for counts so the confirm is specific, not generic.
+  type PurgeResult = { dryRun: boolean; fileCount: number; byteCount: number; agentIds: string[] };
+  let plan: PurgeResult;
+  try {
+    plan = await host.client.request<PurgeResult>("sessions.purge", { dryRun: true });
+  } catch {
+    // Older gateway that doesn't understand sessions.purge — fall back to
+    // the non-destructive reset rather than leave the button broken.
+    if (
+      confirm(
+        "This gateway is too old to purge session transcripts from disk. " +
+          "Clear only the in-memory traces and local metrics cache?",
+      )
+    ) {
+      await clearProtocolTraces(host);
+      host.usageResult = null;
+      host.usageCostSummary = null;
+    }
+    return;
+  }
+
+  const mib = plan.byteCount / (1024 * 1024);
+  const agentsDesc =
+    plan.agentIds.length === 0
+      ? "no agents"
+      : plan.agentIds.length === 1
+        ? `agent "${plan.agentIds[0]}"`
+        : `${plan.agentIds.length} agents (${plan.agentIds.toSorted().join(", ")})`;
+  const sizeDesc = mib >= 0.05 ? `${mib.toFixed(1)} MiB` : `${plan.byteCount} bytes`;
+
+  const confirmed = confirm(
+    `Reset protocol monitor and permanently delete session data?\n\n` +
+      `• ${plan.fileCount} session transcript file(s) across ${agentsDesc}\n` +
+      `• ~${sizeDesc} on disk\n` +
+      `• The gateway's in-memory protocol trace buffer\n` +
+      `• Persistent latency caches in this browser\n\n` +
+      `Session transcripts are the agents' actual conversation history — this ` +
+      `cannot be undone and agents currently mid-turn may lose context. ` +
+      `Continue?`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  // Step 2: live purge. Run sequentially so trace buffer clear happens even if
+  // sessions.purge fails; the user asked for a complete reset.
+  try {
+    await host.client.request<PurgeResult>("sessions.purge", {});
+  } catch {
+    // Fall through — we still want the rest of the reset to happen so at
+    // least the UI matches what the gateway would hand us on next refresh.
+  }
+  await clearProtocolTraces(host);
+  host.usageResult = null;
+  host.usageCostSummary = null;
 }

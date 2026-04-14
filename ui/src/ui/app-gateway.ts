@@ -105,6 +105,7 @@ type GatewayHost = {
   protocolAutoScroll: boolean;
   protocolDisabledTypes: Set<string>;
   protocolSubTab: "usage" | "protocol";
+  protocolMonitoringPaused: boolean;
 };
 
 type SessionDefaultsSnapshot = {

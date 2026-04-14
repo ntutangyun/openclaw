@@ -600,7 +600,7 @@ export class GatewayBrowserClient {
       return Promise.reject(new Error("gateway not connected"));
     }
     const id = generateUUID();
-    const frame = { type: "req", id, method, params };
+    const frame = { type: "req", id, method, params, sentAt: Date.now() };
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
     });

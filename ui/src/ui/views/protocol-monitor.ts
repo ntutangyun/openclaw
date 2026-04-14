@@ -8,7 +8,6 @@ import type {
   MessageTypeStats,
   NetworkStats,
   ThroughputSample,
-  DirectionalThroughputSamples,
   LatencyStats,
   LatencySample,
   ChatMessage,
@@ -26,6 +25,7 @@ import {
   filterTracesByModel,
 } from "../controllers/protocol-monitor.ts";
 import { renderProtocolMonitorDetail } from "./protocol-monitor-detail.ts";
+import { renderTerminologyPane } from "./protocol-monitor-terminology.ts";
 import {
   type UsageInsightStats,
   buildUsageInsightStats,
@@ -38,7 +38,15 @@ import type { UsageTotals, UsageAggregates } from "./usageTypes.ts";
 // Props
 // ---------------------------------------------------------------------------
 
-export type ProtocolMonitorSubTab = "protocol" | "settings";
+export type ProtocolMonitorSubTab = "protocol" | "terminology" | "settings";
+
+export type NetworkDirection =
+  | "op-to-gw"
+  | "gw-to-op"
+  | "gw-to-node"
+  | "node-to-gw"
+  | "agent-to-model"
+  | "model-to-agent";
 
 export type ProtocolMonitorProps = {
   traces: ProtocolTraceRecord[];
@@ -52,6 +60,16 @@ export type ProtocolMonitorProps = {
   usageAggregates: UsageAggregates | null;
   usageSessions: unknown[];
   usageLoading: boolean;
+  usageExplainer: string | null;
+  monitoringPaused: boolean;
+  networkDirection: NetworkDirection;
+  networkExplainer: string | null;
+  onOpenUsageExplainer: (key: string) => void;
+  onCloseUsageExplainer: () => void;
+  onToggleMonitoring: (paused: boolean) => void;
+  onNetworkDirectionChange: (dir: NetworkDirection) => void;
+  onOpenNetworkExplainer: (key: string) => void;
+  onCloseNetworkExplainer: () => void;
   onSubTabChange: (tab: ProtocolMonitorSubTab) => void;
   onToggleAutoScroll: (v: boolean) => void;
   onSelectTrace: (t: ProtocolTraceRecord | CoalescedGroup) => void;
@@ -61,6 +79,15 @@ export type ProtocolMonitorProps = {
   onReset: () => void;
   onToggleType: (key: string) => void;
   onModelFilterChange: (model: string | null) => void;
+  /**
+   * When rendered inside a standalone exported HTML report, `exportMode` hides
+   * live-only controls (refresh, export, reset, pause toggle, auto-scroll) and
+   * shows a "frozen at <timestamp>" banner. Interactivity for tab switching,
+   * filter toggles, trace-detail modals, and explainer overlays is preserved.
+   */
+  exportMode?: boolean;
+  /** Wall-clock ms of when the snapshot was taken. Only used when exportMode. */
+  exportCapturedAt?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -630,6 +657,7 @@ const ROW_HEIGHT = 80;
 
 const SUB_TABS: { id: ProtocolMonitorSubTab; label: string }[] = [
   { id: "protocol", label: "Protocol & Network" },
+  { id: "terminology", label: "Terminology" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -655,6 +683,7 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
       </div>
       <div class="pm-tab-content">
         ${props.subTab === "protocol" ? renderProtocolAndNetworkPane(props) : nothing}
+        ${props.subTab === "terminology" ? renderTerminologyPane() : nothing}
         ${props.subTab === "settings" ? renderSettingsPane(props) : nothing}
       </div>
       ${props.selectedTrace
@@ -678,6 +707,1026 @@ export function renderProtocolMonitor(props: ProtocolMonitorProps): TemplateResu
             </div>
           </div>`
         : nothing}
+      ${renderUsageExplainerOverlay(props)}
+    </div>
+  `;
+}
+
+type ExplainerStat = { label: string; value: string };
+type ExplainerContent = {
+  title: string;
+  stats: ExplainerStat[];
+  intro: TemplateResult;
+  sections: Array<{ title: string; badge?: { kind: string; label: string }; body: TemplateResult }>;
+};
+
+function buildExplainerContent(key: string, props: ProtocolMonitorProps): ExplainerContent | null {
+  const agg = props.usageAggregates;
+
+  const modelFilter = props.modelFilter;
+  let totals = props.usageTotals;
+  if (modelFilter && agg) {
+    const byModel = (agg as Record<string, unknown>).byModel as
+      | Array<{ provider?: string; model?: string; count: number; totals: Record<string, unknown> }>
+      | undefined;
+    if (byModel) {
+      const match = byModel.find(
+        (m) => m.model === modelFilter || `${m.provider ?? ""}/${m.model ?? ""}` === modelFilter,
+      );
+      if (match) {
+        totals = match.totals as typeof totals;
+      }
+    }
+  }
+
+  const sessions = props.usageSessions;
+  const insightStats: UsageInsightStats | null =
+    agg && totals ? buildUsageInsightStats(sessions as never[], totals, agg) : null;
+
+  const msgTotal = agg?.messages.total ?? 0;
+  const userMsgs = agg?.messages.user ?? 0;
+  const assistantMsgs = agg?.messages.assistant ?? 0;
+  const toolCalls = agg?.tools.totalCalls ?? 0;
+  const uniqueTools = agg?.tools.uniqueTools ?? 0;
+  const toolResults = agg?.messages.toolResults ?? 0;
+  const errors = agg?.messages.errors ?? 0;
+  const totalTokens = totals?.totalTokens ?? 0;
+  const totalCost = totals?.totalCost ?? 0;
+  const inputTokens = totals?.input ?? 0;
+  const outputTokens = totals?.output ?? 0;
+  const cacheRead = totals?.cacheRead ?? 0;
+  const cacheWrite = totals?.cacheWrite ?? 0;
+  const cacheBase = inputTokens + cacheRead;
+  const cacheHitRate = cacheBase > 0 ? (cacheRead / cacheBase) * 100 : 0;
+  const errorRate = msgTotal > 0 ? (errors / msgTotal) * 100 : 0;
+  const avgTokens = msgTotal > 0 ? Math.round(totalTokens / msgTotal) : 0;
+  const throughput = insightStats?.throughputTokensPerMin;
+  const durationSumMs = insightStats?.durationSumMs ?? 0;
+  const durationCount = insightStats?.durationCount ?? 0;
+  const avgDurationMs = insightStats?.avgDurationMs ?? 0;
+  const totalMinutes = durationSumMs / 60000;
+
+  const costPerMsg = msgTotal > 0 ? totalCost / msgTotal : 0;
+  const missingCost = totals?.missingCostEntries ?? 0;
+
+  switch (key) {
+    case "messages":
+      return {
+        title: "Messages",
+        stats: [
+          { label: "Total", value: String(msgTotal) },
+          { label: "User", value: String(userMsgs) },
+          { label: "Assistant", value: String(assistantMsgs) },
+        ],
+        intro: html`这些数字来自读取每个 session 在磁盘上保存的 transcript 文件 —— 并不是来自实时
+          网络流量。每一行 transcript 都会被逐条检查,并按 <em>role</em> 分类计数。`,
+        sections: [
+          {
+            title: `什么算一条 "user" message`,
+            badge: { kind: "user", label: "User" },
+            body: html`<p>
+              每一条 <code>message.role === "user"</code> 的 transcript 记录记 1 次。
+              也就是说,无论你(或请求方)发出的这一轮内容多长、包含多少 content block, 都只记作一条
+              user message。
+            </p>`,
+          },
+          {
+            title: `什么算一条 "assistant" message`,
+            badge: { kind: "assistant", label: "Assistant" },
+            body: html`<p>
+              每一条 <code>message.role === "assistant"</code> 的 transcript 记录记 1 次。
+              哪怕这一次 assistant 回复里包含多个 tool call、长篇推理、或多个段落, 也只算一条
+              message —— 其中的 tool call 会单独在 <strong>Tool Calls</strong>
+              卡片里统计。
+            </p>`,
+          },
+          {
+            title: `什么会计入 "Total"`,
+            badge: { kind: "total", label: "Total" },
+            body: html`<p>
+              <code>Total = User + Assistant</code>。system prompt、tool role 的 message,
+              以及任何其它 role 都 <em>不</em> 计入。tool call、tool result、error
+              都有各自独立的计数器。
+            </p>`,
+          },
+          {
+            title: "一些容易踩坑的地方",
+            body: html`<ul>
+              <li>
+                这里的计数只覆盖当前 usage 时间窗口内的 session。如果启用了
+                <strong>model 过滤</strong>,数字会只基于匹配该 model 的 session 重新聚合。
+              </li>
+              <li>
+                聚合发生在 gateway 方法 <code>sessions.usage</code>,它把
+                <code>scanTranscriptFile</code> 产出的每个 session 的计数累加起来。
+              </li>
+              <li>一条 transcript 记录 = 一次计数。单轮里的多段内容不会让数字膨胀。</li>
+            </ul>`,
+          },
+        ],
+      };
+
+    case "throughput":
+      return {
+        title: "Throughput",
+        stats: [
+          {
+            label: "Tokens / min",
+            value: throughput !== undefined ? formatTokens(Math.round(throughput)) : "—",
+          },
+          { label: "Total tokens", value: formatTokens(totalTokens) },
+          {
+            label: "Active duration",
+            value:
+              durationSumMs > 0
+                ? (formatDurationCompact(durationSumMs, { spaced: true }) ?? "—")
+                : "—",
+          },
+        ],
+        intro: html`Throughput 衡量的是在 session <em>活跃</em> 时间内 token 流动的速度。
+          <strong>不是</strong>整个时间窗口的自然时间 —— 只算每个 session 实际在工作的那段时间。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p>
+                <code>throughput = totalTokens / (durationSumMs / 60000)</code> &mdash; 总 token 数
+                除以总活跃时长(分钟)。
+              </p>
+              <p class="pm-explainer-mini">
+                当前:${formatTokens(totalTokens)} tokens ÷
+                ${totalMinutes > 0 ? `${totalMinutes.toFixed(1)} min` : "0 min"} ≈
+                ${throughput !== undefined
+                  ? `${formatTokens(Math.round(throughput))} tok/min`
+                  : "—"}。
+              </p>`,
+          },
+          {
+            title: "活跃时长从哪来",
+            body: html`<p>
+              每个 session 会汇报自己的 <code>usage.durationMs</code> —— 也就是 transcript 活动跨
+              越的时间。把 ${durationCount} 个有正时长的 session 累加起来,就得到了
+              <code>durationSumMs</code>。
+            </p>`,
+          },
+          {
+            title: `副标题里的 "avg session" 是什么意思`,
+            body: html`<p>
+              <code>durationSumMs / durationCount</code> —— 每个有活动记录的 session
+              的平均活跃时长。 当前值:
+              <strong
+                >${avgDurationMs > 0
+                  ? (formatDurationCompact(avgDurationMs, { spaced: true }) ?? "—")
+                  : "—"}</strong
+              >。
+            </p>`,
+          },
+          {
+            title: "注意事项",
+            body: html`<ul>
+              <li>没有可测量时长的 session 会被跳过 —— 没法算速率。</li>
+              <li>session 内部的空闲间隙仍然计入它的时长。</li>
+              <li>
+                Token 包含 input、output,以及 cache read / cache write —— 跟
+                <strong>Total Tokens</strong> 卡片使用的是同一个 total。
+              </li>
+            </ul>`,
+          },
+        ],
+      };
+
+    case "toolcalls":
+      return {
+        title: "Tool Calls",
+        stats: [
+          { label: "Total calls", value: String(toolCalls) },
+          { label: "Unique tools", value: String(uniqueTools) },
+          { label: "Tool results", value: String(toolResults) },
+        ],
+        intro: html`每当一次 assistant 回复调用了 tool,就会被计入。一次 assistant 回复里 调用了 3 个
+          tool,就给这个数字贡献 <strong>3</strong>(但对 assistant message 数仍然只贡献
+          <strong>1</strong>)。`,
+        sections: [
+          {
+            title: "单次调用是怎么被计数的",
+            body: html`<p>
+              对每一条 assistant 的 transcript 记录,<code>scanTranscriptFile</code> 会提取出它用到的
+              tool 名列表(<code>entry.toolNames</code>),然后把列表长度 加到
+              <code>messageCounts.toolCalls</code> 上。每个 tool 名字也会在一张 per-tool 的 map
+              里计数。
+            </p>`,
+          },
+          {
+            title: `"unique tools" 是什么意思`,
+            body: html`<p>
+              就是那张 per-tool map 的 size —— 也就是当前时间窗口里,所有 session 中出现过的 不同
+              tool 名的数量。当前观察到 <strong>${uniqueTools}</strong> 个不同的 tool。
+            </p>`,
+          },
+          {
+            title: "tool call 和 tool result 的区别",
+            body: html`<p>
+              call 是 assistant <em>请求</em> 调用 tool;result 是 tool <em>回复</em> 的结果。
+              正常情况下是 1 对 1,但流式取消、出错或 aborted 的回合会让两个数字对不上。
+            </p>`,
+          },
+        ],
+      };
+
+    case "avgtokens":
+      return {
+        title: "Avg Tokens",
+        stats: [
+          { label: "Avg / message", value: formatTokens(avgTokens) },
+          { label: "Total tokens", value: formatTokens(totalTokens) },
+          { label: "Messages", value: String(msgTotal) },
+        ],
+        intro: html`在当前 usage 时间窗口内,每一条 user + assistant message 平均搬运了多少 token。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p><code>avgTokens = round(totalTokens / messages.total)</code>。</p>
+              <p class="pm-explainer-mini">
+                当前:${formatTokens(totalTokens)} tokens ÷ ${msgTotal} message ≈
+                ${formatTokens(avgTokens)} / msg。
+              </p>`,
+          },
+          {
+            title: "分子是什么",
+            body: html`<p>
+              <code>totalTokens = input + output + cacheRead + cacheWrite</code>, 是把窗口内所有
+              model-usage 记录加和得到的。缓存读入和新读入的 prompt token 都算。
+            </p>`,
+          },
+          {
+            title: "分母是什么",
+            body: html`<p>
+              <code>messages.total = user + assistant</code>。所以这里的"每条 message"指的是 每一轮
+              <em>transcript turn</em>,而不是每次 tool call、每个 content block 或每次 model 调用。
+            </p>`,
+          },
+          {
+            title: "为什么有时候数字会让人意外",
+            body: html`<ul>
+              <li>
+                大量的 cache read 会让 <code>totalTokens</code> 快速上涨 —— 一个带大量缓存上下文 的
+                agent 可能显示非常高的平均值。
+              </li>
+              <li>如果 <code>messages.total</code> 为 0,卡片显示 0(不会有除零错误)。</li>
+            </ul>`,
+          },
+        ],
+      };
+
+    case "cachehit":
+      return {
+        title: "Cache Hit",
+        stats: [
+          { label: "Hit rate", value: `${cacheHitRate.toFixed(1)}%` },
+          { label: "Cache read", value: formatTokens(cacheRead) },
+          { label: "Prompt base", value: formatTokens(cacheBase) },
+        ],
+        intro: html`prompt 侧的 token 中,有多少比例是从 model 的 prompt cache 中读出来的,
+        而不是作为全新的 input 被重新计费。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p>
+                <code>cacheHitRate = cacheRead / (input + cacheRead)</code> &mdash; 以百分比表示。
+              </p>
+              <p class="pm-explainer-mini">
+                当前:${formatTokens(cacheRead)} cached ÷ ${formatTokens(cacheBase)} prompt =
+                <strong>${cacheHitRate.toFixed(1)}%</strong>。
+              </p>`,
+          },
+          {
+            title: "为什么分母是 input + cacheRead",
+            body: html`<p>
+              prompt token 送到 model 只有两条路:要么被重新 tokenize(<code>input</code>),
+              要么从缓存读出(<code>cacheRead</code>)。output 和 cacheWrite 的 token
+              <em>不</em> 参与命中率的分母计算。
+            </p>`,
+          },
+          {
+            title: `卡片颜色(tone)代表什么`,
+            body: html`<ul>
+              <li><strong>Good(绿):</strong>高于 60% —— 大部分 prompt 都被缓存命中了。</li>
+              <li><strong>Warn(黄):</strong>30&ndash;60% —— 命中一般。</li>
+              <li>
+                <strong>Bad(红):</strong>低于 30% —— 基本没命中缓存;检查一下 prompt 前缀
+                是不是在每一轮里都被改动了。
+              </li>
+            </ul>`,
+          },
+          {
+            title: "跟 cache write 不是一回事",
+            body: html`<p>
+              <code>cacheWrite</code>(${formatTokens(cacheWrite)})是单独统计的 —— 这是
+              为了后续轮次复用而 <em>写入</em> 缓存的 token,不是读出来的。
+            </p>`,
+          },
+        ],
+      };
+
+    case "errorrate":
+      return {
+        title: "Error Rate",
+        stats: [
+          { label: "Error rate", value: `${errorRate.toFixed(2)}%` },
+          { label: "Errors", value: String(errors) },
+          { label: "Messages", value: String(msgTotal) },
+        ],
+        intro: html`带有 error 信号的 message 数相对于 message 总数的比例。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p>
+                <code>errorRate = errors / messages.total</code> &mdash; 以百分比表示。
+              </p>
+              <p class="pm-explainer-mini">
+                当前:${errors} errors ÷ ${msgTotal} messages =
+                <strong>${errorRate.toFixed(2)}%</strong>。
+              </p>`,
+          },
+          {
+            title: "哪些情况会让 error 计数 +1",
+            body: html`<p>在 <code>scanTranscriptFile</code> 内部,error 有两个来源:</p>
+              <ul>
+                <li>
+                  <strong>tool result 错误</strong>:每一条被标记为 error 的 tool result 都会让
+                  <code>messageCounts.errors</code> +1。
+                </li>
+                <li>
+                  <strong>终止态 stopReason</strong>:assistant 的一轮回复,如果
+                  <code>stopReason</code> 是 <code>"error"</code>、<code>"aborted"</code> 或
+                  <code>"timeout"</code>,+1。
+                </li>
+              </ul>`,
+          },
+          {
+            title: "颜色(tone)阈值",
+            body: html`<ul>
+              <li><strong>Good:</strong>≤ 1%。</li>
+              <li><strong>Warn:</strong>1&ndash;5%。</li>
+              <li><strong>Bad:</strong>大于 5%。</li>
+            </ul>`,
+          },
+          {
+            title: "为什么比率有可能超过 100%",
+            body: html`<p>
+              一次 message turn 里可能同时记录多个 tool result error <em>再加上</em> 一个 error
+              stopReason,所以极端情况下 <code>errors</code> 会超过
+              <code>messages.total</code>。这里仍然直接按比值计算。
+            </p>`,
+          },
+        ],
+      };
+
+    case "totalcost":
+      return {
+        title: "Total Cost",
+        stats: [
+          { label: "Total", value: formatCost(totalCost) },
+          { label: "Per message", value: formatCost(costPerMsg, 4) },
+          { label: "Messages", value: String(msgTotal) },
+        ],
+        intro: html`当前时间窗口内,每一条 model usage 记录所报告的 per-session 费用总和。 币种为
+        USD。`,
+        sections: [
+          {
+            title: "每个 session 的 cost 是怎么算的",
+            body: html`<p>
+              每一条 assistant message 的 usage 都带有 cost 拆分(<code>input</code>、
+              <code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code>)。 它们在
+              <code>applyCostBreakdown</code> 里被累加到该 session 的 <code>totalCost</code>。
+            </p>`,
+          },
+          {
+            title: "session 之间怎么聚合",
+            body: html`<p>
+              gateway 方法 <code>sessions.usage</code> 会把所有匹配的 session 的
+              <code>totalCost</code> 加起来。如果启用了 model 过滤,只有该 model 的 cost 会被计入。
+            </p>`,
+          },
+          {
+            title: "每条 message 的 cost",
+            body: html`<p>
+              副标题的值是 <code>totalCost / messages.total</code>,保留 4 位小数。 当前:<strong
+                >${formatCost(costPerMsg, 4)} / msg</strong
+              >。
+            </p>`,
+          },
+          {
+            title: "缺失 cost 的记录",
+            body:
+              missingCost > 0
+                ? html`<p>
+                    时间窗口内有 <strong>${missingCost}</strong> 条 usage 记录没有 cost 拆分
+                    (价格未知,或是本地运行的 model)。这些记录会计入 token 总量,但不会计入 cost。
+                  </p>`
+                : html`<p>时间窗口内每一条 usage 记录都带有 cost 拆分 —— 没有没法计价的条目。</p>`,
+          },
+        ],
+      };
+
+    case "totaltokens":
+      return {
+        title: "Total Tokens",
+        stats: [
+          { label: "Total", value: formatTokens(totalTokens) },
+          { label: "Input", value: formatTokens(inputTokens) },
+          { label: "Output", value: formatTokens(outputTokens) },
+        ],
+        intro: html`归属到当前 usage 时间窗口内的全部 token,按四种 token 类别累加得到。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p><code>totalTokens = input + output + cacheRead + cacheWrite</code>。</p>
+              <p class="pm-explainer-mini">
+                当前:${formatTokens(inputTokens)} in + ${formatTokens(outputTokens)} out +
+                ${formatTokens(cacheRead)} cache-read + ${formatTokens(cacheWrite)} cache-write =
+                <strong>${formatTokens(totalTokens)}</strong>。
+              </p>`,
+          },
+          {
+            title: "每一项的含义",
+            body: html`<ul>
+              <li><strong>Input</strong>:为请求重新 tokenize 的 prompt token。</li>
+              <li>
+                <strong>Output</strong>:model 生成出来的 token —— assistant 真正的回复内容, 包括
+                tool call 的参数。
+              </li>
+              <li>
+                <strong>Cache read</strong>:命中 model 的 prompt cache、不用重新 tokenize 的 prompt
+                token。
+              </li>
+              <li><strong>Cache write</strong>:为了之后复用而被 model 写入缓存的 prompt token。</li>
+            </ul>`,
+          },
+          {
+            title: "每个 session 的 total 是怎么来的",
+            body: html`<p>
+              在 <code>applyUsageTotals</code> 里:如果一条 usage 记录自己报告了
+              <code>total</code>,就直接用;否则就把四个分量加起来。之后 gateway 再把每个 session 的
+              total 累加起来。
+            </p>`,
+          },
+          {
+            title: "跟其它卡片的关系",
+            body: html`<ul>
+              <li><strong>Avg Tokens</strong> = 这个 total ÷ 总 message 数。</li>
+              <li>
+                <strong>Cache Hit</strong> 只用 <code>input + cacheRead</code> —— output 和
+                cacheWrite 不参与命中率计算。
+              </li>
+              <li><strong>Throughput</strong> = 这个 total ÷ 活跃分钟数。</li>
+            </ul>`,
+          },
+        ],
+      };
+
+    default:
+      return null;
+  }
+}
+
+function renderUsageExplainerOverlay(props: ProtocolMonitorProps): TemplateResult | typeof nothing {
+  const key = props.usageExplainer;
+  if (!key) {
+    return nothing;
+  }
+  const content = buildExplainerContent(key, props);
+  if (!content) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="pm-detail-overlay"
+      @click=${(e: Event) => {
+        if ((e.target as HTMLElement).classList.contains("pm-detail-overlay")) {
+          props.onCloseUsageExplainer();
+        }
+      }}
+    >
+      <div class="pm-detail-modal pm-explainer-modal">
+        <div class="pm-explainer-header">
+          <h3>${content.title} — 如何计算</h3>
+          <button
+            class="pm-explainer-close"
+            @click=${props.onCloseUsageExplainer}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="pm-explainer-body">
+          <div
+            class="pm-explainer-values"
+            style="grid-template-columns: repeat(${content.stats.length}, 1fr);"
+          >
+            ${content.stats.map(
+              (s) => html`
+                <div class="pm-explainer-stat">
+                  <div class="pm-explainer-stat-value">${s.value}</div>
+                  <div class="pm-explainer-stat-label">${s.label}</div>
+                </div>
+              `,
+            )}
+          </div>
+          <p class="pm-explainer-intro">${content.intro}</p>
+          ${content.sections.map(
+            (sec) => html`
+              <div class="pm-explainer-section">
+                <div class="pm-explainer-section-title">
+                  ${sec.badge
+                    ? html`<span class="pm-explainer-badge pm-badge-${sec.badge.kind}"
+                        >${sec.badge.label}</span
+                      >`
+                    : nothing}
+                  ${sec.title}
+                </div>
+                ${sec.body}
+              </div>
+            `,
+          )}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Network / latency card explainer overlay (Chinese)
+// ---------------------------------------------------------------------------
+
+function buildNetworkExplainerContent(
+  key: string,
+  net: NetworkStats,
+  props: ProtocolMonitorProps,
+): ExplainerContent | null {
+  const meta = getDirectionMeta(props.networkDirection);
+  const samples = selectDirectionThroughput(net, props.networkDirection);
+  const peak = samples.length > 0 ? Math.max(...samples.map((s) => s.bytesPerSec)) : 0;
+  const avg =
+    samples.length > 0 ? samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length : 0;
+  const totalBytes = samples.reduce((a, s) => a + s.rawBytes, 0);
+  const lastSample = samples[samples.length - 1];
+
+  const directionLabel = html`<strong>${meta.longLabel}</strong>`;
+
+  switch (key) {
+    case "throughput-peak":
+      return {
+        title: `${meta.shortLabel} · Peak Throughput`,
+        stats: [
+          { label: "Peak", value: `${formatBytes(peak)}/s` },
+          { label: "Samples", value: String(samples.length) },
+        ],
+        intro: html`这是 ${directionLabel} 这条方向上,任意一个 3 秒采样桶里
+          <em>瞬时</em> 字节速率的最大值。可以理解为这一段时间内最 "尖" 的那一下流量。`,
+        sections: [
+          transportSection(props.networkDirection),
+          {
+            title: "采样桶是怎么算出来的",
+            body: html`<p>
+              每条 trace record 都带有 <code>ts</code>(时间戳)和 <code>payloadSize</code> (这一帧的
+              payload 字节数)。<code>computeNetworkStats</code> 把所有 trace 按
+              <code>floor(ts / 3000) * 3000</code> 分到 3 秒一个的 bucket 里, 累加每个 bucket
+              的字节数,然后用 <code>bytes / 3000 * 1000</code> 换算成 bytes/s。
+            </p>`,
+          },
+          {
+            title: "为什么「瞬时」还要除以 3 秒",
+            body: html`<p>
+              真正的瞬时(每帧)峰值会非常抖,看不出趋势。3 秒滑窗在数据点的密度
+              和真实流量趋势之间取了一个折中:既不会被一两笔大请求拉飞,也不会把短促的 burst
+              全部抹平。
+            </p>`,
+          },
+          {
+            title: "Peak 高 ≠ 一直高",
+            body: html`<p>
+              Peak 只反映"最高的那一桶",中位/平均才能反映稳态压力。同时关注
+              <strong>Average</strong> 卡片更能看出这条链路的常态负载。
+            </p>`,
+          },
+        ],
+      };
+
+    case "throughput-avg":
+      return {
+        title: `${meta.shortLabel} · Average Throughput`,
+        stats: [
+          { label: "Avg", value: `${formatBytes(avg)}/s` },
+          { label: "Total bytes", value: formatBytes(totalBytes) },
+          { label: "Samples", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上所有采样桶 bytes/s 的算术平均。
+        也可以理解成"如果流量是恒定的,大概是多少 byte/s"。`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p>
+                <code>average = sum(bucket.bytesPerSec) / bucket count</code>。 注意分母是
+                <em>bucket 数</em>,不是总秒数 —— 完全没有流量的时段没有 bucket, 因此不会拉低均值。
+              </p>
+              <p class="pm-explainer-mini">
+                当前:${formatBytes(samples.reduce((a, s) => a + s.bytesPerSec, 0))} ÷
+                ${samples.length} buckets ≈ <strong>${formatBytes(avg)}/s</strong>。
+              </p>`,
+          },
+          {
+            title: "和 Total Bytes 的关系",
+            body: html`<p>
+              如果你想算"自 session 开始的真实平均吞吐",更准确的算法是
+              <code>totalBytes / 实际持续时长</code>。本卡片显示的 average 是采样桶的
+              算术均值,会忽略空闲间隙。
+            </p>`,
+          },
+        ],
+      };
+
+    case "throughput-total":
+      return {
+        title: `${meta.shortLabel} · Total Bytes`,
+        stats: [
+          { label: "Total", value: formatBytes(totalBytes) },
+          { label: "Samples", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上,从当前 traces buffer 起点到现在, 所有 trace record
+        的 payload 字节累加和。`,
+        sections: [
+          transportSection(props.networkDirection),
+          {
+            title: "数据从哪来",
+            body: html`<p>
+              每条 trace record 上都带有 <code>payloadSize</code>(这一帧或这一段流的 payload
+              字节数)。对方向匹配(<code>source</code> + <code>target</code>)的 trace, 把
+              <code>payloadSize</code> 累加起来即得到 Total Bytes。
+            </p>`,
+          },
+          {
+            title: "受 trace buffer 大小影响",
+            body: html`<p>
+              UI 这边只保留最近 <code>${1000}</code> 条 trace(MAX_VISIBLE)。如果链路非常活跃, 较早的
+              trace 会被挤出 buffer,Total 数字也会随之"回落"。 这是 UI 层的统计,不是 server
+              端的累计计费。
+            </p>`,
+          },
+        ],
+      };
+
+    case "throughput-last":
+      return {
+        title: `${meta.shortLabel} · Last Activity`,
+        stats: [
+          {
+            label: "When",
+            value: lastSample
+              ? new Date(lastSample.ts).toLocaleTimeString("en-US", { hour12: false })
+              : "—",
+          },
+          {
+            label: "Bytes/s",
+            value: lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "—",
+          },
+          {
+            label: "Bucket bytes",
+            value: lastSample ? formatBytes(lastSample.rawBytes) : "—",
+          },
+        ],
+        intro: html`${directionLabel} 这条方向上 <em>最后一个</em> 有数据的 3 秒 bucket
+          的开始时间,以及那一桶里的瞬时速率。可以快速判断链路是否还活着。`,
+        sections: [
+          {
+            title: "时间含义",
+            body: html`<p>
+              显示的是该 bucket 的起始时间(<code>floor(ts / 3000) * 3000</code> 之后的本地
+              时间)。如果链路当前很闲,这个时间可能比 "现在" 早不少。
+            </p>`,
+          },
+          {
+            title: "什么时候这里会显示 —",
+            body: html`<p>
+              当 trace buffer 里没有匹配该方向的任何 trace 时(从未通信、或被 buffer 挤出)。
+            </p>`,
+          },
+        ],
+      };
+  }
+
+  // Latency keys
+  const latency = selectDirectionLatency(net, props.networkDirection);
+  if (latency && key.startsWith(latency.latencyKey)) {
+    const stats = latency.stats;
+    const latencyName = latency.label;
+
+    if (key.endsWith("-avg")) {
+      return {
+        title: `${latencyName} · Average`,
+        stats: [
+          { label: "Avg", value: formatMs(stats.avgMs) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`所有采样的算术平均。${latencyExplainerIntro(latency.latencyKey)}`,
+        sections: [
+          {
+            title: "计算公式",
+            body: html`<p><code>avg = sum(latencyMs) / count</code>。</p>
+              <p class="pm-explainer-mini">
+                当前:${stats.count} 个 sample,平均 <strong>${formatMs(stats.avgMs)}</strong>。
+              </p>`,
+          },
+          latencySourceSection(latency.latencyKey),
+          {
+            title: "什么时候 avg 会失真",
+            body: html`<p>
+              如果有少量极慢的请求(冷启动、超时重试),avg 会被它们拉高很多。 这种情况看
+              <strong>p50</strong>(中位数)更能反映"常态"。
+            </p>`,
+          },
+        ],
+      };
+    }
+    if (key.endsWith("-p50")) {
+      return {
+        title: `${latencyName} · p50`,
+        stats: [
+          { label: "p50", value: formatMs(stats.p50Ms) },
+          { label: "Avg", value: formatMs(stats.avgMs) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`p50 = 中位数。把所有 sample 按 latency 升序排,中间那个点的值。
+        ${latencyExplainerIntro(latency.latencyKey)}`,
+        sections: [
+          {
+            title: "为什么看 p50 而不只是 avg",
+            body: html`<p>
+              p50 不会被极端值拉偏。如果 p50 ≪ avg,说明分布有长尾(少量很慢的请求); p50 ≈
+              avg,说明分布相对平稳。
+            </p>`,
+          },
+          latencySourceSection(latency.latencyKey),
+        ],
+      };
+    }
+    if (key.endsWith("-p95")) {
+      return {
+        title: `${latencyName} · p95`,
+        stats: [
+          { label: "p95", value: formatMs(stats.p95Ms) },
+          { label: "p50", value: formatMs(stats.p50Ms) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`p95 = 95% 百分位数。100 个请求里有 95 个比这个值快、5 个比这个值慢。
+        ${latencyExplainerIntro(latency.latencyKey)}`,
+        sections: [
+          {
+            title: "为什么 p95 重要",
+            body: html`<p>
+              p95 反映 "尾部" 体验。即使 avg / p50 都很好,p95 高也意味着用户偶尔会遇到
+              明显的卡顿。性能优化通常优先压低 p95,而不是 avg。
+            </p>`,
+          },
+          {
+            title: "Sample 太少时不准",
+            body: html`<p>
+              当前共 <strong>${stats.count}</strong> 个 sample。
+              ${stats.count < 20
+                ? "数量太少,p95 抖动会很大,主要看趋势,不要看绝对值。"
+                : "样本足够,p95 数字相对可靠。"}
+            </p>`,
+          },
+          latencySourceSection(latency.latencyKey),
+        ],
+      };
+    }
+    if (key.endsWith("-peak")) {
+      return {
+        title: `${latencyName} · Peak`,
+        stats: [
+          { label: "Peak", value: formatMs(stats.peakMs) },
+          { label: "p95", value: formatMs(stats.p95Ms) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`所有 sample 中最慢的那一个。${latencyExplainerIntro(latency.latencyKey)}`,
+        sections: [
+          {
+            title: "Peak ≠ 系统当前的实际延迟",
+            body: html`<p>
+              这是历史最慢的一笔,可能来自冷启动、网络抖动或一次特别大的 prompt。
+              用作"知道一下最坏到过多少"的参考,不要拿来当作 SLA。
+            </p>`,
+          },
+          latencySourceSection(latency.latencyKey),
+        ],
+      };
+    }
+  }
+
+  return null;
+}
+
+function transportSection(direction: NetworkDirection): {
+  title: string;
+  body: TemplateResult;
+} {
+  switch (direction) {
+    case "op-to-gw":
+    case "gw-to-op":
+      return {
+        title: "这条方向用什么 transport",
+        body: html`<p>
+          Operator(浏览器或 Mac/Windows 客户端)和 Gateway 之间是
+          <strong>WebSocket</strong> 长连接。每一次 RPC 请求、事件推送、或一段流式输出
+          都是一个或多个 WS 帧。Throughput 卡片里的字节数就是这些 WS 帧的 payload 累加。
+        </p>`,
+      };
+    case "gw-to-node":
+    case "node-to-gw":
+      return {
+        title: "这条方向用什么 transport",
+        body: html`<p>
+          Gateway 和 Node(本机或远端 PC)之间也是 <strong>WebSocket</strong> 长连接, 带有 OpenClaw
+          自己的 RPC / event 协议。Throughput 卡片统计的是这些 WS 帧的 payload 字节。
+        </p>`,
+      };
+    case "agent-to-model":
+      return {
+        title: "这条方向用什么 transport",
+        body: html`<p>
+          Agent → Model 走的是 <strong>HTTP/HTTPS</strong>,不是 WebSocket。 每次 LLM 调用 = 一次
+          HTTPS POST(请求体里有 system prompt、transcript、 tool schema 等)。Throughput
+          卡片记录的是这次 HTTP 请求体的 payload 字节(由 agent 在发出请求时打点 trace)。
+        </p>`,
+      };
+    case "model-to-agent":
+      return {
+        title: "这条方向用什么 transport",
+        body: html`<p>
+          Model → Agent 是 <strong>SSE(Server-Sent Events)</strong> 流, 构筑在 Agent → Model 那次
+          HTTPS 响应之上。Model 把 assistant 的 token、 tool call、stop_reason 等以一连串 SSE
+          事件回流。Throughput 卡片记录的是 每个 SSE 事件帧的 payload 字节(由 agent 在接收时打点
+          trace)。
+        </p>`,
+      };
+    default:
+      return { title: "", body: html`` };
+  }
+}
+
+function latencyExplainerIntro(latencyKey: string): TemplateResult {
+  switch (latencyKey) {
+    case "lat-ttft":
+      return html`这里测量的是 <strong>TTFT(time-to-first-token)</strong>:agent 把请求 发出去之后,到
+        model 第一次回流 assistant 内容之间的等待时间。`;
+    case "lat-gen":
+      return html`这里测量的是 assistant 流式输出本身的 <strong>持续时间</strong>:从 model
+        回出第一段 assistant 内容,到下一个 tool call(或 lifecycle end)之间的窗口。`;
+    case "lat-op-gw":
+      return html`这里测量的是 <strong>Operator → Gateway</strong> 单向 wire latency: operator 把 WS
+        frame 发出的瞬间(<code>frame.sentAt</code>)到 gateway 收到的瞬间
+        (<code>Date.now()</code>)之间的差值。`;
+    case "lat-gw-op":
+      return html`这里显示的是 <strong>Gateway → Operator</strong> 方向的 latency。 因为 gateway
+        拿不到 operator 端的 recv 时间,我们 <em>对称地</em> 借用反向 (operator → gateway)的 one-way
+        数据来估计 —— 在 LAN / Tailscale 这种链路上 通常上下行延迟非常接近,所以这是一个合理的近似。`;
+    case "lat-node-gw":
+      return html`这里测量的是 <strong>Node → Gateway</strong> 单向 wire latency: node 把 WS frame
+        发出的瞬间(<code>frame.sentAt</code>)到 gateway 收到的瞬间之间 的差值。`;
+    case "lat-gw-node":
+      return html`这里显示的是 <strong>Gateway → Node</strong> 方向的 latency。 因为 gateway 拿不到
+        node 端的 recv 时间,我们 <em>对称地</em> 借用反向 (node → gateway)的 one-way
+        数据来估计。一般场景下两个方向的链路延迟非常接近, 所以这是一个合理的近似;真要精确测量,需要
+        node 把 "我观测到的 gateway → node 延迟" 反向汇报回来。`;
+    default:
+      return html``;
+  }
+}
+
+function latencySourceSection(latencyKey: string): {
+  title: string;
+  body: TemplateResult;
+} {
+  switch (latencyKey) {
+    case "lat-ttft":
+      return {
+        title: "TTFT 是怎么打点的",
+        body: html`<p>
+          在 <code>computeAgentLlmTtft</code> 里:对每个 <code>runId</code>, 以 lifecycle start
+          或上一次 tool end/result 为起点,以下一条 <code>stream === "assistant"</code> 的 trace
+          为终点,差值即一次 TTFT。 多个 LLM 调用会被分别打点为 TTFT #1、#2、…
+        </p>`,
+      };
+    case "lat-gen":
+      return {
+        title: "Generation 是怎么打点的",
+        body: html`<p>
+          在 <code>computeAgentLlmGeneration</code> 里:从一段 assistant burst 的
+          <em>第一</em> 条流式事件到 <em>最后</em> 一条之间的时间(在下一个 tool call 或 lifecycle
+          end 之前)。一次 burst = 一次 generation 样本。
+        </p>`,
+      };
+    case "lat-op-gw":
+    case "lat-node-gw":
+      return {
+        title: "One-way 是怎么算出来的",
+        body: html`<p>
+            每个 WS frame envelope 上都带有发送方的 <code>sentAt</code>(发送时刻的 wall clock, ms
+            since epoch)。Gateway 在收到 frame 时记下 <code>recvTs = Date.now()</code>, one-way
+            latency = <code>recvTs - sentAt</code>。整套计算在
+            <code>protocol-trace-store.captureTrace</code> 完成,结果存在 trace 上的
+            <code>oneWayLatencyMs</code> 字段里;UI 端的 <code>computeWsOneWayLatency</code> 再按
+            source 聚合。
+          </p>
+          <p>
+            <strong>前提:</strong>各端时钟必须同步(NTP)。如果时钟差几百毫秒,one-way
+            数字会偏移那么多。Gateway 端会自动把 <em>负值</em> 钳到 0,把
+            <em>明显是 stale 的大正值</em>(超过 60s)丢弃。
+          </p>`,
+      };
+    case "lat-gw-op":
+    case "lat-gw-node":
+      return {
+        title: "为什么 gw → peer 这边只能用 symmetric 估计",
+        body: html`<p>
+            打点公式 <code>recvTs - sentAt</code> 只能在收到 frame 的一端跑。 Gateway 对 outbound
+            frame 没有 peer 端的 recv 时间,因此这个方向 <em>无法直接 测量</em>。
+          </p>
+          <p>
+            目前的近似:把反向(peer → gateway)的 one-way 数据展示在这里,假设上下行链路
+            延迟对称。如果之后想要真正的双向独立测量,可以让 peer 把 "我观测到的 gateway → peer
+            one-way" 周期性回报,gateway 端单独存一份再展示。
+          </p>`,
+      };
+    default:
+      return { title: "", body: html`` };
+  }
+}
+
+function renderNetworkExplainerOverlay(
+  net: NetworkStats,
+  props: ProtocolMonitorProps,
+): TemplateResult | typeof nothing {
+  const key = props.networkExplainer;
+  if (!key) {
+    return nothing;
+  }
+  const content = buildNetworkExplainerContent(key, net, props);
+  if (!content) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="pm-detail-overlay"
+      @click=${(e: Event) => {
+        if ((e.target as HTMLElement).classList.contains("pm-detail-overlay")) {
+          props.onCloseNetworkExplainer();
+        }
+      }}
+    >
+      <div class="pm-detail-modal pm-explainer-modal">
+        <div class="pm-explainer-header">
+          <h3>${content.title} — 如何计算</h3>
+          <button
+            class="pm-explainer-close"
+            @click=${props.onCloseNetworkExplainer}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="pm-explainer-body">
+          <div
+            class="pm-explainer-values"
+            style="grid-template-columns: repeat(${content.stats.length}, 1fr);"
+          >
+            ${content.stats.map(
+              (s) => html`
+                <div class="pm-explainer-stat">
+                  <div class="pm-explainer-stat-value">${s.value}</div>
+                  <div class="pm-explainer-stat-label">${s.label}</div>
+                </div>
+              `,
+            )}
+          </div>
+          <p class="pm-explainer-intro">${content.intro}</p>
+          ${content.sections.map(
+            (sec) => html`
+              <div class="pm-explainer-section">
+                <div class="pm-explainer-section-title">
+                  ${sec.badge
+                    ? html`<span class="pm-explainer-badge pm-badge-${sec.badge.kind}"
+                        >${sec.badge.label}</span
+                      >`
+                    : nothing}
+                  ${sec.title}
+                </div>
+                ${sec.body}
+              </div>
+            `,
+          )}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -711,29 +1760,32 @@ function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResu
             style="display:flex;justify-content:space-between;align-items:center;"
           >
             Sequence Diagram
-            <label class="pm-check" style="font-weight:400;text-transform:none;letter-spacing:0;">
-              <input
-                type="checkbox"
-                .checked=${props.autoScroll}
-                @change=${(e: Event) =>
-                  props.onToggleAutoScroll((e.target as HTMLInputElement).checked)}
-              />
-              Auto-scroll
-            </label>
+            ${props.exportMode
+              ? nothing
+              : html`<label
+                  class="pm-check"
+                  style="font-weight:400;text-transform:none;letter-spacing:0;"
+                >
+                  <input
+                    type="checkbox"
+                    .checked=${props.autoScroll}
+                    @change=${(e: Event) =>
+                      props.onToggleAutoScroll((e.target as HTMLInputElement).checked)}
+                  />
+                  Auto-scroll
+                </label>`}
           </div>
           ${renderSequenceDiagram(coalesced, props)}
         </div>
       </div>
-      <!-- Right half: model filter, usage, network, latency -->
+      <!-- Right half: model filter, usage, directional network/latency tabs -->
       <div class="pm-right-half">
         ${renderModelFilter(allModels, props)}
         <div class="pm-usage-banner">${renderUsageOverview(props)}</div>
-        <div class="pm-right-cols">
-          <div class="pm-stats-col">${renderNetworkCombined(netStats)}</div>
-          <div class="pm-stats-col">${renderLatencyCombined(netStats)}</div>
-        </div>
+        ${renderDirectionalNetworkPane(netStats, props)}
       </div>
     </div>
+    ${renderNetworkExplainerOverlay(netStats, props)}
   `;
 }
 
@@ -907,33 +1959,48 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
           String(msgTotal),
           `${userMsgs} user · ${assistantMsgs} assistant`,
           "hero",
+          () => props.onOpenUsageExplainer("messages"),
         )}
         ${usageCard(
           "Throughput",
           throughput !== undefined ? `${formatTokens(Math.round(throughput))} tok/min` : "—",
           `${avgDuration} avg session`,
           "hero",
+          () => props.onOpenUsageExplainer("throughput"),
         )}
-        ${usageCard("Tool Calls", String(toolCalls), `${uniqueTools} unique tools`, "half")}
-        ${usageCard("Avg Tokens", formatTokens(avgTokens), `across ${msgTotal} messages`, "half")}
+        ${usageCard("Tool Calls", String(toolCalls), `${uniqueTools} unique tools`, "half", () =>
+          props.onOpenUsageExplainer("toolcalls"),
+        )}
+        ${usageCard(
+          "Avg Tokens",
+          formatTokens(avgTokens),
+          `across ${msgTotal} messages`,
+          "half",
+          () => props.onOpenUsageExplainer("avgtokens"),
+        )}
         ${usageCard(
           "Cache Hit",
           `${cacheHitRate.toFixed(1)}%`,
           `${formatTokens(totals?.cacheRead ?? 0)} cached · ${formatTokens(cacheBase)} prompt`,
           cacheTone,
+          () => props.onOpenUsageExplainer("cachehit"),
         )}
-        ${usageCard("Error Rate", `${errorRate.toFixed(2)}%`, `${errors} errors`, errorTone)}
+        ${usageCard("Error Rate", `${errorRate.toFixed(2)}%`, `${errors} errors`, errorTone, () =>
+          props.onOpenUsageExplainer("errorrate"),
+        )}
         ${usageCard(
           "Total Cost",
           formatCost(totalCost),
           `${formatCost(msgTotal > 0 ? totalCost / msgTotal : 0, 4)}/msg`,
           "compact",
+          () => props.onOpenUsageExplainer("totalcost"),
         )}
         ${usageCard(
           "Total Tokens",
           formatTokens(totalTokens),
           `in ${formatTokens(totals?.input ?? 0)} · out ${formatTokens(totals?.output ?? 0)}`,
           "compact",
+          () => props.onOpenUsageExplainer("totaltokens"),
         )}
       </div>
     </div>
@@ -941,17 +2008,45 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
 }
 
 function renderControlButtons(props: ProtocolMonitorProps): TemplateResult {
+  if (props.exportMode) {
+    const captured = props.exportCapturedAt
+      ? new Date(props.exportCapturedAt).toLocaleString()
+      : "unknown time";
+    return html`
+      <div class="pm-controls-inline">
+        <span
+          class="pm-export-banner"
+          title="This is a frozen snapshot exported from the live Protocol Monitor."
+        >
+          Exported snapshot · ${captured}
+        </span>
+      </div>
+    `;
+  }
+  const paused = props.monitoringPaused;
   return html`
     <div class="pm-controls-inline">
+      <button
+        type="button"
+        class="pm-monitor-switch ${paused ? "pm-monitor-switch--paused" : ""}"
+        role="switch"
+        aria-checked=${paused ? "false" : "true"}
+        title=${paused
+          ? "Monitoring paused — incoming events are dropped. Click to resume."
+          : "Monitoring live — incoming events are captured. Click to pause."}
+        @click=${() => props.onToggleMonitoring(!paused)}
+      >
+        <span class="pm-monitor-switch-track">
+          <span class="pm-monitor-switch-thumb"></span>
+        </span>
+        <span class="pm-monitor-switch-label"> ${paused ? "Paused" : "Live"} </span>
+      </button>
       <button class="pm-btn" @click=${props.onRefresh}>Refresh</button>
       <button class="pm-btn" @click=${props.onExport}>Export</button>
       <button
         class="pm-btn danger"
-        @click=${() => {
-          if (confirm("Clear all protocol trace history?")) {
-            props.onReset();
-          }
-        }}
+        @click=${() => props.onReset()}
+        title="Permanently wipe the gateway trace buffer, persistent latency caches, and all session transcripts on disk. Shows a confirmation with exact counts before deleting."
       >
         Reset
       </button>
@@ -959,7 +2054,13 @@ function renderControlButtons(props: ProtocolMonitorProps): TemplateResult {
   `;
 }
 
-function usageCard(title: string, value: string, sub: string, tone?: string): TemplateResult {
+function usageCard(
+  title: string,
+  value: string,
+  sub: string,
+  tone?: string,
+  onClick?: () => void,
+): TemplateResult {
   const toneClass = tone === "good" || tone === "warn" || tone === "bad" ? `pm-ucard--${tone}` : "";
   const sizeClass =
     tone === "hero"
@@ -969,6 +2070,28 @@ function usageCard(title: string, value: string, sub: string, tone?: string): Te
         : tone === "compact"
           ? "pm-ucard--compact"
           : "";
+  const clickableClass = onClick ? "pm-ucard--clickable" : "";
+  if (onClick) {
+    return html`
+      <div
+        class="pm-ucard ${toneClass} ${sizeClass} ${clickableClass}"
+        role="button"
+        tabindex="0"
+        title="Click for explanation"
+        @click=${onClick}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+      >
+        <div class="pm-ucard-title">${title}<span class="pm-ucard-info">ⓘ</span></div>
+        <div class="pm-ucard-value">${value}</div>
+        <div class="pm-ucard-sub">${sub}</div>
+      </div>
+    `;
+  }
   return html`
     <div class="pm-ucard ${toneClass} ${sizeClass}">
       <div class="pm-ucard-title">${title}</div>
@@ -1081,7 +2204,16 @@ function renderSequenceDiagram(
             ${props.loading ? "Loading..." : "No messages match filters."}
           </div>`
         : html`
-            <div style="position:relative;height:${totalHeight}px;">
+            <div class="pm-rows-wrap" style="height:${totalHeight}px;">
+              <div class="pm-vlines">
+                ${COLUMNS.map(
+                  (_, i) =>
+                    html`<div
+                      class="pm-vline"
+                      style="left:${((i + 0.5) / COLUMNS.length) * 100}%;"
+                    ></div>`,
+                )}
+              </div>
               ${coalesced.map((entry, idx) => renderRow(entry, idx, props))}
             </div>
           `}
@@ -1250,246 +2382,338 @@ function renderRow(
 }
 
 // ---------------------------------------------------------------------------
-// Section 4: Network statistics (right-top)
+// Section 4: Directional network + latency tabs (right pane)
 // ---------------------------------------------------------------------------
 
-function avgBps(samples: ThroughputSample[]): number {
-  if (samples.length === 0) {
-    return 0;
-  }
-  return samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length;
+type DirectionMeta = {
+  id: NetworkDirection;
+  shortLabel: string;
+  longLabel: string;
+  color: string;
+};
+
+const DIRECTION_META: DirectionMeta[] = [
+  {
+    id: "op-to-gw",
+    shortLabel: "Operator → Gateway",
+    longLabel: "Operator (STA) → Gateway (AP)",
+    color: "#3b82f6",
+  },
+  {
+    id: "gw-to-op",
+    shortLabel: "Gateway → Operator",
+    longLabel: "Gateway (AP) → Operator (STA)",
+    color: "#0ea5e9",
+  },
+  {
+    id: "gw-to-node",
+    shortLabel: "Gateway → Node",
+    longLabel: "Gateway (AP) → Node (PC)",
+    color: "#22c55e",
+  },
+  {
+    id: "node-to-gw",
+    shortLabel: "Node → Gateway",
+    longLabel: "Node (PC) → Gateway (AP)",
+    color: "#16a34a",
+  },
+  {
+    id: "agent-to-model",
+    shortLabel: "Agent → Model",
+    longLabel: "Agent (AP) → Model",
+    color: "#f59e0b",
+  },
+  {
+    id: "model-to-agent",
+    shortLabel: "Model → Agent",
+    longLabel: "Model → Agent (AP)",
+    color: "#a855f7",
+  },
+];
+
+function getDirectionMeta(id: NetworkDirection): DirectionMeta {
+  return DIRECTION_META.find((d) => d.id === id) ?? DIRECTION_META[0];
 }
 
-function renderNetworkCombined(net: NetworkStats): TemplateResult {
-  const total = net.totalBytesIn + net.totalBytesOut;
-  const inPct = total > 0 ? Math.round((net.totalBytesIn / total) * 100) : 0;
-  const outPct = 100 - inPct;
+function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): ThroughputSample[] {
+  switch (id) {
+    case "op-to-gw":
+      return net.operatorGateway.forward;
+    case "gw-to-op":
+      return net.operatorGateway.reverse;
+    case "gw-to-node":
+      return net.gatewayNode.forward;
+    case "node-to-gw":
+      return net.gatewayNode.reverse;
+    case "agent-to-model":
+      return net.agentLlm.forward;
+    case "model-to-agent":
+      return net.agentLlm.reverse;
+    default:
+      return [];
+  }
+}
 
+function selectDirectionLatency(
+  net: NetworkStats,
+  id: NetworkDirection,
+): { stats: LatencyStats; label: string; latencyKey: string; estimated?: boolean } | null {
+  switch (id) {
+    case "op-to-gw":
+      return {
+        stats: net.operatorGatewayOneWayLatency,
+        label: "Operator → Gateway · one-way",
+        latencyKey: "lat-op-gw",
+      };
+    case "gw-to-op":
+      // We can't directly observe gw→op one-way at the gateway (no peer recv
+      // timestamp). Show the reverse direction's series under a symmetry
+      // assumption — the explainer makes this clear.
+      return {
+        stats: net.operatorGatewayOneWayLatency,
+        label: "Gateway → Operator · one-way (symmetric estimate)",
+        latencyKey: "lat-gw-op",
+        estimated: true,
+      };
+    case "node-to-gw":
+      return {
+        stats: net.nodeGatewayOneWayLatency,
+        label: "Node → Gateway · one-way",
+        latencyKey: "lat-node-gw",
+      };
+    case "gw-to-node":
+      return {
+        stats: net.nodeGatewayOneWayLatency,
+        label: "Gateway → Node · one-way (symmetric estimate)",
+        latencyKey: "lat-gw-node",
+        estimated: true,
+      };
+    case "agent-to-model":
+      return {
+        stats: net.agentLlmTtft,
+        label: "TTFT — time-to-first-token",
+        latencyKey: "lat-ttft",
+      };
+    case "model-to-agent":
+      return {
+        stats: net.agentLlmGeneration,
+        label: "Generation — assistant streaming duration",
+        latencyKey: "lat-gen",
+      };
+    default:
+      return null;
+  }
+}
+
+function renderDirectionalNetworkPane(
+  net: NetworkStats,
+  props: ProtocolMonitorProps,
+): TemplateResult {
   return html`
-    <div class="pm-filters-title">Network Statistics</div>
-    <div class="pm-net-cards" style="padding:4px 0;">
-      <div class="pm-net-card">
-        <div class="pm-net-card-label">Total Transfer</div>
-        <div class="pm-net-card-value">${formatBytes(total)}</div>
-        <div class="pm-net-bar">
-          <div
-            class="pm-net-bar-in"
-            style="width:${inPct}%;"
-            title="In: ${formatBytes(net.totalBytesIn)}"
-          ></div>
-          <div
-            class="pm-net-bar-out"
-            style="width:${outPct}%;"
-            title="Out: ${formatBytes(net.totalBytesOut)}"
-          ></div>
-        </div>
-        <div class="pm-net-bar-legend">
-          <span
-            ><span class="pm-dot" style="background:#3b82f6;"></span> In
-            ${formatBytes(net.totalBytesIn)}</span
-          >
-          <span
-            ><span class="pm-dot" style="background:#f59e0b;"></span> Out
-            ${formatBytes(net.totalBytesOut)}</span
-          >
-        </div>
+    <div class="pm-net-pane">
+      <div class="pm-net-tabs">
+        ${DIRECTION_META.map(
+          (d) => html`
+            <button
+              class="pm-net-tab ${props.networkDirection === d.id ? "active" : ""}"
+              style="--pm-net-tab-color: ${d.color};"
+              @click=${() => props.onNetworkDirectionChange(d.id)}
+              title=${d.longLabel}
+            >
+              ${d.shortLabel}
+            </button>
+          `,
+        )}
       </div>
+      <div class="pm-net-direction-content">${renderDirectionContent(net, props)}</div>
     </div>
-    ${renderStatsChart(
-      "Operator (STA) \u2194 Gateway (AP)",
-      net.operatorGateway,
-      "#3b82f6",
-      "#e11d48",
-      "#059669",
-      "STA \u2192 AP",
-      "AP \u2192 STA",
-    )}
-    ${renderStatsChart(
-      "Agent (AP) \u2194 Model",
-      net.agentLlm,
-      "#f59e0b",
-      "#e11d48",
-      "#059669",
-      "Prompt (lifecycle)",
-      "Response (stream)",
-    )}
-    ${renderStatsChart(
-      "Gateway (AP) \u2194 Node (PC)",
-      net.gatewayNode,
-      "#22c55e",
-      "#e11d48",
-      "#059669",
-      "AP \u2192 PC",
-      "PC \u2192 AP",
-    )}
   `;
 }
 
-function chartTimeLabel(ts: number): string {
-  return new Date(ts).toLocaleTimeString("en-US", {
-    hour12: false,
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-/**
- * Combined stats + chart for a single throughput route.
- * Numbers displayed above the chart, directional lines use solid strokes
- * with different colors.
- */
-function renderStatsChart(
-  title: string,
-  dir: DirectionalThroughputSamples,
-  color: string,
-  fwdColor: string,
-  revColor: string,
-  fwdLabel: string,
-  revLabel: string,
-): TemplateResult {
-  const samples = dir.combined;
-  const fwdSamples = dir.forward;
-  const revSamples = dir.reverse;
-
-  const PAD_L = 48;
-  const PAD_R = 8;
-  const PAD_T = 6;
-  const PAD_B = 18;
-  const W = 460;
-  const H = 120;
-  const plotW = W - PAD_L - PAD_R;
-  const plotH = H - PAD_T - PAD_B;
+function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
+  const meta = getDirectionMeta(props.networkDirection);
+  const samples = selectDirectionThroughput(net, props.networkDirection);
+  const latency = selectDirectionLatency(net, props.networkDirection);
 
   const peak = samples.length > 0 ? Math.max(...samples.map((s) => s.bytesPerSec)) : 0;
   const avg =
     samples.length > 0 ? samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length : 0;
   const totalBytes = samples.reduce((a, s) => a + s.rawBytes, 0);
-  const fwdAvg = avgBps(fwdSamples);
-  const revAvg = avgBps(revSamples);
+  const lastSample = samples[samples.length - 1];
+  const lastTs = lastSample?.ts;
 
-  const statsHtml = html`
-    <div class="pm-net-channel-metrics" style="margin-bottom:2px;">
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatBytes(peak)}/s</span>
-        <span class="pm-net-metric-label">peak</span>
-      </div>
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatBytes(avg)}/s</span>
-        <span class="pm-net-metric-label">avg</span>
-      </div>
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatBytes(totalBytes)}</span>
-        <span class="pm-net-metric-label">total</span>
-      </div>
+  const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
+
+  return html`
+    <div class="pm-net-direction-header">
+      <span class="pm-dot" style="background:${meta.color};"></span>
+      <strong>${meta.longLabel}</strong>
     </div>
-    <div class="pm-net-channel-metrics" style="margin-bottom:4px;">
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val" style="color:${fwdColor};">${formatBytes(fwdAvg)}/s</span>
-        <span class="pm-net-metric-label">${fwdLabel}</span>
-      </div>
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val" style="color:${revColor};">${formatBytes(revAvg)}/s</span>
-        <span class="pm-net-metric-label">${revLabel}</span>
-      </div>
+
+    <div class="pm-net-section-title">Throughput</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Peak",
+        `${formatBytes(peak)}/s`,
+        `${samples.length} samples`,
+        openExp("throughput-peak"),
+      )}
+      ${renderNetStatCard(
+        "Average",
+        `${formatBytes(avg)}/s`,
+        samples.length > 0 ? `over ${samples.length} buckets` : "no samples",
+        openExp("throughput-avg"),
+      )}
+      ${renderNetStatCard(
+        "Total Bytes",
+        formatBytes(totalBytes),
+        "since session start",
+        openExp("throughput-total"),
+      )}
+      ${renderNetStatCard(
+        "Last Activity",
+        lastTs ? new Date(lastTs).toLocaleTimeString("en-US", { hour12: false }) : "—",
+        lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "no traffic yet",
+        openExp("throughput-last"),
+      )}
     </div>
+
+    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color)}
+    ${latency
+      ? html`
+          <div class="pm-net-section-title" style="margin-top:14px;">
+            Latency · ${latency.label}
+          </div>
+          <div class="pm-net-stat-grid">
+            ${renderNetStatCard(
+              "Avg",
+              formatMs(latency.stats.avgMs),
+              `${latency.stats.count} samples`,
+              openExp(`${latency.latencyKey}-avg`),
+            )}
+            ${renderNetStatCard(
+              "p50",
+              formatMs(latency.stats.p50Ms),
+              "median",
+              openExp(`${latency.latencyKey}-p50`),
+            )}
+            ${renderNetStatCard(
+              "p95",
+              formatMs(latency.stats.p95Ms),
+              "tail",
+              openExp(`${latency.latencyKey}-p95`),
+            )}
+            ${renderNetStatCard(
+              "Peak",
+              formatMs(latency.stats.peakMs),
+              "worst sample",
+              openExp(`${latency.latencyKey}-peak`),
+            )}
+          </div>
+          ${renderLatencyChartSvg(latency.label, latency.stats, meta.color)}
+        `
+      : html`
+          <div class="pm-net-no-latency">
+            该方向没有独立测量的 latency 指标。Operator ↔ Gateway 这一段链路的耗时
+            在协议层不会被单独打点;如果需要观察端到端响应时间,请看
+            <strong>Agent → Model</strong> 或 <strong>Model → Agent</strong> 标签页。
+          </div>
+        `}
   `;
+}
+
+function renderNetStatCard(
+  title: string,
+  value: string,
+  sub: string,
+  onClick: () => void,
+): TemplateResult {
+  return html`
+    <button
+      type="button"
+      class="pm-net-stat-card"
+      role="button"
+      title="点击查看说明"
+      @click=${onClick}
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+    >
+      <div class="pm-net-stat-card-title">${title}<span class="pm-ucard-info">ⓘ</span></div>
+      <div class="pm-net-stat-card-value">${value}</div>
+      <div class="pm-net-stat-card-sub">${sub}</div>
+    </button>
+  `;
+}
+
+function renderSingleLineThroughputChart(
+  title: string,
+  samples: ThroughputSample[],
+  color: string,
+): TemplateResult {
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 260;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const PIXEL_HEIGHT = 260;
 
   if (samples.length < 2) {
     return html`
       <div class="pm-chart-block">
-        <div class="pm-chart-header">
-          <span class="pm-chart-title"
-            ><span class="pm-dot" style="background:${color};"></span> ${title}</span
-          >
-          <span class="pm-net-channel-badge">${samples.length} samples</span>
+        <div class="pm-chart-empty" style="height:${PIXEL_HEIGHT}px;line-height:${PIXEL_HEIGHT}px;">
+          ${samples.length === 0
+            ? "尚无数据 — 等待该方向第一笔流量。"
+            : "等待第二个采样桶以绘制曲线…"}
         </div>
-        ${statsHtml}
-        <div class="pm-chart-empty">Waiting for data...</div>
       </div>
     `;
   }
 
-  const maxVal = Math.max(peak, 1);
+  const peak = Math.max(...samples.map((s) => s.bytesPerSec), 1);
+  const avg = samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length;
   const minTs = samples[0].ts;
   const maxTs = samples[samples.length - 1].ts;
   const tsRange = maxTs - minTs || 1;
-
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
-  const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
-
-  const makeLine = (s: ThroughputSample[]) =>
-    s.map((p) => `${toX(p.ts)},${toY(p.bytesPerSec)}`).join(" ");
-
-  const fwdLinePoints = fwdSamples.length >= 1 ? makeLine(fwdSamples) : null;
-  const revLinePoints = revSamples.length >= 1 ? makeLine(revSamples) : null;
+  const toY = (v: number) => PAD_T + plotH - (v / peak) * plotH;
+  const linePoints = samples.map((p) => `${toX(p.ts)},${toY(p.bytesPerSec)}`).join(" ");
+  const areaPoints = `${PAD_L},${PAD_T + plotH} ` + linePoints + ` ${toX(maxTs)},${PAD_T + plotH}`;
 
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
-    const val = (maxVal / yGridCount) * (i + 1);
+    const val = (peak / yGridCount) * (i + 1);
     return { y: toY(val), label: formatBytes(val) + "/s" };
   });
-
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
     const ts = minTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
-
   const avgY = toY(avg);
-  const chartId = `chart-${title.replace(/\W/g, "")}`;
+  const chartId = `chart-dir-${title.replace(/\W/g, "")}`;
 
   return html`
     <div class="pm-chart-block">
-      <div class="pm-chart-header">
-        <span class="pm-chart-title"
-          ><span class="pm-dot" style="background:${color};"></span> ${title}</span
-        >
-        <span class="pm-net-channel-badge">${samples.length} samples</span>
-      </div>
-      ${statsHtml}
       <div
         class="pm-chart-wrap"
         @mousemove=${(e: MouseEvent) =>
-          handleChartHover(
-            e,
-            samples,
-            minTs,
-            tsRange,
-            maxVal,
-            PAD_L,
-            plotW,
-            plotH,
-            PAD_T,
-            fwdSamples,
-            revSamples,
-            fwdColor,
-            revColor,
-            fwdLabel,
-            revLabel,
-          )}
+          handleThroughputHover(e, samples, minTs, tsRange, peak, PAD_L, plotW, plotH, PAD_T, H, W)}
         @mouseleave=${handleChartLeave}
       >
-        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg" preserveAspectRatio="none">
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
           ${yGridLines.map(
-            (g) => html`
-              <line
-                x1="${PAD_L}"
-                y1="${g.y}"
-                x2="${W - PAD_R}"
-                y2="${g.y}"
-                stroke="#d4d8e8"
-                stroke-width="0.5"
-                stroke-dasharray="3,3"
-              />
-              <text
-                x="${PAD_L - 4}"
-                y="${g.y + 3}"
-                text-anchor="end"
-                fill="#6b7280"
-                font-size="8"
-                font-family="monospace"
-                >${g.label}</text
-              >
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
             `,
           )}
           <line
@@ -1498,19 +2722,12 @@ function renderStatsChart(
             x2="${W - PAD_R}"
             y2="${PAD_T + plotH}"
             stroke="#c4c9d6"
-            stroke-width="0.5"
+            stroke-width="0.6"
           />
           ${xTicks.map(
-            (t) => html`
-              <text
-                x="${t.x}"
-                y="${H - 2}"
-                text-anchor="middle"
-                fill="#6b7280"
-                font-size="8"
-                font-family="monospace"
-                >${t.label}</text
-              >
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
             `,
           )}
           <line
@@ -1519,87 +2736,78 @@ function renderStatsChart(
             x2="${W - PAD_R}"
             y2="${avgY}"
             stroke="${color}"
-            stroke-width="0.5"
+            stroke-width="0.7"
             stroke-dasharray="5,4"
             opacity="0.5"
           />
           <text
             x="${W - PAD_R + 2}"
-            y="${avgY + 3}"
+            y="${avgY + 4}"
             fill="${color}"
-            font-size="7"
+            font-size="10"
             font-family="monospace"
-            opacity="0.7"
+            opacity="0.75"
           >
             avg
           </text>
-          ${fwdLinePoints
-            ? svg`<polyline points="${fwdLinePoints}" fill="none" stroke="${fwdColor}"
-                stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />`
-            : nothing}
-          ${revLinePoints
-            ? svg`<polyline points="${revLinePoints}" fill="none" stroke="${revColor}"
-                stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />`
-            : nothing}
+          <polygon points="${areaPoints}" fill="${color}" opacity="0.18" />
+          <polyline
+            points="${linePoints}"
+            fill="none"
+            stroke="${color}"
+            stroke-width="2"
+            stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"
+          />
+          ${samples.map(
+            (s) => svg`
+              <circle cx="${toX(s.ts)}" cy="${toY(s.bytesPerSec)}" r="3"
+                fill="${color}" stroke="#ffffff" stroke-width="1" opacity="0.9" />
+            `,
+          )}
         </svg>
         <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
         <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
-      </div>
-      <div class="pm-chart-legend">
-        <span
-          ><span class="pm-legend-line" style="background:${fwdColor};"></span> ${fwdLabel}</span
-        >
-        <span
-          ><span class="pm-legend-line" style="background:${revColor};"></span> ${revLabel}</span
-        >
       </div>
     </div>
   `;
 }
 
-function findNearest(samples: ThroughputSample[], ts: number): ThroughputSample | null {
-  let nearest: ThroughputSample | null = null;
-  let nearestDist = Infinity;
-  for (const s of samples) {
-    const d = Math.abs(s.ts - ts);
-    if (d < nearestDist) {
-      nearestDist = d;
-      nearest = s;
-    }
-  }
-  return nearest;
-}
-
-function handleChartHover(
+function handleThroughputHover(
   e: MouseEvent,
   samples: ThroughputSample[],
   minTs: number,
   tsRange: number,
-  maxVal: number,
+  peak: number,
   padL: number,
   plotW: number,
   plotH: number,
   padT: number,
-  fwdSamples: ThroughputSample[] = [],
-  revSamples: ThroughputSample[] = [],
-  fwdColor = "#e11d48",
-  revColor = "#059669",
-  fwdLabel = "\u2192",
-  revLabel = "\u2190",
+  chartH: number,
+  chartW: number,
 ) {
   const wrap = e.currentTarget as HTMLElement;
   const rect = wrap.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const svgW = rect.width;
 
-  const xRatio = (mouseX - (padL / 460) * svgW) / ((plotW / 460) * svgW);
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
   if (xRatio < 0 || xRatio > 1) {
     handleChartLeave(e);
     return;
   }
   const hoverTs = minTs + xRatio * tsRange;
 
-  const nearest = findNearest(samples, hoverTs);
+  let nearest = samples[0];
+  let nearestDist = Infinity;
+  for (const s of samples) {
+    const d = Math.abs(s.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = s;
+    }
+  }
+
   const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
   const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
   if (!tip || !cross || !nearest) {
@@ -1607,42 +2815,35 @@ function handleChartHover(
   }
 
   const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
-  const padLPct = (padL / 460) * 100;
-  const plotWPct = (plotW / 460) * 100;
+  const padLPct = (padL / chartW) * 100;
+  const plotWPct = (plotW / chartW) * 100;
   const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
 
   cross.style.display = "block";
   cross.style.left = `${crossLeftPct}%`;
 
-  // Find nearest directional samples at similar timestamp (within one bucket)
-  const bucketThreshold = 3000;
-  const fwdNearest = findNearest(fwdSamples, nearest.ts);
-  const revNearest = findNearest(revSamples, nearest.ts);
-  const fwdVal =
-    fwdNearest && Math.abs(fwdNearest.ts - nearest.ts) < bucketThreshold
-      ? fwdNearest.bytesPerSec
-      : 0;
-  const revVal =
-    revNearest && Math.abs(revNearest.ts - nearest.ts) < bucketThreshold
-      ? revNearest.bytesPerSec
-      : 0;
-
+  tip.style.display = "block";
   const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
     hour12: false,
     fractionalSecondDigits: 1,
   });
-
-  tip.style.display = "block";
   tip.innerHTML =
-    `<span style="color:${fwdColor};font-weight:600;">${fwdLabel}</span> <b>${formatBytes(fwdVal)}/s</b><br/>` +
-    `<span style="color:${revColor};font-weight:600;">${revLabel}</span> <b>${formatBytes(revVal)}/s</b><br/>` +
+    `<b>${formatBytes(nearest.bytesPerSec)}/s</b><br/>` +
+    `<span style="color:#6b7280;">bucket:</span> ${formatBytes(nearest.rawBytes)}<br/>` +
     `<span style="color:#9ca3af;">${time}</span>`;
 
-  // Position tooltip to avoid overflow
-  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 20 : crossLeftPct + 3;
+  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
   tip.style.left = `${tipLeft}%`;
-  const nearestYPct = padT + plotH - (nearest.bytesPerSec / maxVal) * plotH;
-  tip.style.top = `${(nearestYPct / 120) * 100 - 10}%`;
+  const nearestYPct = padT + plotH - (nearest.bytesPerSec / peak) * plotH;
+  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
+}
+
+function chartTimeLabel(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,75 +2860,20 @@ function formatMs(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function renderLatencyCombined(net: NetworkStats): TemplateResult {
-  return html`
-    <div class="pm-filters-title">Latency</div>
-    ${renderLatencyStatsChart(
-      "Agent (AP) \u2194 Model \u00B7 TTFT (wait)",
-      net.agentLlmTtft,
-      "#7c3aed",
-    )}
-    ${renderLatencyStatsChart(
-      "Agent (AP) \u2194 Model \u00B7 Streaming",
-      net.agentLlmGeneration,
-      "#9333ea",
-    )}
-    ${renderLatencyStatsChart("Gateway (AP) \u2194 Node (PC)", net.gatewayNodeLatency, "#059669")}
-  `;
-}
-
-function renderLatencyStatsChart(
-  label: string,
-  stats: LatencyStats,
-  color: string,
-): TemplateResult {
-  const statsHtml = html`
-    <div class="pm-net-channel-metrics" style="margin-bottom:2px;">
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatMs(stats.avgMs)}</span>
-        <span class="pm-net-metric-label">avg</span>
-      </div>
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatMs(stats.p50Ms)}</span>
-        <span class="pm-net-metric-label">p50</span>
-      </div>
-    </div>
-    <div class="pm-net-channel-metrics" style="margin-bottom:4px;">
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatMs(stats.p95Ms)}</span>
-        <span class="pm-net-metric-label">p95</span>
-      </div>
-      <div class="pm-net-metric">
-        <span class="pm-net-metric-val">${formatMs(stats.peakMs)}</span>
-        <span class="pm-net-metric-label">peak</span>
-      </div>
-    </div>
-  `;
-  return html`
-    <div class="pm-chart-block">
-      <div class="pm-chart-header">
-        <span class="pm-chart-title"
-          ><span class="pm-dot" style="background:${color};"></span> ${label}</span
-        >
-        <span class="pm-net-channel-badge">${stats.count} samples</span>
-      </div>
-      ${statsHtml} ${renderLatencyChartSvg(label, stats, color)}
-    </div>
-  `;
-}
-
 function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
-    return html`<div class="pm-chart-empty">Waiting for data...</div>`;
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+      Waiting for data...
+    </div>`;
   }
 
-  const PAD_L = 48;
-  const PAD_R = 8;
-  const PAD_T = 6;
-  const PAD_B = 18;
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
   const W = 460;
-  const H = 120;
+  const H = 260;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
 
@@ -1756,10 +2902,22 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
     <div
       class="pm-chart-wrap"
       @mousemove=${(e: MouseEvent) =>
-        handleLatencyChartHover(e, samples, minTs, tsRange, maxVal, PAD_L, plotW, plotH, PAD_T)}
+        handleLatencyChartHover(
+          e,
+          samples,
+          minTs,
+          tsRange,
+          maxVal,
+          PAD_L,
+          plotW,
+          plotH,
+          PAD_T,
+          H,
+          W,
+        )}
       @mouseleave=${handleChartLeave}
     >
-      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg" preserveAspectRatio="none">
+      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
         ${yGridLines.map(
           (g) => html`
             <line
@@ -1768,15 +2926,15 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
               x2="${W - PAD_R}"
               y2="${g.y}"
               stroke="#d4d8e8"
-              stroke-width="0.5"
+              stroke-width="0.6"
               stroke-dasharray="3,3"
             />
             <text
-              x="${PAD_L - 4}"
-              y="${g.y + 3}"
+              x="${PAD_L - 6}"
+              y="${g.y + 4}"
               text-anchor="end"
               fill="#6b7280"
-              font-size="8"
+              font-size="11"
               font-family="monospace"
               >${g.label}</text
             >
@@ -1788,16 +2946,16 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
           x2="${W - PAD_R}"
           y2="${PAD_T + plotH}"
           stroke="#c4c9d6"
-          stroke-width="0.5"
+          stroke-width="0.6"
         />
         ${xTicks.map(
           (t) => html`
             <text
               x="${t.x}"
-              y="${H - 2}"
+              y="${H - 8}"
               text-anchor="middle"
               fill="#6b7280"
-              font-size="8"
+              font-size="11"
               font-family="monospace"
               >${t.label}</text
             >
@@ -1815,9 +2973,9 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
         />
         <text
           x="${W - PAD_R + 2}"
-          y="${avgY + 3}"
+          y="${avgY + 4}"
           fill="${color}"
-          font-size="8"
+          font-size="10"
           font-family="monospace"
           font-weight="600"
           opacity="0.9"
@@ -1855,13 +3013,15 @@ function handleLatencyChartHover(
   plotW: number,
   plotH: number,
   padT: number,
+  chartH: number,
+  chartW: number,
 ) {
   const wrap = e.currentTarget as HTMLElement;
   const rect = wrap.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const svgW = rect.width;
 
-  const xRatio = (mouseX - (padL / 460) * svgW) / ((plotW / 460) * svgW);
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
   if (xRatio < 0 || xRatio > 1) {
     handleChartLeave(e);
     return;
@@ -1885,8 +3045,8 @@ function handleLatencyChartHover(
   }
 
   const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
-  const padLPct = (padL / 460) * 100;
-  const plotWPct = (plotW / 460) * 100;
+  const padLPct = (padL / chartW) * 100;
+  const plotWPct = (plotW / chartW) * 100;
   const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
 
   cross.style.display = "block";
@@ -1894,14 +3054,20 @@ function handleLatencyChartHover(
 
   tip.style.display = "block";
   const labelStr = nearest.label ? `<br/>${nearest.label}` : "";
+  const modelStr = nearest.model
+    ? `<br/><span style="color:#6b7280;">model:</span> ${nearest.model}`
+    : "";
   tip.innerHTML =
-    `<b>${formatMs(nearest.latencyMs)}</b>${labelStr}<br/>` +
-    new Date(nearest.ts).toLocaleTimeString("en-US", { hour12: false, fractionalSecondDigits: 1 });
+    `<b>${formatMs(nearest.latencyMs)}</b>${labelStr}${modelStr}<br/>` +
+    `<span style="color:#9ca3af;">${new Date(nearest.ts).toLocaleTimeString("en-US", {
+      hour12: false,
+      fractionalSecondDigits: 1,
+    })}</span>`;
 
-  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 20 : crossLeftPct + 3;
+  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
   tip.style.left = `${tipLeft}%`;
   const nearestYPct = padT + plotH - (nearest.latencyMs / maxVal) * plotH;
-  tip.style.top = `${(nearestYPct / 120) * 100 - 10}%`;
+  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
 }
 
 function handleChartLeave(e: Event) {
@@ -2034,6 +3200,78 @@ const STYLES = /* css */ `
     align-items: center;
     gap: 8px;
   }
+  .pm-export-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fcd34d;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  /* Live / Paused monitoring switch */
+  .pm-monitor-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 10px 2px 4px;
+    border: 1px solid #d4d8e8;
+    border-radius: 999px;
+    background: #ffffff;
+    font: inherit;
+    color: inherit;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .pm-monitor-switch:hover {
+    border-color: #9aa3b8;
+  }
+  .pm-monitor-switch:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+  .pm-monitor-switch-track {
+    position: relative;
+    width: 28px;
+    height: 16px;
+    border-radius: 999px;
+    background: #16a34a;
+    transition: background 0.15s ease;
+    flex-shrink: 0;
+  }
+  .pm-monitor-switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 14px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    transition: left 0.15s ease;
+  }
+  .pm-monitor-switch--paused .pm-monitor-switch-track {
+    background: #94a3b8;
+  }
+  .pm-monitor-switch--paused .pm-monitor-switch-thumb {
+    left: 2px;
+  }
+  .pm-monitor-switch-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #16a34a;
+    letter-spacing: 0.02em;
+  }
+  .pm-monitor-switch--paused .pm-monitor-switch-label {
+    color: #6b7280;
+  }
 
   /* Tab content */
   .pm-tab-content {
@@ -2046,6 +3284,131 @@ const STYLES = /* css */ `
     flex: 1;
     overflow-y: auto;
     padding: 10px;
+  }
+  .pm-terminology-pane {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .pm-terminology-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 10px 14px;
+  }
+  .pm-term-group {
+    margin-bottom: 18px;
+  }
+  .pm-term-group-title {
+    margin: 0 0 4px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #1a1a2e;
+    border-bottom: 1px solid #d4d8e8;
+    padding-bottom: 4px;
+  }
+  .pm-term-group-intro {
+    margin: 6px 0 10px;
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.5;
+  }
+  .pm-term-list {
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .pm-term-item {
+    display: grid;
+    grid-template-columns: minmax(140px, 180px) 1fr;
+    gap: 12px;
+    padding: 8px 10px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+  }
+  .pm-term-dt {
+    font-size: 11px;
+    font-weight: 700;
+    color: #1a1a2e;
+    line-height: 1.4;
+  }
+  .pm-term-dd {
+    margin: 0;
+    font-size: 11px;
+    color: #374151;
+    line-height: 1.55;
+  }
+  .pm-term-dd em {
+    font-style: italic;
+    color: #1a1a2e;
+  }
+  .pm-term-dd strong {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+  .pm-term-example {
+    margin-top: 6px;
+    padding: 6px 8px 6px 26px;
+    background: #f5f7fb;
+    border-left: 2px solid #94a3b8;
+    border-radius: 3px;
+    font-size: 10.5px;
+    color: #374151;
+    line-height: 1.55;
+    position: relative;
+  }
+  .pm-term-example-label {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .pm-term-example code {
+    background: #e5e7eb;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .pm-term-subheading {
+    margin-top: 10px;
+    margin-bottom: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #1a1a2e;
+    letter-spacing: 0.02em;
+  }
+  .pm-term-para {
+    margin: 0 0 4px;
+    font-size: 11px;
+    color: #374151;
+    line-height: 1.55;
+  }
+  .pm-term-list-inline {
+    margin: 2px 0 6px;
+    padding-left: 18px;
+    font-size: 11px;
+    color: #374151;
+    line-height: 1.55;
+  }
+  .pm-term-list-inline li {
+    margin-bottom: 3px;
+  }
+  .pm-term-list-inline code,
+  .pm-term-para code {
+    background: #e5e7eb;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .pm-protocol-layout {
     flex: 1;
@@ -2148,6 +3511,126 @@ const STYLES = /* css */ `
   }
   .pm-stats-col:first-child {
     border-right: 1px solid #d4d8e8;
+  }
+
+  /* Directional network/latency tabs */
+  .pm-net-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .pm-net-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid #d4d8e8;
+    flex-shrink: 0;
+    background: #f8fafc;
+  }
+  .pm-net-tab {
+    --pm-net-tab-color: #6b7280;
+    background: #ffffff;
+    border: 1px solid #d4d8e8;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #374151;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+  }
+  .pm-net-tab:hover {
+    border-color: var(--pm-net-tab-color);
+    color: var(--pm-net-tab-color);
+  }
+  .pm-net-tab.active {
+    background: var(--pm-net-tab-color);
+    border-color: var(--pm-net-tab-color);
+    color: #ffffff;
+  }
+  .pm-net-direction-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px 14px;
+  }
+  .pm-net-direction-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+  }
+  .pm-net-section-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #1a1a2e;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .pm-net-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .pm-net-stat-card {
+    text-align: left;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: transform 0.08s, border-color 0.08s, box-shadow 0.08s;
+  }
+  .pm-net-stat-card:hover {
+    transform: translateY(-1px);
+    border-color: #9aa3b8;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.05);
+  }
+  .pm-net-stat-card:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+  .pm-net-stat-card-title {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6b7280;
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .pm-net-stat-card-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: #111827;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+  .pm-net-stat-card-sub {
+    font-size: 10px;
+    color: #6b7280;
+    margin-top: 2px;
+  }
+  .pm-net-no-latency {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: #f5f7fb;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    color: #4b5563;
+    font-size: 11px;
+    line-height: 1.55;
   }
   .pm-diagram-section {
     flex: 1;
@@ -2362,7 +3845,7 @@ const STYLES = /* css */ `
     position: sticky;
     top: 0;
     background: #f8f9fc;
-    z-index: 2;
+    z-index: 10;
     border-bottom: 1px solid #d4d8e8;
   }
   .pm-col-header {
@@ -2389,15 +3872,25 @@ const STYLES = /* css */ `
     letter-spacing: 0.06em;
     color: #374151;
   }
-  .pm-col-header::after {
-    content: "";
+  .pm-rows-wrap {
+    position: relative;
+  }
+  .pm-vlines {
     position: absolute;
-    bottom: -9999px;
-    left: 50%;
-    width: 1px;
-    height: 9999px;
-    background: #e5e7eb;
+    top: 0;
+    bottom: 0;
+    left: 68px;
+    right: 0;
     pointer-events: none;
+    z-index: 0;
+  }
+  .pm-vline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    margin-left: -0.5px;
+    background: #9ca3af;
   }
   .pm-ts-header {
     padding: 5px 6px;
@@ -2430,13 +3923,14 @@ const STYLES = /* css */ `
     top: 50%;
     transform: translate(-50%, -50%);
     background: #ffffff;
+    background-color: #ffffff;
     border: 1.5px solid;
     border-radius: 5px;
     padding: 3px 8px;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    z-index: 1;
+    z-index: 5;
     max-width: 320px;
     pointer-events: none;
   }
@@ -2482,6 +3976,7 @@ const STYLES = /* css */ `
     display: flex;
     align-items: center;
     pointer-events: none;
+    z-index: 2;
   }
   .pm-arrow-container.group-arrow { height: 4px; }
   .pm-arrow-line { flex: 1; height: 100%; position: relative; }
@@ -2675,6 +4170,11 @@ const STYLES = /* css */ `
     width: 100%;
     height: 120px;
   }
+  .pm-chart-svg--tall {
+    height: auto;
+    aspect-ratio: 460 / 260;
+    max-height: 320px;
+  }
   .pm-chart-empty {
     height: 120px;
     display: flex;
@@ -2691,14 +4191,14 @@ const STYLES = /* css */ `
     background: #ffffff;
     border: 1px solid #d4d8e8;
     border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 10px;
+    padding: 6px 10px;
+    font-size: 11px;
     color: #1a1a2e;
     pointer-events: none;
     z-index: 5;
     white-space: nowrap;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    line-height: 1.4;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    line-height: 1.45;
   }
   .pm-chart-crosshair {
     display: none;
@@ -2779,5 +4279,177 @@ const STYLES = /* css */ `
     border-radius: 8px;
     overflow-y: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+  }
+
+  /* Clickable usage card affordance */
+  .pm-ucard--clickable {
+    cursor: pointer;
+    transition: transform 0.08s ease, box-shadow 0.08s ease, border-color 0.08s ease;
+  }
+  .pm-ucard--clickable:hover {
+    transform: translateY(-1px);
+    border-color: #9aa3b8;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+  }
+  .pm-ucard--clickable:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+  .pm-ucard-info {
+    margin-left: 6px;
+    font-size: 10px;
+    color: #6b7280;
+    font-weight: 400;
+  }
+
+  /* Explainer modal */
+  .pm-explainer-modal {
+    width: 640px;
+    max-width: 92vw;
+    max-height: 85vh;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .pm-explainer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid #e5e7eb;
+    position: sticky;
+    top: 0;
+    background: #ffffff;
+    z-index: 1;
+  }
+  .pm-explainer-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #111827;
+  }
+  .pm-explainer-close {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .pm-explainer-close:hover {
+    background: #f3f4f6;
+    color: #111827;
+  }
+  .pm-explainer-body {
+    padding: 16px 20px 20px;
+    font-size: 12.5px;
+    color: #1f2937;
+    line-height: 1.55;
+    overflow-y: auto;
+  }
+  .pm-explainer-values {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .pm-explainer-stat {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    text-align: center;
+  }
+  .pm-explainer-stat-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: #111827;
+    line-height: 1.2;
+  }
+  .pm-explainer-stat-label {
+    font-size: 10.5px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+  }
+  .pm-explainer-intro {
+    margin: 0 0 14px;
+    color: #374151;
+  }
+  .pm-explainer-section {
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border: 1px solid #eef0f4;
+    border-radius: 6px;
+  }
+  .pm-explainer-section p {
+    margin: 0;
+  }
+  .pm-explainer-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 6px;
+    font-size: 12.5px;
+  }
+  .pm-explainer-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .pm-badge-user {
+    background: #dbeafe;
+    color: #1d4ed8;
+  }
+  .pm-badge-assistant {
+    background: #dcfce7;
+    color: #166534;
+  }
+  .pm-badge-total {
+    background: #ede9fe;
+    color: #5b21b6;
+  }
+  .pm-explainer-body code {
+    background: #eef2f7;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .pm-explainer-note ul {
+    margin: 4px 0 0;
+    padding-left: 18px;
+  }
+  .pm-explainer-note li {
+    margin-bottom: 4px;
+  }
+  .pm-explainer-section ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+  }
+  .pm-explainer-section li {
+    margin-bottom: 4px;
+  }
+  .pm-explainer-section p + p {
+    margin-top: 6px;
+  }
+  .pm-explainer-mini {
+    margin: 6px 0 0 !important;
+    padding: 6px 8px;
+    background: #eef2f7;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    color: #1f2937;
   }
 `;

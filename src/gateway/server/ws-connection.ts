@@ -235,7 +235,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       try {
-        socket.send(JSON.stringify(obj));
+        // Stamp every outbound frame with the gateway's wall-clock send time so
+        // peers can derive one-way latency. Only annotate plain frame envelopes
+        // (objects); leave anything else untouched.
+        const stamped =
+          obj && typeof obj === "object" && !Array.isArray(obj)
+            ? { ...(obj as Record<string, unknown>), sentAt: Date.now() }
+            : obj;
+        socket.send(JSON.stringify(stamped));
       } catch {
         /* ignore */
       }

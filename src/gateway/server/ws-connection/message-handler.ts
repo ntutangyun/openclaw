@@ -237,7 +237,13 @@ export function attachGatewayWsMessageHandler(params: {
 
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
-      socket.send(JSON.stringify(obj), (err) => {
+      // Stamp every outbound frame with the gateway's wall-clock send time so
+      // peers can derive one-way latency.
+      const stamped =
+        obj && typeof obj === "object" && !Array.isArray(obj)
+          ? { ...(obj as Record<string, unknown>), sentAt: Date.now() }
+          : obj;
+      socket.send(JSON.stringify(stamped), (err) => {
         if (err) {
           reject(err);
           return;
@@ -1385,6 +1391,7 @@ export function attachGatewayWsMessageHandler(params: {
         method: req.method,
         role: client.connect.role,
         payload: req.params,
+        sentAt: req.sentAt,
       });
       if (client.usesSharedGatewayAuth) {
         const requiredSharedGatewaySessionGeneration =

@@ -1,6 +1,5 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { refreshChat } from "./app-chat.ts";
-import type { OpenClawApp } from "./app.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
@@ -8,6 +7,7 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import type { OpenClawApp } from "./app.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
 import {
   loadAgentIdentities,
@@ -363,9 +363,14 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
   }
   if (host.tab === "protocolMonitor") {
-    await loadProtocolTraces(host as unknown as OpenClawApp);
-    // Also load usage data for the overview stats
-    await loadUsage(host as unknown as OpenClawApp);
+    const app = host as unknown as OpenClawApp;
+    // Honor the pause toggle: when paused, skip the auto-fetch on tab re-entry
+    // so the buffer stays exactly as it was when the user paused.
+    if (!app.protocolMonitoringPaused) {
+      await loadProtocolTraces(app);
+    }
+    // Always refresh usage overview — it's a separate, non-streaming dataset.
+    await loadUsage(app);
   }
 }
 

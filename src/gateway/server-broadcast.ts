@@ -76,6 +76,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       payload,
       seq: eventSeq,
       stateVersion: opts?.stateVersion,
+      sentAt: Date.now(),
     });
     {
       const logMeta: Record<string, unknown> = {

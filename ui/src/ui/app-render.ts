@@ -91,10 +91,10 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { exportProtocolMonitorHtml } from "./controllers/protocol-monitor-export-html.ts";
 import {
-  clearProtocolTraces,
-  exportProtocolTraces,
   loadProtocolTraces,
+  purgeAllProtocolMonitorState,
 } from "./controllers/protocol-monitor.ts";
 import {
   branchSessionFromCheckpoint,
@@ -2025,13 +2025,27 @@ export function renderApp(state: AppViewState) {
                 usageAggregates: state.usageResult?.aggregates ?? null,
                 usageSessions: state.usageResult?.sessions ?? [],
                 usageLoading: state.usageLoading,
+                usageExplainer: state.protocolUsageExplainer,
+                monitoringPaused: state.protocolMonitoringPaused,
+                networkDirection: state.protocolNetworkDirection,
+                networkExplainer: state.protocolNetworkExplainer,
+                onOpenUsageExplainer: (key) => (state.protocolUsageExplainer = key),
+                onCloseUsageExplainer: () => (state.protocolUsageExplainer = null),
+                onToggleMonitoring: (paused) => (state.protocolMonitoringPaused = paused),
+                onNetworkDirectionChange: (dir) => (state.protocolNetworkDirection = dir),
+                onOpenNetworkExplainer: (key) => (state.protocolNetworkExplainer = key),
+                onCloseNetworkExplainer: () => (state.protocolNetworkExplainer = null),
                 onSubTabChange: (t) => (state.protocolSubTab = t),
                 onToggleAutoScroll: (v) => (state.protocolAutoScroll = v),
                 onSelectTrace: (t) => (state.protocolSelectedTrace = t),
                 onClearSelection: () => (state.protocolSelectedTrace = null),
                 onRefresh: () => loadProtocolTraces(state),
-                onExport: () => exportProtocolTraces(state),
-                onReset: () => clearProtocolTraces(state),
+                onExport: () => {
+                  void exportProtocolMonitorHtml(state);
+                },
+                onReset: () => {
+                  void purgeAllProtocolMonitorState(state);
+                },
                 onModelFilterChange: (model) => (state.protocolModelFilter = model),
                 onToggleType: (key) => {
                   const next = new Set(state.protocolDisabledTypes);

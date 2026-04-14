@@ -43,6 +43,12 @@ export type ProtocolTraceRecord = {
   payloadSize?: number;
   /** Protocol-level request id (shared between matching req and res). */
   reqId?: string | number;
+  /**
+   * One-way wire latency in milliseconds. Set only on inbound traces whose
+   * frame envelope carried a `sentAt` from the sender. Computed as
+   * `Date.now() - sentAt` at capture time. Assumes peers' clocks are synced.
+   */
+  oneWayLatencyMs?: number;
 };
 
 export type TraceBroadcastFn = (record: ProtocolTraceRecord) => void;
@@ -245,10 +251,26 @@ export class ProtocolTraceStore {
     const reqId =
       typeof rawReqId === "string" || typeof rawReqId === "number" ? rawReqId : undefined;
 
+    const capturedAt = Date.now();
+
+    // Derive one-way wire latency for inbound frames whose sender stamped
+    // `sentAt`. Only meaningful when peer clocks are synced (NTP).
+    let oneWayLatencyMs: number | undefined;
+    if (direction === "in" && typeof meta.sentAt === "number") {
+      const delta = capturedAt - meta.sentAt;
+      // Clamp negatives (clock skew) to 0; clamp absurd positives (stale frame
+      // captured after a long pause) to undefined so they don't poison stats.
+      if (delta >= 0 && delta < 60_000) {
+        oneWayLatencyMs = delta;
+      } else if (delta < 0 && delta > -1_000) {
+        oneWayLatencyMs = 0;
+      }
+    }
+
     // Full record for JSONL persistence
     const fullRecord: ProtocolTraceRecord = {
       id: randomUUID(),
-      ts: Date.now(),
+      ts: capturedAt,
       direction,
       kind: kind as TraceKind,
       source,
@@ -264,6 +286,7 @@ export class ProtocolTraceStore {
       stream: meta.stream as string | undefined,
       payloadSize,
       reqId,
+      oneWayLatencyMs,
     };
 
     // Selectively truncate payloads for in-memory buffer to limit heap usage.

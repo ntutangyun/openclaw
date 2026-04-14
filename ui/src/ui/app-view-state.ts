@@ -356,8 +356,18 @@ export type AppViewState = {
       | null;
     protocolAutoScroll: boolean;
     protocolDisabledTypes: Set<string>;
-    protocolSubTab: "protocol" | "settings";
+    protocolSubTab: "protocol" | "terminology" | "settings";
     protocolModelFilter: string | null;
+    protocolUsageExplainer: string | null;
+    protocolMonitoringPaused: boolean;
+    protocolNetworkDirection:
+      | "op-to-gw"
+      | "gw-to-op"
+      | "gw-to-node"
+      | "node-to-gw"
+      | "agent-to-model"
+      | "model-to-agent";
+    protocolNetworkExplainer: string | null;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;

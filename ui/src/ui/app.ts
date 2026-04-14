@@ -500,8 +500,18 @@ export class OpenClawApp extends LitElement {
   @state() protocolSelectedTrace: ProtocolTraceRecord | CoalescedGroup | null = null;
   @state() protocolAutoScroll = true;
   @state() protocolDisabledTypes: Set<string> = new Set(DEFAULT_DISABLED_TYPES);
-  @state() protocolSubTab: "protocol" | "settings" = "protocol";
+  @state() protocolSubTab: "protocol" | "terminology" | "settings" = "protocol";
   @state() protocolModelFilter: string | null = null;
+  @state() protocolUsageExplainer: string | null = null;
+  @state() protocolMonitoringPaused = false;
+  @state() protocolNetworkDirection:
+    | "op-to-gw"
+    | "gw-to-op"
+    | "gw-to-node"
+    | "node-to-gw"
+    | "agent-to-model"
+    | "model-to-agent" = "op-to-gw";
+  @state() protocolNetworkExplainer: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
