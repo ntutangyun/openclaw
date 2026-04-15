@@ -12,6 +12,8 @@ import type {
   LatencySample,
   ChatMessage,
   ToolCallMessage,
+  RequestStats,
+  ResponseStats,
 } from "../controllers/protocol-monitor.ts";
 import {
   coalesceTraces,
@@ -1365,11 +1367,12 @@ function buildNetworkExplainerContent(
             </p>`,
           },
           {
-            title: "受 trace buffer 大小影响",
+            title: "为什么可以「自 session 开始」累计",
             body: html`<p>
-              UI 这边只保留最近 <code>${1000}</code> 条 trace(MAX_VISIBLE)。如果链路非常活跃, 较早的
-              trace 会被挤出 buffer,Total 数字也会随之"回落"。 这是 UI 层的统计,不是 server
-              端的累计计费。
+              UI 的 trace buffer 只保留最近 <code>${1000}</code> 条 trace(MAX_VISIBLE),但 Total
+              Bytes 由 controller 侧的持久 accumulator 维护 —— 每条 trace 按 id 去重 累加一次,与
+              ring buffer eviction 解耦。所以即使旧 trace 被挤出 buffer, Total 也不会回落。注意这是
+              UI 自进程启动以来的累计,不是 gateway 端的计费。
             </p>`,
           },
         ],
@@ -1412,6 +1415,18 @@ function buildNetworkExplainerContent(
           },
         ],
       };
+  }
+
+  // Requests (Agent → Model) explainers
+  if (key.startsWith("requests-")) {
+    const req = net.requestStats;
+    return buildRequestExplainer(key, req);
+  }
+
+  // Responses (Model → Agent) explainers
+  if (key.startsWith("responses-")) {
+    const res = net.responseStats;
+    return buildResponseExplainer(key, res);
   }
 
   // Latency keys
@@ -2544,11 +2559,18 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
 
   const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
 
+  const requestsBlock =
+    props.networkDirection === "agent-to-model" ? renderRequestsSection(net, openExp) : nothing;
+  const responsesBlock =
+    props.networkDirection === "model-to-agent" ? renderResponsesSection(net, openExp) : nothing;
+
   return html`
     <div class="pm-net-direction-header">
       <span class="pm-dot" style="background:${meta.color};"></span>
       <strong>${meta.longLabel}</strong>
     </div>
+
+    ${requestsBlock} ${responsesBlock}
 
     <div class="pm-net-section-title">Throughput</div>
     <div class="pm-net-stat-grid">
@@ -2619,6 +2641,269 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
             <strong>Agent → Model</strong> 或 <strong>Model → Agent</strong> 标签页。
           </div>
         `}
+  `;
+}
+
+function buildRequestExplainer(key: string, req: RequestStats): ExplainerContent | null {
+  switch (key) {
+    case "requests-total":
+      return {
+        title: "Agent → Model · Total Requests",
+        stats: [{ label: "Total", value: String(req.total) }],
+        intro: html`自 session 开始以来 Agent 向 Model 发出的 <em>request</em> 次数 —— 即 agent
+          每一次"把 prompt 交给 LLM 推理"。每个 request 对应一次 lifecycle
+          <code>start/request</code> 事件。`,
+        sections: [
+          {
+            title: "数据来源",
+            body: html`<p>
+              Protocol Monitor 在 controller 侧维护了一个持久累加器,每条
+              <code>stream=lifecycle</code> 且 <code>phase=start/request</code> 的事件会计数 +1, 与
+              ring buffer (<code>MAX_VISIBLE=1000</code>)的 eviction 解耦。即使任务很长,这里的 total
+              也不会随旧 trace 被挤出而回落。
+            </p>`,
+          },
+          {
+            title: "和 Throughput 的关系",
+            body: html`<p>
+              每次 request 的真实 payload 大小在事件的 <code>data.requestSize</code> 字段中,
+              会被写入 trace 的 <code>payloadSize</code>。所以
+              <strong>Total Requests × Avg Payload ≈ agent → model forward 方向的累计字节</strong
+              >(忽略少量非 lifecycle 事件)。
+            </p>`,
+          },
+        ],
+      };
+    case "requests-peak":
+      return {
+        title: "Agent → Model · Peak Payload",
+        stats: [{ label: "Peak", value: formatBytes(req.peakPayloadSize) }],
+        intro: html`所有 request 里最大那一次的 payload 大小。反映了 transcript + system prompt +
+        tool catalog 等加在一起的峰值。`,
+        sections: [
+          {
+            title: "常见的影响因素",
+            body: html`<ul>
+              <li>transcript 越长、tool result 越多,后续 request 的 input 越大。</li>
+              <li>tool catalog、system prompt 的大小也会累加。</li>
+              <li>若开启了 cache control,cache create 的那一条 request 通常是 peak。</li>
+            </ul>`,
+          },
+        ],
+      };
+    case "requests-avg":
+      return {
+        title: "Agent → Model · Average Payload",
+        stats: [
+          { label: "Avg", value: formatBytes(req.avgPayloadSize) },
+          { label: "Count", value: String(req.total) },
+        ],
+        intro: html`所有 request payload 大小的算术平均: <code>sum(requestSize) / total</code>。`,
+        sections: [
+          {
+            title: "解读",
+            body: html`<p>
+              avg 会被少数超大 request(长 transcript 的后几轮)拉高。要看"常态"的 request
+              规模,可以对比 <strong>Peak</strong> 与 <strong>Avg</strong>: peak ≫ avg
+              说明分布长尾明显;peak ≈ avg 说明 request 大小比较均匀。
+            </p>`,
+          },
+        ],
+      };
+    case "requests-latest":
+      return {
+        title: "Agent → Model · Latest Request",
+        stats: [
+          {
+            label: "When",
+            value: req.latestTs
+              ? new Date(req.latestTs).toLocaleTimeString("en-US", { hour12: false })
+              : "—",
+          },
+          { label: "Payload", value: formatBytes(req.latestPayloadSize) },
+        ],
+        intro: html`最近一次 Agent → Model request 的时间与 payload 大小。 用来快速判断 agent
+        是否还在调用 LLM。`,
+        sections: [
+          {
+            title: "和 sequence diagram 的对应",
+            body: html`<p>
+              Latest Request 的时间点应该与 Protocol 序列图上最后一条 agent → llm 箭头
+              吻合。如果长时间没有更新,说明 agent 处于 tool 执行或空闲阶段。
+            </p>`,
+          },
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
+function buildResponseExplainer(key: string, res: ResponseStats): ExplainerContent | null {
+  switch (key) {
+    case "responses-total":
+      return {
+        title: "Model → Agent · Total SSE Events",
+        stats: [{ label: "Total", value: String(res.totalEvents) }],
+        intro: html`自 session 开始以来 Model → Agent 方向累计的 <em>assistant stream</em> 事件数 ——
+          对应 LLM provider 的 Server-Sent Events(每一帧是一个 delta token、 tool_use 增量、或 stop
+          标记)。`,
+        sections: [
+          {
+            title: "为什么单独看 SSE",
+            body: html`<p>
+              SSE 的事件频率能反映 provider 的流式吐字节奏 —— generation 稳定 vs.
+              有长时间间隔、是否被 rate-limit 节流都会先从这里看出来。
+            </p>`,
+          },
+          {
+            title: "数据来源",
+            body: html`<p>
+              controller 侧对每条 <code>source=llm, target=agent, stream=assistant</code>
+              的 trace 做持久累加,与 ring buffer eviction 解耦,所以在任务结束后看到的 total
+              反映的是整个 session 的真实帧数,不会因 trace buffer 被挤满而缩水。
+            </p>`,
+          },
+        ],
+      };
+    case "responses-rate":
+      return {
+        title: "Model → Agent · Avg Events / Sec",
+        stats: [
+          {
+            label: "Avg /s",
+            value: res.avgEventsPerSec === null ? "—" : res.avgEventsPerSec.toFixed(2),
+          },
+          { label: "Total", value: String(res.totalEvents) },
+        ],
+        intro: html`SSE 事件平均每秒多少帧。计算公式:
+          <code>total / ((lastTs - firstTs) / 1000)</code> —— 使用首末两帧时间差作为
+          时长。仅当观察到 ≥ 2 个 SSE 事件时才有值。`,
+        sections: [
+          {
+            title: "解读",
+            body: html`<p>
+              数字越大说明 provider 吐字越密。注意当 agent 有多次 LLM call 并且中间有 tool
+              执行空档时,这里的 "平均" 会把空档时间也算进去, 因此会比单次 generation burst 的瞬时
+              rate 低。
+            </p>`,
+          },
+        ],
+      };
+    case "responses-peak":
+      return {
+        title: "Model → Agent · Peak SSE Payload",
+        stats: [{ label: "Peak", value: formatBytes(res.peakPayloadSize) }],
+        intro: html`单个 SSE 事件的最大 payload 大小。通常 initial message_start / 完整 tool_use
+        block 这类 "聚合型" 事件会是 peak。`,
+        sections: [
+          {
+            title: "注意",
+            body: html`<p>
+              ring buffer 为了限制内存,会把 assistant stream 的 payload 截断到
+              <code>{ _slim: true, data: { text } }</code>;但 <code>payloadSize</code> 是在截断
+              <em>前</em> 估算的,所以 peak 反映的是 真实 wire 大小而不是截断后的尺寸。
+            </p>`,
+          },
+        ],
+      };
+    case "responses-avg":
+      return {
+        title: "Model → Agent · Avg SSE Payload",
+        stats: [
+          { label: "Avg", value: formatBytes(res.avgPayloadSize) },
+          { label: "Count", value: String(res.totalEvents) },
+        ],
+        intro: html`所有 SSE 事件 payload 大小的算术平均。`,
+        sections: [
+          {
+            title: "和 Throughput 的关系",
+            body: html`<p>
+              <strong>Avg SSE × Avg Events/Sec ≈ Model → Agent 的平均 bytes/s</strong>。 与
+              Throughput 卡片的 average 可以互相验证。
+            </p>`,
+          },
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
+function renderRequestsSection(
+  net: NetworkStats,
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  const s = net.requestStats;
+  const latest = s.latestTs
+    ? new Date(s.latestTs).toLocaleTimeString("en-US", { hour12: false })
+    : "—";
+  return html`
+    <div class="pm-net-section-title">Requests</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Total Requests",
+        String(s.total),
+        "since session start",
+        openExp("requests-total"),
+      )}
+      ${renderNetStatCard(
+        "Peak Payload",
+        formatBytes(s.peakPayloadSize),
+        "largest single request",
+        openExp("requests-peak"),
+      )}
+      ${renderNetStatCard(
+        "Avg Payload",
+        formatBytes(s.avgPayloadSize),
+        s.total > 0 ? `over ${s.total} requests` : "no requests yet",
+        openExp("requests-avg"),
+      )}
+      ${renderNetStatCard(
+        "Latest Request",
+        latest,
+        s.latestTs ? `payload ${formatBytes(s.latestPayloadSize)}` : "—",
+        openExp("requests-latest"),
+      )}
+    </div>
+  `;
+}
+
+function renderResponsesSection(
+  net: NetworkStats,
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  const s = net.responseStats;
+  const eps = s.avgEventsPerSec;
+  const epsLabel = eps === null ? "—" : `${eps.toFixed(2)} /s`;
+  return html`
+    <div class="pm-net-section-title">Responses</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Total SSE Events",
+        String(s.totalEvents),
+        "assistant stream frames",
+        openExp("responses-total"),
+      )}
+      ${renderNetStatCard(
+        "Avg Events / Sec",
+        epsLabel,
+        eps === null ? "need ≥ 2 events" : "across stream span",
+        openExp("responses-rate"),
+      )}
+      ${renderNetStatCard(
+        "Peak Payload",
+        formatBytes(s.peakPayloadSize),
+        "largest single SSE frame",
+        openExp("responses-peak"),
+      )}
+      ${renderNetStatCard(
+        "Avg Payload",
+        formatBytes(s.avgPayloadSize),
+        s.totalEvents > 0 ? `over ${s.totalEvents} frames` : "no frames yet",
+        openExp("responses-avg"),
+      )}
+    </div>
   `;
 }
 

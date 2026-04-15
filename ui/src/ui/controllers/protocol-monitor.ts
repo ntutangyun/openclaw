@@ -176,6 +176,30 @@ export type DirectionalThroughputSamples = {
   reverse: ThroughputSample[];
 };
 
+export type RequestStats = {
+  /** Total number of Agent → Model LLM requests observed. */
+  total: number;
+  /** Largest single request payload size in bytes. */
+  peakPayloadSize: number;
+  /** Mean request payload size in bytes (0 if none). */
+  avgPayloadSize: number;
+  /** Timestamp of the most recent request, or null if none. */
+  latestTs: number | null;
+  /** Payload size of the most recent request in bytes. */
+  latestPayloadSize: number;
+};
+
+export type ResponseStats = {
+  /** Total number of Model → Agent SSE (assistant stream) events observed. */
+  totalEvents: number;
+  /** Mean events per second across the SSE stream, or null if < 2 events. */
+  avgEventsPerSec: number | null;
+  /** Largest single SSE payload size in bytes. */
+  peakPayloadSize: number;
+  /** Mean SSE payload size in bytes (0 if none). */
+  avgPayloadSize: number;
+};
+
 export type NetworkStats = {
   totalBytesIn: number;
   totalBytesOut: number;
@@ -196,6 +220,10 @@ export type NetworkStats = {
    * stamped by the node client. Assumes synced clocks.
    */
   nodeGatewayOneWayLatency: LatencyStats;
+  /** Agent → Model request (lifecycle start) rollup. */
+  requestStats: RequestStats;
+  /** Model → Agent SSE response rollup. */
+  responseStats: ResponseStats;
 };
 
 // ---------------------------------------------------------------------------
@@ -570,87 +598,247 @@ export function computeMessageTypes(
 
 const THROUGHPUT_BUCKET_MS = 2000;
 
+// ---------------------------------------------------------------------------
+// Persistent network stats accumulators
+//
+// computeNetworkStats is invoked on every render over whatever is currently in
+// the client-side trace buffer (capped at MAX_VISIBLE = 1000). For a busy
+// session that generates thousands of traces — especially chatty assistant
+// stream deltas — older traces get evicted by newer ones, and any "since
+// session start" totals or bucket counts computed from the live buffer alone
+// collapse to reflect only the last ~1000 traces.
+//
+// Symptoms this pattern fixes:
+//   - Total Bytes dropping from 90 MB to 20 B mid-session once large
+//     lifecycle requests are pushed out
+//   - Model → Agent showing far fewer buckets than Agent → Model because
+//     many stream events per call evict themselves faster
+//
+// Mirrors the ttftCache / genCache approach already used for TTFT and
+// generation latency: ingest each trace exactly once (dedup by id), maintain
+// running totals and bucket maps at module scope, and snapshot them on reset.
+// ---------------------------------------------------------------------------
+
+type BucketMap = Map<number, number>;
+
+type RouteAccumulator = {
+  combined: BucketMap;
+  forward: BucketMap;
+  reverse: BucketMap;
+};
+
+type RequestAccumulatorState = {
+  total: number;
+  peakSize: number;
+  totalSize: number;
+  latestTs: number | null;
+  latestSize: number;
+};
+
+type ResponseAccumulatorState = {
+  total: number;
+  peakSize: number;
+  totalSize: number;
+  firstTs: number | null;
+  lastTs: number | null;
+};
+
+function emptyRoute(): RouteAccumulator {
+  return { combined: new Map(), forward: new Map(), reverse: new Map() };
+}
+
+const netState = {
+  totalBytesIn: 0,
+  totalBytesOut: 0,
+  operatorGateway: emptyRoute(),
+  agentLlm: emptyRoute(),
+  gatewayNode: emptyRoute(),
+  requests: {
+    total: 0,
+    peakSize: 0,
+    totalSize: 0,
+    latestTs: null,
+    latestSize: 0,
+  } as RequestAccumulatorState,
+  responses: {
+    total: 0,
+    peakSize: 0,
+    totalSize: 0,
+    firstTs: null,
+    lastTs: null,
+  } as ResponseAccumulatorState,
+};
+
+const netProcessed = new Set<string>();
+/** Absolute cap; clearing risks a one-off recount artifact. Matches latency-cache policy. */
+const MAX_NET_PROCESSED = 200_000;
+
+function addBucket(map: BucketMap, bucket: number, size: number) {
+  map.set(bucket, (map.get(bucket) ?? 0) + size);
+}
+
+function ingestIntoNetwork(t: ProtocolTraceRecord): void {
+  if (netProcessed.has(t.id)) {
+    return;
+  }
+  netProcessed.add(t.id);
+
+  const size = t.payloadSize ?? 0;
+  if (t.direction === "in") {
+    netState.totalBytesIn += size;
+  } else {
+    netState.totalBytesOut += size;
+  }
+
+  const bucket = Math.floor(t.ts / THROUGHPUT_BUCKET_MS) * THROUGHPUT_BUCKET_MS;
+  const src = t.source;
+  const tgt = t.target;
+
+  if (src === "operator" && tgt === "gateway") {
+    addBucket(netState.operatorGateway.combined, bucket, size);
+    addBucket(netState.operatorGateway.forward, bucket, size);
+  } else if (src === "gateway" && tgt === "operator") {
+    addBucket(netState.operatorGateway.combined, bucket, size);
+    addBucket(netState.operatorGateway.reverse, bucket, size);
+  }
+
+  if (src === "agent" && tgt === "llm") {
+    addBucket(netState.agentLlm.combined, bucket, size);
+    addBucket(netState.agentLlm.forward, bucket, size);
+    // Requests: agent→llm lifecycle start/request events carry the full LLM
+    // request body size in `payloadSize` (see `requestSize` override in the
+    // trace store). Everything else on this edge is tool metadata.
+    if (t.kind === "event" && t.stream === "lifecycle") {
+      const phase = resolvePhase(t.payload);
+      if (phase === "start" || phase === "request") {
+        netState.requests.total += 1;
+        if (size > netState.requests.peakSize) {
+          netState.requests.peakSize = size;
+        }
+        netState.requests.totalSize += size;
+        if (netState.requests.latestTs === null || t.ts > netState.requests.latestTs) {
+          netState.requests.latestTs = t.ts;
+          netState.requests.latestSize = size;
+        }
+      }
+    }
+  } else if (src === "llm" && tgt === "agent") {
+    addBucket(netState.agentLlm.combined, bucket, size);
+    addBucket(netState.agentLlm.reverse, bucket, size);
+    // Responses: each assistant stream event represents one SSE frame from
+    // the model. Lifecycle end also lands in this direction; we only count
+    // stream frames for SSE stats.
+    if (t.kind === "event" && t.stream === "assistant") {
+      netState.responses.total += 1;
+      if (size > netState.responses.peakSize) {
+        netState.responses.peakSize = size;
+      }
+      netState.responses.totalSize += size;
+      if (netState.responses.firstTs === null || t.ts < netState.responses.firstTs) {
+        netState.responses.firstTs = t.ts;
+      }
+      if (netState.responses.lastTs === null || t.ts > netState.responses.lastTs) {
+        netState.responses.lastTs = t.ts;
+      }
+    }
+  }
+
+  if (src === "gateway" && tgt === "node") {
+    addBucket(netState.gatewayNode.combined, bucket, size);
+    addBucket(netState.gatewayNode.forward, bucket, size);
+  } else if (src === "node" && tgt === "gateway") {
+    addBucket(netState.gatewayNode.combined, bucket, size);
+    addBucket(netState.gatewayNode.reverse, bucket, size);
+  }
+}
+
+function trimNetProcessed(): void {
+  if (netProcessed.size > MAX_NET_PROCESSED) {
+    netProcessed.clear();
+  }
+}
+
+export function clearNetworkAccumulators(): void {
+  netState.totalBytesIn = 0;
+  netState.totalBytesOut = 0;
+  netState.operatorGateway.combined.clear();
+  netState.operatorGateway.forward.clear();
+  netState.operatorGateway.reverse.clear();
+  netState.agentLlm.combined.clear();
+  netState.agentLlm.forward.clear();
+  netState.agentLlm.reverse.clear();
+  netState.gatewayNode.combined.clear();
+  netState.gatewayNode.forward.clear();
+  netState.gatewayNode.reverse.clear();
+  netState.requests.total = 0;
+  netState.requests.peakSize = 0;
+  netState.requests.totalSize = 0;
+  netState.requests.latestTs = null;
+  netState.requests.latestSize = 0;
+  netState.responses.total = 0;
+  netState.responses.peakSize = 0;
+  netState.responses.totalSize = 0;
+  netState.responses.firstTs = null;
+  netState.responses.lastTs = null;
+  netProcessed.clear();
+}
+
+function bucketsToSamples(buckets: BucketMap): ThroughputSample[] {
+  return [...buckets.entries()]
+    .toSorted(([a], [b]) => a - b)
+    .map(([ts, bytes]) => ({
+      ts,
+      bytesPerSec: (bytes / THROUGHPUT_BUCKET_MS) * 1000,
+      rawBytes: bytes,
+    }));
+}
+
+function routeToDirectional(r: RouteAccumulator): DirectionalThroughputSamples {
+  return {
+    combined: bucketsToSamples(r.combined),
+    forward: bucketsToSamples(r.forward),
+    reverse: bucketsToSamples(r.reverse),
+  };
+}
+
+function buildRequestStats(): RequestStats {
+  const { total, peakSize, totalSize, latestTs, latestSize } = netState.requests;
+  return {
+    total,
+    peakPayloadSize: peakSize,
+    avgPayloadSize: total > 0 ? Math.round(totalSize / total) : 0,
+    latestTs,
+    latestPayloadSize: latestSize,
+  };
+}
+
+function buildResponseStats(): ResponseStats {
+  const { total, peakSize, totalSize, firstTs, lastTs } = netState.responses;
+  const hasSpan = firstTs !== null && lastTs !== null && lastTs > firstTs;
+  return {
+    totalEvents: total,
+    avgEventsPerSec: hasSpan ? total / ((lastTs - firstTs) / 1000) : null,
+    peakPayloadSize: peakSize,
+    avgPayloadSize: total > 0 ? Math.round(totalSize / total) : 0,
+  };
+}
+
 export function computeNetworkStats(
   traces: ProtocolTraceRecord[],
   modelFilter?: string | null,
   runModelMap?: Map<string, string>,
 ): NetworkStats {
-  let totalBytesIn = 0;
-  let totalBytesOut = 0;
-
-  // Combined + directional buckets for each route
-  const ogCombined = new Map<number, number>();
-  const ogFwd = new Map<number, number>(); // operator → gateway
-  const ogRev = new Map<number, number>(); // gateway → operator
-  const alCombined = new Map<number, number>();
-  const alFwd = new Map<number, number>(); // agent → llm
-  const alRev = new Map<number, number>(); // llm → agent
-  const gnCombined = new Map<number, number>();
-  const gnFwd = new Map<number, number>(); // gateway → node
-  const gnRev = new Map<number, number>(); // node → gateway
-
   for (const t of traces) {
-    const size = t.payloadSize ?? 0;
-    if (t.direction === "in") {
-      totalBytesIn += size;
-    } else {
-      totalBytesOut += size;
-    }
-
-    const bucket = Math.floor(t.ts / THROUGHPUT_BUCKET_MS) * THROUGHPUT_BUCKET_MS;
-    const src = t.source;
-    const tgt = t.target;
-
-    if (src === "operator" && tgt === "gateway") {
-      ogCombined.set(bucket, (ogCombined.get(bucket) ?? 0) + size);
-      ogFwd.set(bucket, (ogFwd.get(bucket) ?? 0) + size);
-    } else if (src === "gateway" && tgt === "operator") {
-      ogCombined.set(bucket, (ogCombined.get(bucket) ?? 0) + size);
-      ogRev.set(bucket, (ogRev.get(bucket) ?? 0) + size);
-    }
-
-    if (src === "agent" && tgt === "llm") {
-      alCombined.set(bucket, (alCombined.get(bucket) ?? 0) + size);
-      alFwd.set(bucket, (alFwd.get(bucket) ?? 0) + size);
-    } else if (src === "llm" && tgt === "agent") {
-      alCombined.set(bucket, (alCombined.get(bucket) ?? 0) + size);
-      alRev.set(bucket, (alRev.get(bucket) ?? 0) + size);
-    }
-
-    if (src === "gateway" && tgt === "node") {
-      gnCombined.set(bucket, (gnCombined.get(bucket) ?? 0) + size);
-      gnFwd.set(bucket, (gnFwd.get(bucket) ?? 0) + size);
-    } else if (src === "node" && tgt === "gateway") {
-      gnCombined.set(bucket, (gnCombined.get(bucket) ?? 0) + size);
-      gnRev.set(bucket, (gnRev.get(bucket) ?? 0) + size);
-    }
+    ingestIntoNetwork(t);
   }
-
-  const toSamples = (buckets: Map<number, number>): ThroughputSample[] =>
-    [...buckets.entries()]
-      .toSorted(([a], [b]) => a - b)
-      .map(([ts, bytes]) => ({
-        ts,
-        bytesPerSec: (bytes / THROUGHPUT_BUCKET_MS) * 1000,
-        rawBytes: bytes,
-      }));
-
-  const toDirectional = (
-    combined: Map<number, number>,
-    fwd: Map<number, number>,
-    rev: Map<number, number>,
-  ): DirectionalThroughputSamples => ({
-    combined: toSamples(combined),
-    forward: toSamples(fwd),
-    reverse: toSamples(rev),
-  });
+  trimNetProcessed();
 
   return {
-    totalBytesIn,
-    totalBytesOut,
-    operatorGateway: toDirectional(ogCombined, ogFwd, ogRev),
-    agentLlm: toDirectional(alCombined, alFwd, alRev),
-    gatewayNode: toDirectional(gnCombined, gnFwd, gnRev),
+    totalBytesIn: netState.totalBytesIn,
+    totalBytesOut: netState.totalBytesOut,
+    operatorGateway: routeToDirectional(netState.operatorGateway),
+    agentLlm: routeToDirectional(netState.agentLlm),
+    gatewayNode: routeToDirectional(netState.gatewayNode),
     agentLlmTtft: filterLatencyByModel(computeAgentLlmTtft(traces, runModelMap), modelFilter),
     agentLlmGeneration: filterLatencyByModel(
       computeAgentLlmGeneration(traces, runModelMap),
@@ -658,6 +846,8 @@ export function computeNetworkStats(
     ),
     operatorGatewayOneWayLatency: computeWsOneWayLatency(traces, "operator"),
     nodeGatewayOneWayLatency: computeWsOneWayLatency(traces, "node"),
+    requestStats: buildRequestStats(),
+    responseStats: buildResponseStats(),
   };
 }
 
@@ -995,7 +1185,7 @@ function computeAgentLlmGeneration(
   return buildLatencyStats([...genCache, ...liveExtras]);
 }
 
-/** Clear latency caches (called when user resets traces). */
+/** Clear latency + network accumulators (called when user resets traces). */
 export function clearLatencyCaches() {
   ttftCache.length = 0;
   ttftRunState.clear();
@@ -1003,30 +1193,110 @@ export function clearLatencyCaches() {
   genCache.length = 0;
   genRunState.clear();
   genProcessed.clear();
+  clearNetworkAccumulators();
 }
 
 export type LatencyCacheSnapshot = {
   ttft: LatencySample[];
   gen: LatencySample[];
+  network?: NetworkCacheSnapshot;
 };
 
+export type NetworkCacheSnapshot = {
+  totalBytesIn: number;
+  totalBytesOut: number;
+  operatorGateway: {
+    combined: [number, number][];
+    forward: [number, number][];
+    reverse: [number, number][];
+  };
+  agentLlm: {
+    combined: [number, number][];
+    forward: [number, number][];
+    reverse: [number, number][];
+  };
+  gatewayNode: {
+    combined: [number, number][];
+    forward: [number, number][];
+    reverse: [number, number][];
+  };
+  requests: RequestAccumulatorState;
+  responses: ResponseAccumulatorState;
+  /** Trace ids already ingested, so rehydration does not double-count them. */
+  processedIds: string[];
+};
+
+function snapshotRoute(r: RouteAccumulator) {
+  return {
+    combined: [...r.combined.entries()],
+    forward: [...r.forward.entries()],
+    reverse: [...r.reverse.entries()],
+  };
+}
+
+function rehydrateRoute(
+  r: RouteAccumulator,
+  snap: { combined: [number, number][]; forward: [number, number][]; reverse: [number, number][] },
+) {
+  r.combined.clear();
+  r.forward.clear();
+  r.reverse.clear();
+  for (const [ts, bytes] of snap.combined) {
+    r.combined.set(ts, bytes);
+  }
+  for (const [ts, bytes] of snap.forward) {
+    r.forward.set(ts, bytes);
+  }
+  for (const [ts, bytes] of snap.reverse) {
+    r.reverse.set(ts, bytes);
+  }
+}
+
+export function snapshotNetworkAccumulators(): NetworkCacheSnapshot {
+  return {
+    totalBytesIn: netState.totalBytesIn,
+    totalBytesOut: netState.totalBytesOut,
+    operatorGateway: snapshotRoute(netState.operatorGateway),
+    agentLlm: snapshotRoute(netState.agentLlm),
+    gatewayNode: snapshotRoute(netState.gatewayNode),
+    requests: { ...netState.requests },
+    responses: { ...netState.responses },
+    processedIds: [...netProcessed],
+  };
+}
+
+export function rehydrateNetworkAccumulators(snap: NetworkCacheSnapshot): void {
+  clearNetworkAccumulators();
+  netState.totalBytesIn = snap.totalBytesIn;
+  netState.totalBytesOut = snap.totalBytesOut;
+  rehydrateRoute(netState.operatorGateway, snap.operatorGateway);
+  rehydrateRoute(netState.agentLlm, snap.agentLlm);
+  rehydrateRoute(netState.gatewayNode, snap.gatewayNode);
+  netState.requests = { ...snap.requests };
+  netState.responses = { ...snap.responses };
+  for (const id of snap.processedIds) {
+    netProcessed.add(id);
+  }
+}
+
 /**
- * Snapshot the persistent latency sample caches for export. Only the samples
- * themselves are captured — the in-flight run-state Maps and processed-id Sets
- * are intentionally omitted: the exported viewer does not feed new traces
- * through the state machines, so it only needs the final samples.
+ * Snapshot the persistent latency + network accumulators for export. The
+ * in-flight run-state Maps are intentionally omitted: the exported viewer
+ * does not feed new traces through the state machines.
  */
 export function snapshotLatencyCaches(): LatencyCacheSnapshot {
   return {
     ttft: ttftCache.map((s) => ({ ...s })),
     gen: genCache.map((s) => ({ ...s })),
+    network: snapshotNetworkAccumulators(),
   };
 }
 
 /**
- * Rehydrate the latency caches from a previously-taken snapshot. Called once
- * by the exported HTML viewer before first render so `computeNetworkStats`
- * reproduces the exact latency stats that were on screen at export time.
+ * Rehydrate the latency + network caches from a previously-taken snapshot.
+ * Called once by the exported HTML viewer before first render so
+ * `computeNetworkStats` reproduces the exact stats that were on screen at
+ * export time.
  */
 export function rehydrateLatencyCaches(snapshot: LatencyCacheSnapshot) {
   clearLatencyCaches();
@@ -1035,6 +1305,9 @@ export function rehydrateLatencyCaches(snapshot: LatencyCacheSnapshot) {
   }
   for (const s of snapshot.gen) {
     genCache.push({ ...s });
+  }
+  if (snapshot.network) {
+    rehydrateNetworkAccumulators(snapshot.network);
   }
 }
 
