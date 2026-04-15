@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import { loadConfig } from "../../config/config.js";
+import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
@@ -38,6 +40,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateSessionsPurgeParams,
   validateSessionsUsageParams,
 } from "../protocol/index.js";
 import {
@@ -891,5 +894,81 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     respond(true, { logs: logs ?? [] }, undefined);
+  },
+  "sessions.purge": async ({ respond, params }) => {
+    if (!validateSessionsPurgeParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid sessions.purge params: ${formatValidationErrors(validateSessionsPurgeParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const dryRun = params.dryRun === true;
+    const config = loadConfig();
+    const agents = listAgentsForGateway(config).agents;
+
+    let fileCount = 0;
+    let byteCount = 0;
+    const contributingAgentIds = new Set<string>();
+
+    for (const agent of agents) {
+      const dir = resolveSessionTranscriptsDirForAgent(agent.id);
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (!isUsageCountedSessionTranscriptFileName(entry.name)) {
+          continue;
+        }
+        const absPath = `${dir}/${entry.name}`;
+        let size = 0;
+        try {
+          size = fs.statSync(absPath).size;
+        } catch {
+          continue;
+        }
+        if (!dryRun) {
+          try {
+            fs.unlinkSync(absPath);
+          } catch {
+            // Skip files we can't remove (permission denied, concurrent rename).
+            // They'll still be counted by the next dry-run.
+            continue;
+          }
+        }
+        fileCount += 1;
+        byteCount += size;
+        contributingAgentIds.add(agent.id);
+      }
+    }
+
+    if (!dryRun) {
+      // Invalidate the gateway's aggregation cache so the next usage.* RPC
+      // reflects the post-purge disk state instead of stale 30-second cache.
+      costUsageCache.clear();
+    }
+
+    respond(
+      true,
+      {
+        dryRun,
+        fileCount,
+        byteCount,
+        agentIds: Array.from(contributingAgentIds),
+      },
+      undefined,
+    );
   },
 };

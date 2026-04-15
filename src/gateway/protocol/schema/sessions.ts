@@ -281,6 +281,34 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Destructive RPC: permanently unlinks every session transcript file visible to
+ * the usage aggregator across all agents in the current state dir. This is the
+ * gateway-side half of the Protocol Monitor's "Reset" button. Pass `dryRun`
+ * to preview the scope without modifying disk.
+ */
+export const SessionsPurgeParamsSchema = Type.Object(
+  {
+    /** When true, return the tally without deleting anything. Default: false. */
+    dryRun: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPurgeResultSchema = Type.Object(
+  {
+    /** Whether this was a dry-run preview. */
+    dryRun: Type.Boolean(),
+    /** Number of transcript files matched (or deleted, if not dryRun). */
+    fileCount: Type.Integer({ minimum: 0 }),
+    /** Total byte size of the matched files. */
+    byteCount: Type.Integer({ minimum: 0 }),
+    /** Agent ids whose sessions dirs contributed files. */
+    agentIds: Type.Array(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns all sessions. */
