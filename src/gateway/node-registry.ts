@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 export type NodeSession = {
   nodeId: string;
@@ -194,13 +195,31 @@ export class NodeRegistry {
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
     try {
+      // Stamp `sentAt` so the node can derive one-way wire latency, matching
+      // the operator-bound send path in server/ws-connection.ts.
+      const sentAt = Date.now();
       node.client.socket.send(
         JSON.stringify({
           type: "event",
           event,
           payload,
+          sentAt,
         }),
       );
+      // Route through logWs so the protocol trace listener sees gateway→node
+      // event frames. Without this, throughput and latency for the gw→node
+      // direction in Protocol Monitor only reflect small RPC responses.
+      const logMeta: Record<string, unknown> = {
+        connId: node.connId,
+        role: "node",
+        event,
+        payload,
+        sentAt,
+      };
+      if (event === "agent") {
+        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
+      }
+      logWs("out", "event", logMeta);
       return true;
     } catch {
       return false;

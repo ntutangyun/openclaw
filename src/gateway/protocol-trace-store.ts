@@ -82,6 +82,13 @@ function resolveEntities(
 
   // Events (direction === "out")
   const eventName = meta.event as string | undefined;
+  // Frames pushed directly to a node (role=node) ride the gateway→node edge.
+  // Agent-stream events keep their logical agent↔llm routing below; everything
+  // else for a node (node.invoke.request, session.* control events, etc.) is
+  // tagged as gateway→node so throughput reflects the real wire traffic.
+  if (role === "node" && (!eventName || !AGENT_EVENTS.has(eventName))) {
+    return { source: "gateway", target: "node" };
+  }
   if (eventName && AGENT_EVENTS.has(eventName)) {
     const stream = meta.stream as string | undefined;
     const data =
