@@ -62,5 +62,34 @@ describe("transcript-tools", () => {
     it("handles non-array content", () => {
       expect(countToolResults({ content: "nope" })).toEqual({ total: 0, errors: 0 });
     });
+
+    it("counts top-level role=toolResult messages as a single result", () => {
+      expect(
+        countToolResults({
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      ).toEqual({ total: 1, errors: 0 });
+    });
+
+    it("flags role=toolResult as error when isError is set", () => {
+      expect(
+        countToolResults({
+          role: "toolResult",
+          isError: true,
+          content: "boom",
+        }),
+      ).toEqual({ total: 1, errors: 1 });
+    });
+
+    it("counts OpenAI-style role=tool messages", () => {
+      expect(
+        countToolResults({
+          role: "tool",
+          content: "result text",
+        }),
+      ).toEqual({ total: 1, errors: 0 });
+    });
   });
 });

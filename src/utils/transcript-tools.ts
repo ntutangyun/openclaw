@@ -51,13 +51,27 @@ export const hasToolCall = (message: Record<string, unknown>): boolean =>
   extractToolCallNames(message).length > 0;
 
 export const countToolResults = (message: Record<string, unknown>): ToolResultCounts => {
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return { total: 0, errors: 0 };
-  }
-
   let total = 0;
   let errors = 0;
+
+  // OpenClaw persists tool results as separate messages with role "toolResult"
+  // (and some OpenAI-style transcripts use role "tool"). The message body itself
+  // represents a single tool result, and its `content` is usually a plain string
+  // or `{type: "text"}` blocks rather than `tool_result` blocks, so the
+  // content-block scan below would miss it entirely.
+  const role = normalizeType(message.role);
+  if (role === "toolresult" || role === "tool") {
+    total = 1;
+    if (message.isError === true || message.is_error === true) {
+      errors = 1;
+    }
+  }
+
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return { total, errors };
+  }
+
   for (const entry of content) {
     if (!entry || typeof entry !== "object") {
       continue;
