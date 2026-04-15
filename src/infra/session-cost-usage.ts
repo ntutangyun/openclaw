@@ -126,7 +126,13 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   }
 
   const roleRaw = message.role;
-  const role = roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
+  // Accept "toolResult" / "tool" so their tool-result counts are included;
+  // user/assistant-scoped metrics (counts, latency) are gated on strict equality
+  // below so these extra roles don't pollute them.
+  const role =
+    roleRaw === "user" || roleRaw === "assistant" || roleRaw === "toolResult" || roleRaw === "tool"
+      ? roleRaw
+      : undefined;
   if (!role) {
     return null;
   }
@@ -157,7 +163,10 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
     provider,
     model,
     stopReason,
-    toolNames: extractToolCallNames(message),
+    // Tool calls originate from assistants; tool-result messages may also carry
+    // a `toolName` for bookkeeping, so only count tool calls from assistants
+    // to avoid double-counting each call against its paired result.
+    toolNames: role === "assistant" ? extractToolCallNames(message) : [],
     toolResultCounts: countToolResults(message),
   };
 };

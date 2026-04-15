@@ -222,6 +222,67 @@ describe("session cost usage", () => {
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.4");
   });
 
+  it("counts tool results persisted as separate role=toolResult entries", async () => {
+    // OpenClaw's SessionManager persists tool results as their own messages
+    // (role: "toolResult"), not as `tool_result` content blocks inside an
+    // assistant or user message. The usage aggregator has to recognize that
+    // shape or messages.toolResults stays at 0 while toolCalls grows.
+    const root = await makeSessionCostRoot("cost-tool-result-role");
+    const sessionFile = path.join(root, "session.jsonl");
+    const t0 = new Date("2026-02-02T09:00:00.000Z");
+    const t1 = new Date("2026-02-02T09:00:01.000Z");
+    const t2 = new Date("2026-02-02T09:00:02.000Z");
+
+    const entries = [
+      {
+        type: "message",
+        timestamp: t0.toISOString(),
+        message: { role: "user", content: "run the tool" },
+      },
+      {
+        type: "message",
+        timestamp: t1.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          content: [
+            { type: "text", text: "calling" },
+            { type: "tool_use", name: "weather", id: "call_1" },
+          ],
+          usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      },
+      {
+        type: "message",
+        timestamp: t2.toISOString(),
+        message: {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "weather",
+          content: [{ type: "text", text: "sunny" }],
+          isError: false,
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({ sessionFile });
+    expect(summary?.messageCounts).toEqual({
+      total: 2,
+      user: 1,
+      assistant: 1,
+      toolCalls: 1,
+      toolResults: 1,
+      errors: 0,
+    });
+  });
+
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
     const root = await makeSessionCostRoot("discover");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

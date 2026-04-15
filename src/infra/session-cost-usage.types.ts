@@ -23,7 +23,7 @@ export type ParsedUsageEntry = {
 
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
-  role?: "user" | "assistant";
+  role?: "user" | "assistant" | "toolResult" | "tool";
   timestamp?: Date;
   durationMs?: number;
   usage?: NormalizedUsage;
