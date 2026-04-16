@@ -614,6 +614,343 @@ const TERMINOLOGY_GROUPS: TerminologyGroup[] = [
       },
     ],
   },
+  {
+    title: "图片 Token(Image Tokenization)",
+    intro:
+      "对话里带图片时,provider 会先把图片按自己的规则切块再按 token 计费。下面这几条说明了两类主流算法、detail 参数,以及 2026-04-16 实测验证过的常量 —— 所有公式都对得上 OpenAI API 实际返回的 prompt_tokens。",
+    terms: [
+      {
+        term: "分块算法(tile-based)",
+        definition: html`gpt-4o / gpt-4.1 / gpt-5 / o1 / o3 / computer-use-preview 这一大家族用的算法。流程是:
+          <ol class="pm-term-list-inline">
+            <li>若最长边 &gt; 2048,等比缩小塞进 <code>2048×2048</code> 外框;</li>
+            <li>若短边 &gt; 768,把短边压到 768(长边跟着等比缩);</li>
+            <li>按 <code>512×512</code> 切方块(不满一格按一格算);</li>
+            <li>收费 = <code>base + tiles × per_tile</code>。</li>
+          </ol>
+          <div class="pm-term-subheading">各模型的常数</div>
+          <ul class="pm-term-list-inline">
+            <li>gpt-5 / gpt-5-chat-latest:<code>base = 70</code>,<code>per_tile = 140</code>。</li>
+            <li>gpt-4o / gpt-4.1 / gpt-4.5:<code>base = 85</code>,<code>per_tile = 170</code>。</li>
+            <li>
+              gpt-4o-mini(极贵):<code>base = 2833</code>,<code>per_tile = 5667</code> ——
+              注意这组数比主力模型贵 30 倍以上,因为要匹配其廉价的 text token 单价。
+            </li>
+            <li>o1 / o1-pro / o3:<code>base = 75</code>,<code>per_tile = 150</code>。</li>
+            <li>computer-use-preview:<code>base = 65</code>,<code>per_tile = 129</code>。</li>
+          </ul>
+          <div class="pm-term-example">
+            <div class="pm-term-example-label">例</div>
+            <div>
+              一张 1920×1280 的图,在 gpt-5 上短边 1280 &gt; 768,按比例缩到 <code>1152×768</code>;
+              切方块得 <code>⌈1152/512⌉ × ⌈768/512⌉ = 3 × 2 = 6</code> 块;
+              tokens = <code>70 + 6 × 140 = 910</code>。实测 API 返回的 image-token 数就是 910。
+            </div>
+          </div>`,
+      },
+      {
+        term: "分片算法(patch-based)",
+        definition: html`gpt-4.1-mini / gpt-4.1-nano / o4-mini 这类"小尺寸"模型用的算法。流程是:
+          <ol class="pm-term-list-inline">
+            <li>长边超过硬上限(一般 2048)先整体缩;</li>
+            <li>
+              在图片上铺 <code>32×32</code> 的网格,数出原始 patch 数
+              <code>⌈W/32⌉ × ⌈H/32⌉</code>;
+            </li>
+            <li>
+              若超过预算(一般 <code>1536</code> 个 patch),按
+              <code>√(budget × 1024 / (W × H))</code> 缩放,然后把尺寸
+              <em>向下</em> 对齐到 32 像素网格线,重新数 patch;
+            </li>
+            <li>
+              tokens = <code>round(patches × multiplier)</code> —— 每个模型的
+              multiplier 不同,系数越大同图越贵。
+            </li>
+          </ol>
+          <div class="pm-term-subheading">各模型的 multiplier</div>
+          <ul class="pm-term-list-inline">
+            <li>gpt-4.1-mini:<code>× 1.62</code>。</li>
+            <li>gpt-4.1-nano:<code>× 2.46</code>(反而比 mini 贵,因为小模型靠高单价覆盖硬件成本)。</li>
+            <li>o4-mini:<code>× 1.72</code>。</li>
+          </ul>
+          <p class="pm-term-para">
+            分片算法 <strong>完全忽略 detail 参数</strong> —— low / high / auto 得到的
+            token 数都一样。要省钱只能在 client 侧主动把图缩小。
+          </p>`,
+      },
+      {
+        term: "detail 参数(low / high / auto)",
+        definition: html`chat completions 里 <code>image_url.detail</code> 字段,只对
+          <strong>分块算法</strong> 家族有效。
+          <ul class="pm-term-list-inline">
+            <li>
+              <code>detail: "low"</code> —— 跳过缩放和切块,<em>只</em> 收 <code>base</code>,和原图分辨率
+              无关。实测 gpt-5 上无论多大图都固定 70 tokens,适合只需粗略识别内容的场景。
+            </li>
+            <li>
+              <code>detail: "high"</code> / <code>"auto"</code> —— 走完整的
+              2048-fit → 768-shortest → 512-tile 流程,按 tile 数计费。
+            </li>
+            <li>
+              <strong>陷阱</strong>:如果图片已经很小(短边 &le; 768),high 和 low
+              在 <em>切块那一步</em> 看起来差不多,但 high 仍会按 tile 数累加,low 则只收 base。
+              我们实测过:512×341 的图在 gpt-5 上,high = 210 tokens、low = 70 tokens,差 3×。
+            </li>
+          </ul>
+          <p class="pm-term-para">
+            <strong>分片算法模型(gpt-4.1-mini / nano、o4-mini)收到 detail 参数时会静默忽略</strong> ——
+            不报错,但 cost 没有任何变化。UI 里如果暴露 detail 选项,最好在选到这些模型时禁用或隐藏。
+          </p>`,
+      },
+      {
+        term: "128-token 倍数现象",
+        definition: html`和 prompt cache 类似,<em>image token 并不一定等于 "完美公式计算出的数"</em> ——
+          provider 有时会把结果对齐到 128 的倍数。这在分片算法上尤其明显:一张
+          1024×672 的图算下来应该是 <code>32 × 21 × mult ≈ 808</code> tokens,实测也确实是 808;
+          但 1536×1009 实测得 1,845,原始 patch 数是 <code>48 × 32 = 1536</code>,乘回去得到
+          multiplier ≈ 1.20 而不是文档里说的 1.62。
+          <p class="pm-term-para">
+            实际工程里别死抠精确公式,把本术语里的数字当作 <em>±5% 以内的估计</em> 来用即可 ——
+            真实 API 返回的 <code>prompt_tokens</code> 永远是权威。想做精算时必须发一次真实请求。
+          </p>`,
+      },
+    ],
+  },
+  {
+    title: "Streaming 流式输出",
+    intro:
+      "把请求设成 stream: true 后,provider 以 Server-Sent Events 增量推送 assistant 输出。下面几条说明了线路上到底在传什么、怎么拿到权威的 token 数、以及怎样正确测生成速度。",
+    terms: [
+      {
+        term: "Delta chunk(增量块)",
+        definition: html`每个 SSE event 解出来是一条 <code>chat.completion.chunk</code>。它的
+          <code>choices[0].delta.content</code> 只装 <strong>本次新增</strong> 的文本
+          —— 不是累积结果。client 必须自己把所有 delta 拼起来才能得到完整回复。
+          <ul class="pm-term-list-inline">
+            <li>
+              <strong>第 1 个 chunk</strong> 通常 <code>content: ""</code> 但带
+              <code>role: "assistant"</code>,相当于"开场白"。
+            </li>
+            <li>
+              <strong>中间 chunk</strong> 一条只带几个字符,例如 <code>"A"</code>、
+              <code>" golden"</code>、<code>" retriever"</code>……
+            </li>
+            <li>
+              <strong>最后 1 个 content chunk</strong> 的 <code>finish_reason</code> 从
+              <code>null</code> 变成 <code>"stop"</code> / <code>"length"</code> 等。
+            </li>
+            <li>
+              每个 chunk 还带一个 <code>obfuscation</code> 字段 —— OpenAI 为了阻断
+              BPE 侧信道攻击加的随机 padding,解析时忽略即可。
+            </li>
+          </ul>
+          <p class="pm-term-para">
+            所以 OpenClaw 这边如果想把流式输出记录成"当前完整文本",必须维护一个累加 buffer;
+            直接把 chunk 存库会拿到一堆碎片。
+          </p>`,
+      },
+      {
+        term: "stream_options.include_usage",
+        definition: html`<strong>流式请求里拿到权威 token 数的唯一方式。</strong> 默认情况下,流式
+          chunk 的 <code>usage</code> 字段从头到尾是 <code>null</code>。把请求参数设成
+          <code>stream_options: { include_usage: true }</code> 后,provider 会在正常内容 chunk 之后
+          <em>再多发一条特殊 chunk</em>:它的 <code>choices</code> 是空数组,但
+          <code>usage</code> 已填充 —— 带 <code>prompt_tokens</code>、
+          <code>completion_tokens</code>、<code>total_tokens</code>,以及
+          <code>prompt_tokens_details.cached_tokens</code>。
+          <div class="pm-term-example">
+            <div class="pm-term-example-label">流末尾那条 chunk 的样子</div>
+            <div class="pm-explainer-mini">
+              { "choices": [],<br />
+              &nbsp;&nbsp;"usage": { "prompt_tokens": 29,<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;"completion_tokens": 156,<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;"total_tokens": 185,<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;"prompt_tokens_details": { "cached_tokens": 0 } } }
+            </div>
+          </div>
+          <p class="pm-term-para">
+            如果没开 <code>include_usage</code>,流式模式下就 <em>完全拿不到</em> 权威的
+            completion_tokens —— 只能按 chunk 数估算(见下文"吞吐率计算")。非流式
+            (<code>stream: false</code>)的响应则一直都带 usage,不受此影响。
+          </p>`,
+      },
+      {
+        term: "TTFT(Time To First Token)",
+        definition: html`从 client 发出请求到收到 <em>第一个 content chunk</em>
+          的墙钟耗时。这部分主要是"冷启动 + 网络 RTT + prompt 侧的 prefill",和
+          model 实际的稳态生成速率没有直接关系。
+          <p class="pm-term-para">
+            在报告吞吐率时,<strong>要把 TTFT 和 "后续生成速率" 分开算</strong> ——
+            否则短回复会被冷启动延迟严重拖低,显得 model 很慢。推荐两个口径:
+          </p>
+          <ul class="pm-term-list-inline">
+            <li>
+              <code>wall_clock_tps = completion_tokens / (t_end − t_request)</code> ——
+              带 TTFT,反映终端用户感受。
+            </li>
+            <li>
+              <code>sustained_tps = completion_tokens / (t_end − t_first_chunk)</code> ——
+              去掉 TTFT,反映 model 真实的稳态速率。
+            </li>
+          </ul>
+          <p class="pm-term-para">
+            实测 gpt-4.1-mini 生成 156 tokens 用了 1,845 ms,TTFT 仅 2 ms(因为连接已热),
+            两个口径都得到 ~84.6 tokens/sec。网络差或冷启动时两者可能差 2–5 倍。
+          </p>`,
+      },
+      {
+        term: "吞吐率计算(tokens/sec)",
+        definition: html`OpenAI 的 SSE <strong>里根本没有任何 tokens/sec 字段</strong> ——
+          扫过所有 chunk 也找不到 <code>rate</code> / <code>tps</code> /
+          <code>throughput</code> / <code>speed</code> / <code>per_sec</code> 之类。
+          想得到吞吐率必须 client 端自己算。两种口径:
+          <ul class="pm-term-list-inline">
+            <li>
+              <strong>权威口径</strong>(推荐)—— 开
+              <code>stream_options.include_usage</code>,等末尾那条 chunk 给出
+              <code>completion_tokens</code>,除以自己测的 elapsed time。误差只取决于
+              <code>time.perf_counter()</code> 精度。
+            </li>
+            <li>
+              <strong>估算口径</strong>(没开 include_usage 时)—— 按收到的 chunk 数除以
+              elapsed。实测文本输出平均 ≈ <code>1 token / chunk</code>,但并不严格 1:1:
+              某些 chunk 会一次带多个 token(例如 <code>" golden"</code> 是一个 chunk,
+              但可能 tokenize 成两个 token)。典型误差 ±1–3%。
+            </li>
+          </ul>
+          <p class="pm-term-para">
+            另外 inter-chunk gap <strong>不是均匀的</strong>。实测 gpt-4.1-mini 的 chunk 间隔
+            从 0 ms 到 399 ms 都有 —— 模型端经常一次 flush 好几个 token,然后停顿一下。
+            所以"最近 1 秒的 chunk 数"这种瞬时速率抖动很大,报告吞吐率必须在整条流上平均。
+          </p>`,
+      },
+    ],
+  },
+  {
+    title: "Prompt Cache 实测补充",
+    intro:
+      "上面 Usage Overview 里的 Cache 术语讲了三方职责与计费桶的分法。这一组是 2026-04-16 在 OpenAI gpt-4.1 上对 prompt cache 做的专项实测的补充,涵盖了文档里没明说但会在实际调参时撞到的几条规则。",
+    terms: [
+      {
+        term: "前缀哈希路由(前 ~256 tokens)",
+        definition: html`OpenAI 的 prompt cache 是 <em>按机器分布</em> 的 —— 不是全局 hash 表。每个请求
+          到达时,provider 会对 prompt 的 <strong>前 ~256 tokens</strong> 取哈希,用哈希值挑一台
+          特定的 GPU 机器;再在那台机器的显存里查 KV 缓存。
+          <p class="pm-term-para">
+            推论:
+          </p>
+          <ul class="pm-term-list-inline">
+            <li>
+              前 256 tokens 里任何字节变化(例如在 system prompt 里插了时间戳、用户 ID、UUID),
+              不仅会 <em>miss</em>,还会把请求 <em>路由到别的机器</em>,连带后面相同的
+              前缀也一起冷起步。这比单纯的字节不匹配还糟。
+            </li>
+            <li>
+              所以要想保证命中率,必须让前 256 tokens 完全稳定 —— 典型做法是把 system prompt、
+              tool schema、few-shot 示例都写死,避免任何动态拼接。
+            </li>
+          </ul>`,
+      },
+      {
+        term: "128-token 对齐粒度",
+        definition: html`cache 命中数是按 <strong>128-token 的整数倍</strong> 报告的,零头会被
+          向下截断。所以 <code>cached_tokens == prompt_tokens</code> 这种"完美命中"几乎看不到。
+          <div class="pm-term-example">
+            <div class="pm-term-example-label">实测</div>
+            <div>
+              把一段 1,060 token 的 system prompt 缓存起来,第二次请求的
+              <code>prompt_tokens = 1,072</code>,返回的
+              <code>cached_tokens = 1,024</code>(= 128 × 8),而不是 1,060 或 1,072。
+              剩下那 48 token 被"切掉",按正常 input 计费。
+            </div>
+          </div>
+          <p class="pm-term-para">
+            工程上的含义:cache hit rate 永远略低于理论上限。对短 prompt 尤其明显
+            (一个 1,200 tokens 的 prompt 只能缓存到 1,152,浪费 48 tokens)。想要最大化命中率,
+            静态前缀最好凑到 128 的整数倍。
+          </p>`,
+      },
+      {
+        term: "prompt_cache_key 参数",
+        definition: html`chat completions 请求里一个可选字符串,会和前缀哈希 <em>合并</em> 成路由键。
+          用途是把同一个静态前缀的请求"粘"到同一台机器上。
+          <ul class="pm-term-list-inline">
+            <li>
+              不传:路由只依赖前缀哈希,同前缀的请求会落在同一台机器,命中率高,
+              但单机 <strong>~15 RPM 上限</strong> —— 超过就被 fanout 到其它机器,超出部分 miss。
+            </li>
+            <li>
+              传成"per user"(例如 <code>user_id</code>):每用户一条路由,隔离彼此,
+              但同一静态前缀会被复制到很多机器,整体命中率略降。
+            </li>
+            <li>
+              传成"per conversation"(例如 <code>session_id</code>):粒度最细,
+              对长对话友好,但跨 session 的共用前缀完全不能共享缓存。
+            </li>
+          </ul>
+          <p class="pm-term-para">
+            选型原则:让 (前缀, cache_key) 组合的 QPS 落在 ~15 RPM 以下、又尽量少份数。
+            高流量场景常见的做法是按 tenant 或 server pod 分桶,而不是按 user 分桶。
+          </p>`,
+      },
+      {
+        term: "静态前置 vs 静态后置(实测对比)",
+        definition: html`2026-04-16 在 gpt-4.1 上跑了一组对照实验 —— 同一段 ~1,050 tokens 的静态文档,
+          改变它在 prompt 里的位置,cache 命中率差异巨大。
+          <div class="pm-term-table-wrap">
+            <table class="pm-term-table">
+              <thead>
+                <tr>
+                  <th>布局</th>
+                  <th>第 2 次请求的 cached_tokens</th>
+                  <th>命中率</th>
+                  <th>延迟</th>
+                  <th>成本 / 千次</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <strong>静态前置</strong> ——
+                    静态文档放 system prompt,变化问题放 user message 末尾
+                  </td>
+                  <td><code>1,024 / 1,072</code></td>
+                  <td>95.5%</td>
+                  <td>1,070 ms</td>
+                  <td>$0.712</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>静态后置</strong> ——
+                    user message 先写变化的 question,再拼上同一段静态文档
+                  </td>
+                  <td><code>0 / 1,082</code></td>
+                  <td>0.0%</td>
+                  <td>1,127 ms</td>
+                  <td>$2.644</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="pm-term-para">
+            两个版本的总 token 数几乎一样,唯一区别是 <em>静态内容的位置</em>。结果:
+          </p>
+          <ul class="pm-term-list-inline">
+            <li>静态前置命中 1,024 / 1,072 = 95.5%;</li>
+            <li>静态后置命中 0% —— 因为变化的 question 在前面,前缀一开始就 diverge 了,后面再多的相同内容也救不回来;</li>
+            <li>
+              成本差了 <strong>3.7×</strong>(每千次 $0.712 vs $2.644),按 100k 次/天的量级推算一年能差 ~$70K USD;
+            </li>
+            <li>延迟差 5% 左右 —— cache 的钱省得比时间省得明显。</li>
+          </ul>
+          <p class="pm-term-para">
+            工程上的直接结论:<strong>任何按模板展开的长 prompt,变化部分必须塞到末尾</strong>。
+            典型反模式是把用户问题拼在 system prompt 头部、或者把日期 / 请求 ID 插进中间 ——
+            它们都会让后面几千个静态 token 完全无法缓存。
+          </p>`,
+      },
+    ],
+  },
 ];
 
 export function renderTerminologyPane(): TemplateResult {
