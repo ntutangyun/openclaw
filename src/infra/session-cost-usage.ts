@@ -579,6 +579,8 @@ export async function loadSessionCostSummary(params: {
     toolCalls: 0,
     toolResults: 0,
     errors: 0,
+    assistantErrors: 0,
+    toolErrors: 0,
   };
   const toolUsageMap = new Map<string, number>();
   const modelUsageMap = new Map<string, SessionModelUsage>();
@@ -649,10 +651,12 @@ export async function loadSessionCostSummary(params: {
       if (entry.toolResultCounts.total > 0) {
         messageCounts.toolResults += entry.toolResultCounts.total;
         messageCounts.errors += entry.toolResultCounts.errors;
+        messageCounts.toolErrors += entry.toolResultCounts.errors;
       }
 
       if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
         messageCounts.errors += 1;
+        messageCounts.assistantErrors += 1;
       }
 
       if (entry.timestamp) {
@@ -666,6 +670,8 @@ export async function loadSessionCostSummary(params: {
           toolCalls: 0,
           toolResults: 0,
           errors: 0,
+          assistantErrors: 0,
+          toolErrors: 0,
         };
         daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
         if (entry.role === "user") {
@@ -676,8 +682,10 @@ export async function loadSessionCostSummary(params: {
         daily.toolCalls += entry.toolNames.length;
         daily.toolResults += entry.toolResultCounts.total;
         daily.errors += entry.toolResultCounts.errors;
+        daily.toolErrors += entry.toolResultCounts.errors;
         if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
           daily.errors += 1;
+          daily.assistantErrors += 1;
         }
         dailyMessageMap.set(dayKey, daily);
       }

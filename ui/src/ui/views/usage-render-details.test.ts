@@ -43,6 +43,8 @@ const baseUsage = {
     toolCalls: 0,
     toolResults: 0,
     errors: 0,
+    assistantErrors: 0,
+    toolErrors: 0,
   },
 } satisfies NonNullable<UsageSessionEntry["usage"]>;
 

@@ -752,6 +752,8 @@ function buildExplainerContent(key: string, props: ProtocolMonitorProps): Explai
   const uniqueTools = agg?.tools.uniqueTools ?? 0;
   const toolResults = agg?.messages.toolResults ?? 0;
   const errors = agg?.messages.errors ?? 0;
+  const assistantErrors = agg?.messages.assistantErrors ?? 0;
+  const toolErrors = agg?.messages.toolErrors ?? 0;
   const totalTokens = totals?.totalTokens ?? 0;
   const totalCost = totals?.totalCost ?? 0;
   const inputTokens = totals?.input ?? 0;
@@ -1035,6 +1037,8 @@ function buildExplainerContent(key: string, props: ProtocolMonitorProps): Explai
         stats: [
           { label: "Error rate", value: `${errorRate.toFixed(2)}%` },
           { label: "Errors", value: String(errors) },
+          { label: "Assistant errors", value: String(assistantErrors) },
+          { label: "Tool errors", value: String(toolErrors) },
           { label: "Messages", value: String(msgTotal) },
         ],
         intro: html`带有 error 信号的 message 数相对于 message 总数的比例。`,
@@ -1042,11 +1046,12 @@ function buildExplainerContent(key: string, props: ProtocolMonitorProps): Explai
           {
             title: "计算公式",
             body: html`<p>
-                <code>errorRate = errors / messages.total</code> &mdash; 以百分比表示。
+                <code>errorRate = errors / messages.total</code> &mdash; 以百分比表示。 其中
+                <code>errors = assistantErrors + toolErrors</code>。
               </p>
               <p class="pm-explainer-mini">
-                当前:${errors} errors ÷ ${msgTotal} messages =
-                <strong>${errorRate.toFixed(2)}%</strong>。
+                当前:${errors} errors (${assistantErrors} assistant + ${toolErrors} tool) ÷
+                ${msgTotal} messages = <strong>${errorRate.toFixed(2)}%</strong>。
               </p>`,
           },
           {
@@ -1054,13 +1059,14 @@ function buildExplainerContent(key: string, props: ProtocolMonitorProps): Explai
             body: html`<p>在 <code>scanTranscriptFile</code> 内部,error 有两个来源:</p>
               <ul>
                 <li>
-                  <strong>tool result 错误</strong>:每一条被标记为 error 的 tool result 都会让
-                  <code>messageCounts.errors</code> +1。
+                  <strong>tool result 错误 → <code>toolErrors</code></strong
+                  >:每一条被标记为 error 的 tool result(<code>isError === true</code> 或内联
+                  <code>tool_result</code> block 带 <code>is_error: true</code>)。
                 </li>
                 <li>
-                  <strong>终止态 stopReason</strong>:assistant 的一轮回复,如果
-                  <code>stopReason</code> 是 <code>"error"</code>、<code>"aborted"</code> 或
-                  <code>"timeout"</code>,+1。
+                  <strong>终止态 stopReason → <code>assistantErrors</code></strong
+                  >:assistant 的一轮回复,如果 <code>stopReason</code> 是 <code>"error"</code>、
+                  <code>"aborted"</code> 或 <code>"timeout"</code>,+1。
                 </li>
               </ul>`,
           },
@@ -1946,6 +1952,8 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
   const toolCalls = agg?.tools.totalCalls ?? 0;
   const uniqueTools = agg?.tools.uniqueTools ?? 0;
   const errors = agg?.messages.errors ?? 0;
+  const assistantErrors = agg?.messages.assistantErrors ?? 0;
+  const toolErrors = agg?.messages.toolErrors ?? 0;
   const totalTokens = totals?.totalTokens ?? 0;
   const totalCost = totals?.totalCost ?? 0;
   const avgTokens = msgTotal > 0 ? Math.round(totalTokens / msgTotal) : 0;
@@ -2000,8 +2008,12 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
           cacheTone,
           () => props.onOpenUsageExplainer("cachehit"),
         )}
-        ${usageCard("Error Rate", `${errorRate.toFixed(2)}%`, `${errors} errors`, errorTone, () =>
-          props.onOpenUsageExplainer("errorrate"),
+        ${usageCard(
+          "Error Rate",
+          `${errorRate.toFixed(2)}%`,
+          `${assistantErrors} assistant · ${toolErrors} tool`,
+          errorTone,
+          () => props.onOpenUsageExplainer("errorrate"),
         )}
         ${usageCard(
           "Total Cost",
@@ -3694,6 +3706,70 @@ const STYLES = /* css */ `
     border-radius: 3px;
     font-size: 10px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .pm-term-table-wrap {
+    margin-top: 8px;
+    overflow-x: auto;
+    border: 1px solid #d4d8e8;
+    border-radius: 4px;
+  }
+  .pm-term-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+    color: #1f2937;
+  }
+  .pm-term-table thead th {
+    background: #eef1f6;
+    text-align: left;
+    padding: 5px 8px;
+    border-bottom: 1px solid #d4d8e8;
+    font-weight: 700;
+    color: #1a1a2e;
+    white-space: nowrap;
+  }
+  .pm-term-table tbody td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #eef0f4;
+    vertical-align: top;
+    line-height: 1.45;
+  }
+  .pm-term-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .pm-term-table tr.pm-term-table-section td {
+    background: #f5f7fb;
+    font-weight: 700;
+    color: #1a1a2e;
+    padding: 6px 8px;
+    border-top: 1px solid #d4d8e8;
+  }
+  .pm-term-table code {
+    background: #e5e7eb;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .pm-term-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .pm-term-tag--stop {
+    background: #fef2ed;
+    color: #c2410c;
+    border: 1px solid #fbbf99;
+  }
+  .pm-term-tag--tool {
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
   }
   .pm-protocol-layout {
     flex: 1;

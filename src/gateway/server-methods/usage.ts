@@ -550,6 +550,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       toolCalls: 0,
       toolResults: 0,
       errors: 0,
+      assistantErrors: 0,
+      toolErrors: 0,
     };
     const toolAggregateMap = new Map<string, number>();
     const byModelMap = new Map<string, SessionModelUsage>();
@@ -647,6 +649,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           aggregateMessages.toolCalls += usage.messageCounts.toolCalls;
           aggregateMessages.toolResults += usage.messageCounts.toolResults;
           aggregateMessages.errors += usage.messageCounts.errors;
+          aggregateMessages.assistantErrors += usage.messageCounts.assistantErrors;
+          aggregateMessages.toolErrors += usage.messageCounts.toolErrors;
         }
 
         if (usage.toolUsage) {

@@ -367,7 +367,16 @@ const buildAggregatesFromSessions = (
   if (sessions.length === 0) {
     return (
       fallback ?? {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        messages: {
+          total: 0,
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+          assistantErrors: 0,
+          toolErrors: 0,
+        },
         tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
         byModel: [],
         byProvider: [],
@@ -378,7 +387,16 @@ const buildAggregatesFromSessions = (
     );
   }
 
-  const messages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
+  const messages = {
+    total: 0,
+    user: 0,
+    assistant: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    errors: 0,
+    assistantErrors: 0,
+    toolErrors: 0,
+  };
   const toolMap = new Map<string, number>();
   const modelMap = new Map<
     string,
@@ -423,6 +441,8 @@ const buildAggregatesFromSessions = (
       messages.toolCalls += usage.messageCounts.toolCalls;
       messages.toolResults += usage.messageCounts.toolResults;
       messages.errors += usage.messageCounts.errors;
+      messages.assistantErrors += usage.messageCounts.assistantErrors ?? 0;
+      messages.toolErrors += usage.messageCounts.toolErrors ?? 0;
     }
 
     if (usage.toolUsage) {

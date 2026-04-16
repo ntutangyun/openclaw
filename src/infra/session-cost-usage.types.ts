@@ -76,6 +76,9 @@ export type SessionDailyMessageCounts = {
   toolCalls: number;
   toolResults: number;
   errors: number;
+  // Breakdown of `errors` by origin (errors === assistantErrors + toolErrors).
+  assistantErrors: number;
+  toolErrors: number;
 };
 
 export type SessionLatencyStats = {
@@ -106,6 +109,9 @@ export type SessionMessageCounts = {
   toolCalls: number;
   toolResults: number;
   errors: number;
+  // Breakdown of `errors` by origin (errors === assistantErrors + toolErrors).
+  assistantErrors: number;
+  toolErrors: number;
 };
 
 export type SessionToolUsage = {

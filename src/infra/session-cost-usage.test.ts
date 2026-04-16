@@ -206,6 +206,8 @@ describe("session cost usage", () => {
       toolCalls: 1,
       toolResults: 1,
       errors: 2,
+      assistantErrors: 1,
+      toolErrors: 1,
     });
     expect(summary?.toolUsage?.totalCalls).toBe(1);
     expect(summary?.toolUsage?.uniqueTools).toBe(1);
@@ -280,6 +282,8 @@ describe("session cost usage", () => {
       toolCalls: 1,
       toolResults: 1,
       errors: 0,
+      assistantErrors: 0,
+      toolErrors: 0,
     });
   });
 

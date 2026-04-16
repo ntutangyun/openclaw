@@ -239,6 +239,298 @@ const TERMINOLOGY_GROUPS: TerminologyGroup[] = [
     ],
   },
   {
+    title: "Errors",
+    intro:
+      "Usage Overview 里的 Error Rate 卡片的口径。错误被拆成 assistant errors 和 tool errors 两类,卡片主数值是错误率,小字下方显示两类各自的计数。",
+    terms: [
+      {
+        term: "Error Rate",
+        definition: html`卡片上的主数值:<code>errorRate = errors / messages.total</code>,以百分比
+          表示。分母只算 user + assistant 两类 message —— system prompt、tool / toolResult
+          这类单独的 role 都不计入 <code>messages.total</code>。分子
+          <code>errors = assistantErrors + toolErrors</code> 把 <em>所有</em> 错误信号加起来,
+          因此一轮 turn 里如果既出现 stopReason=error、又出现多条 is_error 的 tool result,它们会
+          <em>全部</em> 叠加进分子,所以 error rate 理论上可以超过 100%。
+          <div class="pm-term-subheading">颜色阈值</div>
+          <ul class="pm-term-list-inline">
+            <li><strong>Good(绿):</strong> ≤ 1%。</li>
+            <li><strong>Warn(黄):</strong> 1 – 5%。</li>
+            <li><strong>Bad(红):</strong> 大于 5%。</li>
+          </ul>`,
+      },
+      {
+        term: "Assistant Errors",
+        definition: html`卡片副标题"N assistant · M tool"里的前半部分,对应源码里的
+          <code>messageCounts.assistantErrors</code>。只统计由
+          <em>assistant 回合终止原因</em> 触发的错误:每次遇到
+          <code>stopReason ∈ { "error", "aborted", "timeout" }</code> 的 assistant message 就
+          +1。用来衡量 <strong>模型 / 运行时侧</strong>(而不是工具侧) 的失败。
+          <div class="pm-term-subheading">典型 +1 场景</div>
+          <ul class="pm-term-list-inline">
+            <li>
+              <strong>error</strong> —— provider 返回的 <code>finish_reason</code> 是
+              <code>content_filter</code>、<code>network_error</code> 或其它未识别值;流/传输失败 经
+              <code>buildStreamErrorAssistantMessage</code> 合成错误助手消息;"Unhandled stop reason"
+              被 OpenClaw 事后改写为 <code>stopReason: "error"</code>。
+            </li>
+            <li>
+              <strong>aborted</strong> —— 用户或系统主动中止,由 <code>sessions_yield</code> 合成
+              aborted 响应,避免真实 provider 调用。
+            </li>
+            <li>
+              <strong>timeout</strong> —— Gateway 的 chat run 维护循环发现 TTL 到期后调用
+              <code>abortChatRunById</code>,把 stopReason 设为 <code>"timeout"</code>。
+            </li>
+          </ul>`,
+      },
+      {
+        term: "Tool Errors",
+        definition: html`卡片副标题里的后半部分,对应源码里的
+          <code>messageCounts.toolErrors</code>。统计 <em>被标记为 error 的 tool result</em>: 每条
+          <code>role: "toolResult"</code> 消息带 <code>isError === true</code> 或内联
+          <code>tool_result</code> / <code>tool_result_error</code> 内容块带
+          <code>is_error: true</code> 时 +1。用来衡量 <strong>工具执行层</strong>(agent
+          runner、pi-embedded runner、MCP、ACP、transport 修复层等)侧的失败。
+          <div class="pm-term-subheading">典型 +1 场景</div>
+          <ul class="pm-term-list-inline">
+            <li>
+              Provider 直接透传带 <code>is_error: true</code> 的 tool result 块(Anthropic 风格 SDK
+              常见)。
+            </li>
+            <li>
+              OpenClaw 工具执行层主动返回 <code>isError: true</code>:agent runner 的 rate-limit /
+              overloaded 提示、pi-embedded runner 的各种终端失败(context overflow、role
+              ordering、image size、timeout、strict-agentic blocked、incomplete turn、retry-limit
+              等)、MCP 插件 / 通道工具(未知工具、执行异常)、Gateway MCP HTTP handler 异常、 ACP 分发
+              stale / 回合失败、<code>/btw</code> 命令失败。
+            </li>
+            <li>
+              传输层 / 转录修复层的补位 —— 缺少配对 tool_result 的 tool_use 在
+              <code>transport-message-transform</code> 被插入一条 "No result provided";历史会话
+              里丢失的 tool_result 被 <code>session-transcript-repair</code> 标记为 "inserted
+              synthetic error result"。
+            </li>
+          </ul>`,
+      },
+      {
+        term: "错误信号映射表",
+        definition: html`下表列出所有会被计入 Error Rate 的原始场景、OpenClaw 在转录里实际落地的
+          信号形态,以及它属于哪一类。<code>stop</code> 表示会 +1 到 <em>assistant errors</em>;
+          <code>tool</code> 表示会 +1 到 <em>tool errors</em>。
+          <div class="pm-term-table-wrap">
+            <table class="pm-term-table">
+              <thead>
+                <tr>
+                  <th>原始错误</th>
+                  <th>OpenClaw 信号</th>
+                  <th>类别</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="pm-term-table-section">
+                  <td colspan="4">A. 助手 stopReason 来源 — OpenClaw 运行时写入助手消息</td>
+                </tr>
+                <tr>
+                  <td>OpenAI 兼容 provider 返回 <code>finish_reason: "content_filter"</code></td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>内容审核拦截;<code>openai-transport-stream.ts</code>。</td>
+                </tr>
+                <tr>
+                  <td>OpenAI 兼容 provider 返回 <code>finish_reason: "network_error"</code></td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>provider 侧网络故障。</td>
+                </tr>
+                <tr>
+                  <td>OpenAI 兼容 provider 返回未识别的 <code>finish_reason</code></td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>default 分支兜底;errorMessage 带原始 reason。</td>
+                </tr>
+                <tr>
+                  <td>Ollama 流式调用底层异常</td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>扩展 <code>extensions/ollama/src/stream.ts</code> 合成错误助手消息。</td>
+                </tr>
+                <tr>
+                  <td>pi-agent-core 抛出 "Unhandled stop reason: X"</td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>
+                    <code>attempt.stop-reason-recovery.ts</code> 事后补丁;errorMessage 改写为
+                    用户友好提示。
+                  </td>
+                </tr>
+                <tr>
+                  <td>通用传输 / 流式错误(连接断、解析失败、鉴权失败等)</td>
+                  <td><code>stopReason: "error"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>
+                    <code>buildStreamErrorAssistantMessage</code> 生成零 usage 的合成助手消息。
+                  </td>
+                </tr>
+                <tr>
+                  <td>用户 / 系统发起的中止(<code>sessions_yield</code> 等)</td>
+                  <td><code>stopReason: "aborted"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>避免真实 provider 调用;零 usage 的合成响应。</td>
+                </tr>
+                <tr>
+                  <td>Gateway chat run TTL 到期</td>
+                  <td><code>stopReason: "timeout"</code></td>
+                  <td><span class="pm-term-tag pm-term-tag--stop">stop</span></td>
+                  <td>
+                    <code>server-maintenance.ts</code> 维护循环调用 <code>abortChatRunById</code>。
+                  </td>
+                </tr>
+                <tr class="pm-term-table-section">
+                  <td colspan="4">
+                    B. 工具结果 <code>isError: true</code> 来源 — OpenClaw 工具执行 / 修复层写入
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    Provider 回传的 <code>tool_result</code> / <code>tool_result_error</code> 块带
+                    <code>is_error: true</code>
+                  </td>
+                  <td>内联 block is_error</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>Anthropic 风格 SDK 直接透传;<code>countToolResults</code> 统计内容块。</td>
+                </tr>
+                <tr>
+                  <td>模型留下缺失配对的 tool_use(无对应 tool_result)</td>
+                  <td>合成 toolResult, isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>
+                    <code>transport-message-transform.ts</code> 补位,文本 "No result provided", 防止
+                    provider 校验失败。
+                  </td>
+                </tr>
+                <tr>
+                  <td>历史会话里丢失的 tool_result</td>
+                  <td>合成 toolResult, isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>
+                    <code>session-transcript-repair.ts</code> 插入 "inserted synthetic error
+                    result"。
+                  </td>
+                </tr>
+                <tr>
+                  <td>上下文超限 / 自动压缩失败</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>
+                    error.kind = <code>context_overflow</code> / <code>compaction_failure</code>,
+                    提示 /reset 或换更大上下文模型。
+                  </td>
+                </tr>
+                <tr>
+                  <td>角色顺序冲突(roles must alternate)</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>error.kind = <code>role_ordering</code>;提示 /new。</td>
+                </tr>
+                <tr>
+                  <td>图片体积超出模型上限</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>解析 provider 错误后给出带 max MB 的用户友好提示。</td>
+                </tr>
+                <tr>
+                  <td>请求超时 / LLM 空闲超时</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>
+                    提示可调 <code>agents.defaults.timeoutSeconds</code> /
+                    <code>llm.idleTimeoutSeconds</code>。
+                  </td>
+                </tr>
+                <tr>
+                  <td>Strict-Agentic 模式 planning-only 重试上限</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>严格 agentic 合同被拒,文本 <code>STRICT_AGENTIC_BLOCKED_TEXT</code>。</td>
+                </tr>
+                <tr>
+                  <td>助手回合不完整(incomplete turn)</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>触发 auth 档位冷却并回抛错误。</td>
+                </tr>
+                <tr>
+                  <td>内部重试达到上限</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>error.kind = <code>retry_limit</code>。</td>
+                </tr>
+                <tr>
+                  <td>provider 返回的通用 errorText</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>rate-limit、overloaded、billing 等都走同一条路径。</td>
+                </tr>
+                <tr>
+                  <td>单次工具调用失败警告(⚠️ TOOL failed)</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>最后一次工具错误的汇总提示。</td>
+                </tr>
+                <tr>
+                  <td>Agent runner:API rate-limit / overloaded</td>
+                  <td>reply payload isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>auto-reply 路径下的限流友好提示。</td>
+                </tr>
+                <tr>
+                  <td>ACP 分发目标 runtime stale</td>
+                  <td>final delivery isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>由 <code>formatAcpRuntimeErrorText</code> 生成。</td>
+                </tr>
+                <tr>
+                  <td>ACP 回合整体失败</td>
+                  <td>final delivery isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>ACP 分发 catch 分支:<code>ACP_TURN_FAILED</code>。</td>
+                </tr>
+                <tr>
+                  <td><code>/btw</code> 命令抛出异常</td>
+                  <td>reply isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td>命令处理兜底,文本 "⚠️ /btw failed…"。</td>
+                </tr>
+                <tr>
+                  <td>MCP 频道工具:conversation / message 找不到</td>
+                  <td>tool call result isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td><code>src/mcp/channel-tools.ts</code>。</td>
+                </tr>
+                <tr>
+                  <td>MCP 插件 server:调用未知工具 / 工具抛异常</td>
+                  <td>tool call result isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td><code>src/mcp/plugin-tools-serve.ts</code>。</td>
+                </tr>
+                <tr>
+                  <td>Gateway MCP HTTP:tools/call 未知工具 / 执行异常</td>
+                  <td>JSON-RPC result isError: true</td>
+                  <td><span class="pm-term-tag pm-term-tag--tool">tool</span></td>
+                  <td><code>src/gateway/mcp-http.handlers.ts</code>。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="pm-term-para" style="margin-top:8px;">
+            所以 provider 原生错误(HTTP 500、鉴权失败、RESOURCE_EXHAUSTED 等)不会直接进错误率 ——
+            它们要先被 OpenClaw 映射成上表里的某一类信号,再参与 Error Rate 的计算。
+          </p>`,
+      },
+    ],
+  },
+  {
     title: "序列图 Columns",
     intro: "每一列代表 message 流中的一个参与方。",
     terms: [
