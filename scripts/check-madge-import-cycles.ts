@@ -15,6 +15,9 @@ async function main(): Promise<number> {
     baseDir: repoRoot,
     fileExtensions: ["ts"],
     tsConfig: path.join(repoRoot, "tsconfig.json"),
+    detectiveOptions: {
+      ts: { skipTypeImports: true },
+    },
   });
   const cycles = result.circular().map((cycle) => cycle.map((file) => normalizeRepoPath(file)));
 
