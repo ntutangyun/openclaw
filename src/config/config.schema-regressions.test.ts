@@ -147,6 +147,68 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.startupContext overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          startupContext: {
+            enabled: true,
+            applyOn: ["new"],
+            dailyMemoryDays: 3,
+            maxFileBytes: 8192,
+            maxFileChars: 1000,
+            maxTotalChars: 2500,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects oversized agents.defaults.startupContext overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          startupContext: {
+            dailyMemoryDays: 99,
+            maxFileBytes: 999_999,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts agents.defaults and agents.list contextLimits overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          contextLimits: {
+            memoryGetMaxChars: 20_000,
+            memoryGetDefaultLines: 180,
+            toolResultMaxChars: 24_000,
+            postCompactionMaxChars: 4_000,
+          },
+        },
+        list: [
+          {
+            id: "writer",
+            skillsLimits: {
+              maxSkillsPromptChars: 30_000,
+            },
+            contextLimits: {
+              memoryGetMaxChars: 24_000,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = IMessageConfigSchema.safeParse({
       remoteHost: "bot@gateway-host",

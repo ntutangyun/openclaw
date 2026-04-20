@@ -19,9 +19,15 @@ import {
   loadWorkspaceSkillEntries,
 } from "./skills.js";
 import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "./skills/home-env.test-support.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
+let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
   managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -72,12 +78,17 @@ async function writeEnvSkill(workspaceDir: string) {
 beforeAll(async () => {
   await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
+  skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
     recursive: true,
   });
 });
 
 afterAll(async () => {
+  if (skillsHomeEnv) {
+    await restoreMockSkillsHomeEnv(skillsHomeEnv);
+    skillsHomeEnv = null;
+  }
   if (tempHome) {
     await tempHome.restore();
     tempHome = null;
@@ -280,6 +291,84 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("peekaboo");
     expect(prompt).toContain("Capture UI");
     expect(prompt).toContain(path.join(bundledSkillDir, "SKILL.md"));
+  });
+
+  it("applies per-agent skillsLimits.maxSkillsPromptChars", async () => {
+    const workspaceDir = await makeWorkspace();
+    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: "D".repeat(240),
+      });
+    }
+
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          skills: {
+            limits: {
+              maxSkillsPromptChars: 4_000,
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "writer",
+                workspace: workspaceDir,
+                skillsLimits: {
+                  maxSkillsPromptChars: 220,
+                },
+              },
+            ],
+          },
+        },
+        agentId: "writer",
+      }),
+    );
+
+    expect(prompt).toContain("Skills truncated: included 0 of 3");
+  });
+
+  it("does not apply agents.list[].skillsLimits without an explicit agent id", async () => {
+    const workspaceDir = await makeWorkspace();
+    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description: "D".repeat(240),
+      });
+    }
+
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config: {
+          skills: {
+            limits: {
+              maxSkillsPromptChars: 4_000,
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "main",
+                workspace: workspaceDir,
+                skillsLimits: {
+                  maxSkillsPromptChars: 220,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(prompt).not.toContain("Skills truncated:");
+    expect(prompt).toContain("alpha-skill");
+    expect(prompt).toContain("beta-skill");
+    expect(prompt).toContain("gamma-skill");
   });
 
   it("loads extra skill folders from config (lowest precedence)", async () => {
