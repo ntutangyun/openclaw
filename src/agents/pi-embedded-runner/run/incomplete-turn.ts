@@ -337,14 +337,13 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
-    return null;
-  }
+  // Empty-response retry is applied to every provider/model. Unlike the
+  // planning-only and reasoning-only retries (which stay gated to the
+  // strict-agentic GPT-5 contract), an empty assistant turn is a generic
+  // failure mode seen across hosted and self-hosted models — for example
+  // ollama/gemma4:e4b intermittently emits its end-of-turn token with no
+  // visible content after Harmony-style template tokens leak into the output
+  // stream. One steer retry is cheap and universally applicable.
 
   if (
     !isEmptyResponseAssistantTurn({

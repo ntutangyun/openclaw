@@ -842,6 +842,33 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
   });
 
+  it("retries empty turns for non-strict-agentic models (e.g. ollama/gemma)", () => {
+    // Self-hosted models such as ollama/gemma4:e4b intermittently emit an
+    // end-of-turn token with zero visible content (Harmony-token leak). The
+    // empty-response retry applies generically, not just to the GPT-5
+    // strict-agentic gate, so gemma turns that would otherwise end silently
+    // get one steer retry before surfacing an error.
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:e4b",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("does not retry generic empty GPT turns after side effects", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "openai",
