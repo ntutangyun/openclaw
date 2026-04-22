@@ -24,10 +24,15 @@ Usage:
   $(basename "$0") pull  <node> <remote-path> <local-dest>
   $(basename "$0") push  <node> <local-src>   <remote-path>
 
-Examples:
-  $(basename "$0") ls    sutd-jetson /home/sutd/Desktop/openclaw_workspace
-  $(basename "$0") pull  sutd-jetson /home/sutd/Desktop/openclaw_workspace ./workspace/input
-  $(basename "$0") push  sutd-jetson ./workspace/Report.docx /home/sutd/Desktop/openclaw_workspace
+Examples (substitute your own <node-name> and <remote-path>):
+  $(basename "$0") ls    <node-name> "<remote-folder>"
+  $(basename "$0") pull  <node-name> "<remote-folder>" ./input
+  $(basename "$0") push  <node-name> ./Report.md "<remote-folder>"
+
+The <node-name> is whatever the user's node is called (e.g. a Linux Jetson or
+a Windows host); run \`openclaw nodes status\` on the gateway to see available
+names. <remote-path> can be a Linux path ('/home/user/...') or a Windows path
+('C:\\Users\\user\\...') — pass it exactly as given.
 EOF
   exit 2
 }

@@ -39,7 +39,7 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
 
 ## Step 0 — Decide where the inputs live
 
-- **Remote node** (most common) — the user's `.pptx`/`.docx` live on a node like `sutd-jetson`. Any path under `/home/<user>/...` or described as "on <node>" is REMOTE. You cannot read it with the local `read` tool.
+- **Remote node** (most common) — the user's `.pptx`/`.docx` live on a named OpenClaw node. The node can be Linux (paths look like `/home/<user>/...`) or Windows (paths look like `C:\Users\<user>\...`). Any path the user describes as being "on <node>" is REMOTE and you CANNOT read it with the local `read` tool — pull it first. Use the exact node name and path the user gave; if unsure about the node name, run `exec openclaw nodes status` on the gateway to list available nodes.
 - **Gateway workspace** (rare) — already under `/home/node/.openclaw/workspace/`. Skip Step 1 and point `extract_all.py` at that folder.
 
 ## Step 1 — Pull the workspace folder (remote case only)
@@ -69,6 +69,8 @@ Outputs:
 - `./_extracted/_manifest.json` — JSON list of converted files + any failures.
 - `./_extracted/_summary.txt` — short human-readable roll-up.
 
+**Filename convention — important:** the script **strips the source extension** before appending `.md`. So `foo.pptx` becomes `foo.md`, NOT `foo.pptx.md`. Always `ls ./_extracted/` (or read `_manifest.json`) to get the exact output filename rather than guessing it from the `.pptx`/`.docx` source name — appending `.md` to the source name will miss.
+
 Check the manifest's `failures` array; if non-empty, report partial coverage rather than retrying blindly.
 
 ## Step 3 — Read the source documents (MANDATORY — this gates Step 5)
@@ -88,6 +90,17 @@ First, `ls ./_extracted/` (or read `_summary.txt`) to get the file list. Group b
 ### 3b. Read, one at a time
 
 Issue `read` on each of: **the minutes · the agenda · the closing report · every technical contribution**. Opening snapshot is optional (it rarely adds information the agenda lacks). Do not skip the contributions — their DCNs, titles, authors, and affiliations are what you populate § 5 with.
+
+**Use the exact filenames that `ls ./_extracted/` returned in Step 3a** — do not reconstruct paths from the original `.pptx`/`.docx` source names. Appending `.md` to the source name will produce `foo.pptx.md`, which does not exist.
+
+**If a single `read` fails with `ENOENT`, do NOT abort the task.** Instead:
+
+1. `exec ls ./_extracted/` to see what files are actually there.
+2. `exec cat ./_extracted/_manifest.json` to check if that file is in `converted` (wrong path guess) or `failures` (genuine extraction failure).
+3. If it is in `converted`, retry `read` with the exact `output` path from the manifest.
+4. Only if it is in `failures`, proceed with partial coverage and note the gap in § 5 Comments for that presentation.
+
+A single path-guess miss must never end the task — every other file is almost certainly still readable.
 
 ### 3c. After reading, extract from what you just read
 
