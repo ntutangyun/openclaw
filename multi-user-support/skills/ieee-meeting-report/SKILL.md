@@ -23,6 +23,10 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
 ## Hard rules for this task
 
 - **Do not call `sessions_spawn`.** Do the synthesis yourself using `read` + `write`. `sessions_spawn` with attachments is blocked by policy in this environment; trying it will cost you minutes per failed attempt.
+- **Only four scripts exist under `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/`:**
+  `fetch_workspace.sh`, `extract_all.py`, `build_chart.py`, `check_report.py`.
+  Do not invent or invoke any other name (e.g. `generate_report.py`, `synthesize.py`, `fill_template.py`). **If a synthesis script appears to be missing, it is not missing — the synthesis is YOUR job, done via `read` + `write`.**
+- **You MUST `read` the minutes file, the agenda file, and every technical contribution in `./_extracted/` before you produce a `write` to `./Report_*.md`.** Reading `./_extracted/_summary.txt` is not a substitute. Without reading the source documents, you will fabricate motion numbers, DCNs, author names, affiliations, and Q&A — which is a task failure, not a stylistic choice.
 - Use `exec` (not `read`) for any path under `/home/<user>/...` or anything described as being on a remote node.
 - Never fabricate motion numbers, DCNs, author names, or Q&A content. If the minutes do not state it, leave it empty and note the gap briefly.
 - No opinions outside the Section 5 **Comments** column.
@@ -62,21 +66,34 @@ Outputs:
 
 Check the manifest's `failures` array; if non-empty, report partial coverage rather than retrying blindly.
 
-## Step 3 — Read and reason over the extracted Markdown
+## Step 3 — Read the source documents (MANDATORY — this gates Step 5)
 
-This is the agent's job. No regex parsing is bundled because IEEE document formats drift session to session.
+**You must issue a `read` tool call on every source file listed below before you may write the report.** `./_extracted/_summary.txt` only shows filenames — reading it does NOT count as reading the sources. If you skip this step, the report you write will be fabricated.
 
-1. Match each `./_extracted/*.md` file to its role (agenda, opening snapshot, closing report, minutes, technical contribution) — use both the filename DCN and the opening lines of the file.
-2. From the **minutes**, extract:
-   - **Motions** — number, text, mover, seconder, result (verbatim).
-   - **Presentations** — DCN, title, author, affiliation.
-   - **Q&A** — group by presentation. Paraphrase for clarity; preserve the technical meaning.
-3. From the **agenda**, extract the ordered agenda-item list, chair, vice-chair(s), secretary, agenda DCN, motion booklet DCN.
-4. From the **closing report** (or minutes), extract next-meeting date, teleconference plans, contribution deadline, expected topics.
-5. For each presentation, write **2–4 factual bullet "Key points"** from its slide content (cover what it proposes, the mechanism, the scope — no opinions).
-6. For each presentation, write **one editorial sentence in "Comments"** (this is the only place where a short judgement is allowed — e.g. strategic relevance, overlap with existing work, maturity).
+### 3a. Classify and list
 
-See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md` for quick hints on motion formatting, DCN decoding, and what to skip (IEEE patent/copyright boilerplate).
+First, `ls ./_extracted/` (or read `_summary.txt`) to get the file list. Group by role using the filename DCN suffix (see `references/aiml-sc-notes.md`):
+
+- `...-meeting-minutes.md` (exactly one file expected)
+- `...-agenda.md` (exactly one file expected, take the highest revision if multiple)
+- `...-opening-snapshot.md`
+- `...-closing-report.md`
+- everything else → technical contributions
+
+### 3b. Read, one at a time
+
+Issue `read` on each of: **the minutes · the agenda · the closing report · every technical contribution**. Opening snapshot is optional (it rarely adds information the agenda lacks). Do not skip the contributions — their DCNs, titles, authors, and affiliations are what you populate § 5 with.
+
+### 3c. After reading, extract from what you just read
+
+1. From the **minutes**, the `Motion \d+:` entries each have number, text, mover, second, and result — capture them verbatim.
+2. From the **minutes**, the Discussion/Presentation sections list each contribution's DCN, title, presenter, affiliation, and Q&A.
+3. From the **agenda**, the ordered agenda-item list, chair, vice-chair(s), secretary, agenda DCN, motion booklet DCN.
+4. From the **closing report** (or minutes tail), next-meeting date, teleconference plans, contribution deadline, expected topics.
+5. From each **technical-contribution deck**, write **2–4 factual bullet "Key points"** (what it proposes, the mechanism, the scope — no opinions).
+6. For each presentation, write **one editorial sentence in "Comments"** (the only place an editorial judgement is allowed).
+
+See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md` for motion formatting, DCN decoding, and what to skip (IEEE patent/copyright boilerplate).
 
 ## Step 4 — Render the company-contribution chart
 
@@ -122,9 +139,9 @@ Then produce the filled report with a single `write` tool call to `./Report_Basi
 11. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed** (those are notes for the author, not part of the final report).
 12. **Zero `*[...]*` or `*[e.g.,...]*` placeholder strings remain** anywhere in the output.
 
-## Step 5.5 — Verify the structure
+## Step 5.5 — Verify the structure (MANDATORY GATE — do not skip, do not push before it passes)
 
-Always run the verifier before pushing back:
+The task is **not complete** until `check_report.py` prints `Result: 12/12 checks passed` in this session. You must run:
 
 ```bash
 /opt/python-tools/bin/python \
@@ -132,7 +149,17 @@ Always run the verifier before pushing back:
   ./Report_Basic_<Meeting>_<Date>.md
 ```
 
-If any check fails, **read the template again, re-read your output, fix the failing item(s), and `write` a revised copy.** Iterate until `check_report.py` prints `12/12 checks passed`. Do not push back a report that fails the verifier.
+Interpretation:
+
+- **If the result is `12/12 checks passed`** — proceed to Step 6.
+- **If any check shows `[FAIL]`** — do NOT push. Treat it as work in progress:
+  1. Re-read `/home/node/.openclaw/workspace/skills/ieee-meeting-report/assets/Template_Basic_Meeting_Report.md`.
+  2. Re-read your last `./Report_Basic_*.md`.
+  3. Fix the failing invariant(s) with a fresh `write` call (full-file rewrite; avoid `edit` for large rewrites).
+  4. Run `check_report.py` again.
+  5. Iterate. Do not skip steps 1–3 hoping the next `write` is better; the failure detail tells you exactly what's missing.
+
+**A report that has not shown `12/12 checks passed` in this session must not be pushed to the node.** In your final summary to the user, echo the verifier's tail line so it is visible in chat.
 
 ## Step 6 — Push back to the node
 
