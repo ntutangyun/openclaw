@@ -152,7 +152,7 @@ Then produce the filled report with a single `write` tool call to `./Report_Basi
 6. **§ 4 Motions and Votes** contains a Markdown table with header `| Motion # | Description | Mover | Second | Result |`, one real row per motion.
 7. **§ 5 Presentations** contains a Markdown table with header `| DCN | Title | Author | Affiliation | Key points | Comments |`, one real row per presentation (all 6 columns filled).
 8. **§ 5** also contains the chart image reference: `![Figure 1. Presentations by contributing company](./company_contributions.png)` with a caption line below it.
-9. **§ 6 Questions & Answers Summary** has one `## 6.N <Title> (<DCN>)` subsection per presentation that had Q&A, with bulleted `- Q: ...` / `- A: ...` pairs.
+9. **§ 6 Questions & Answers Summary** has one `## 6.N <Title> (<DCN>)` subsection per presentation that had Q&A, with bulleted `- Q: ...` / `- A: ...` pairs. **Use exactly two `#` (H2), not three (`### 6.N`) or four.** The template uses H2 for these subsections; the verifier only matches `## 6.N`.
 10. **§ 7 Next Meeting & Action Items** has all 4 labels filled (`Next Meeting`, `Teleconference Planned`, `Contribution Deadline`, `Expected Topics`).
 11. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed** (those are notes for the author, not part of the final report).
 12. **Zero `*[...]*` or `*[e.g.,...]*` placeholder strings remain** anywhere in the output.
@@ -179,12 +179,22 @@ Interpretation:
 
 **A report that has not shown `12/12 checks passed` in this session must not be pushed to the node.** In your final summary to the user, echo the verifier's tail line so it is visible in chat.
 
-## Step 6 — Push back to the node
+## Step 6 — Push BOTH artifacts back to the node
+
+The report references the chart by relative path. If you push only the `.md`, the image will be broken on the remote side. **Both pushes below are required — do not stop after the first one.**
+
+**6a. Push the report:**
 
 ```bash
 bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_workspace.sh \
   push <node-name> ./Report_Basic_<Meeting>_<Date>.md "<remote-folder>"
+```
 
+**6b. Push the chart PNG into the same folder (required):**
+
+```bash
 bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_workspace.sh \
   push <node-name> ./company_contributions.png "<remote-folder>"
 ```
+
+The task is complete only after BOTH pushes succeed. In your final summary to the user, explicitly confirm that both `Report_Basic_*.md` and `company_contributions.png` were pushed to `<remote-folder>`. If you skip 6b, the report opens with a broken image link.
