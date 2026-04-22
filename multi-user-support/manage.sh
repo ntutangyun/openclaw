@@ -464,7 +464,7 @@ EOF
   # Fix volume permissions so the container's node user (uid 1000) can write
   echo "==> Fixing volume permissions..."
   compose_cmd "$username" run --rm --user root --entrypoint sh openclaw-cli -c \
-    'mkdir -p /home/node/.openclaw/identity /home/node/.openclaw/agents/main/agent /home/node/.openclaw/agents/main/sessions /home/node/.openclaw/logs && chown -R node:node /home/node/.openclaw'
+    'mkdir -p /home/node/.openclaw/identity /home/node/.openclaw/agents/main/agent /home/node/.openclaw/agents/main/sessions /home/node/.openclaw/logs && find /home/node/.openclaw -path /home/node/.openclaw/workspace/skills -prune -o -exec chown node:node {} +'
 
   # Start the gateway
   echo "==> Starting gateway for '$username'..."
