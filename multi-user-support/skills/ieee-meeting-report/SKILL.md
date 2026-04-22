@@ -13,7 +13,7 @@ Produce a Basic Meeting Participation Report as **Markdown** from a workspace fo
 
 - **Skill root:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/`
 - **Template:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/assets/Template_Basic_Meeting_Report.md`
-- **Scripts:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/{fetch_workspace.sh,extract_all.py,build_chart.py,check_report.py}`
+- **Scripts:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/{fetch_workspace.sh,extract_all.py,build_chart.py}`
 - **References:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md`
 
 ## Agent working directory
@@ -28,9 +28,9 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
   - **Do NOT call `sessions_send`** to hand the task off to another session.
   - The only tools you need for this task are: `read`, `write`, `exec`, `process` (for long-running `exec`). `read` + `write` alone cover Steps 3 and 5.
   - If you find yourself thinking "a sub-agent can do this better", that is wrong — the user has already chosen you for this run. Do the work.
-- **Only four scripts exist under `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/`:**
-  `fetch_workspace.sh`, `extract_all.py`, `build_chart.py`, `check_report.py`.
-  Do not invent or invoke any other name (e.g. `generate_report.py`, `synthesize.py`, `fill_template.py`). **If a synthesis script appears to be missing, it is not missing — the synthesis is YOUR job, done via `read` + `write`.**
+- **Only three scripts exist under `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/`:**
+  `fetch_workspace.sh`, `extract_all.py`, `build_chart.py`.
+  Do not invent or invoke any other name (e.g. `generate_report.py`, `synthesize.py`, `fill_template.py`, `check_report.py`). **If a synthesis or verifier script appears to be missing, it is not missing — the synthesis is YOUR job, done via `read` + `write`.**
 - **You MUST `read` the minutes file, the agenda file, and every technical contribution in `./_extracted/` before you produce a `write` to `./Report_*.md`.** Reading `./_extracted/_summary.txt` is not a substitute. Without reading the source documents, you will fabricate motion numbers, DCNs, author names, affiliations, and Q&A — which is a task failure, not a stylistic choice.
 - Use `exec` (not `read`) for any path under `/home/<user>/...` or anything described as being on a remote node.
 - Never fabricate motion numbers, DCNs, author names, or Q&A content. If the minutes do not state it, leave it empty and note the gap briefly.
@@ -81,11 +81,20 @@ Check the manifest's `failures` array; if non-empty, report partial coverage rat
 
 First, `ls ./_extracted/` (or read `_summary.txt`) to get the file list. Group by role using the filename DCN suffix (see `references/aiml-sc-notes.md`):
 
-- `...-meeting-minutes.md` (exactly one file expected)
-- `...-agenda.md` (exactly one file expected, take the highest revision if multiple)
+- `...-plenary-meeting-minutes.md` or `...-interim-meeting-minutes.md` — the **current session's** minutes
+- `...-agenda.md` — exactly one file; take the highest revision if multiple
 - `...-opening-snapshot.md`
 - `...-closing-report.md`
 - everything else → technical contributions
+
+**CRITICAL — pick the right minutes file.** The user's folder often contains minutes from MULTIPLE sessions: e.g. `11-26-0304-00-aiml-aiml-sc-january-2026-interim-meeting-minutes.md` AND `11-26-0749-00-aiml-aiml-sc-march-2026-plenary-meeting-minutes.md`. They are NOT interchangeable. The report is for ONE session — pull the session name and year from the agenda (or the user's request), then match the minutes filename against it:
+
+- Report for "March 2026 Plenary" → read `...-march-2026-plenary-meeting-minutes.md`
+- Report for "January 2026 Interim" → read `...-january-2026-interim-meeting-minutes.md`
+
+**Do not** read minutes from a different session and pull motions/Q&A from them — that is the #1 way this task fabricates the entire § 4 and § 6. Prior-session minutes may be mentioned in the current minutes (e.g. "Motion 34: approve 11-26/304r0 January Interim Minutes"), but their _contents_ do not belong in this report.
+
+If multiple minutes files match the current session (rare), take the highest revision.
 
 ### 3b. Read, one at a time
 
@@ -113,7 +122,9 @@ A single path-guess miss must never end the task — every other file is almost 
 
 See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md` for motion formatting, DCN decoding, and what to skip (IEEE patent/copyright boilerplate).
 
-## Step 4 — Render the company-contribution chart
+## Step 4 — Render the company-contribution chart (MANDATORY — do not skip)
+
+You MUST run `build_chart.py` before Step 5. The template's § 5 embeds `./company_contributions.png`; if that file does not exist, Step 6b will fail with "local source does not exist" and the remote report will have a broken image link.
 
 ```bash
 /opt/python-tools/bin/python \
@@ -124,6 +135,8 @@ See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-s
 ```
 
 Pass one `--affiliations` entry per presentation (duplicates allowed — that is how the script counts). The script picks a bar chart when there are more than 6 companies, pie otherwise, and saves a 150-DPI PNG. First run installs matplotlib into `~/.skill-venv` (takes ~30 s); subsequent runs are instant.
+
+After the script exits, verify the PNG exists with `ls -l ./company_contributions.png` before moving on. Do not proceed to Step 5 without the file on disk.
 
 ## Step 5 — Fill the Markdown template
 
@@ -157,27 +170,17 @@ Then produce the filled report with a single `write` tool call to `./Report_Basi
 11. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed** (those are notes for the author, not part of the final report).
 12. **Zero `*[...]*` or `*[e.g.,...]*` placeholder strings remain** anywhere in the output.
 
-## Step 5.5 — Verify the structure (MANDATORY GATE — do not skip, do not push before it passes)
+## Step 5.5 — Self-check before pushing
 
-The task is **not complete** until `check_report.py` prints `Result: 12/12 checks passed` in this session. You must run:
+Re-read your own `./Report_Basic_*.md` before Step 6 and confirm, by eye, that:
 
-```bash
-/opt/python-tools/bin/python \
-  /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/check_report.py \
-  ./Report_Basic_<Meeting>_<Date>.md
-```
+- All 7 top-level section headings are present in order (from the checklist above).
+- § 4 Motions list matches what you actually saw in the MARCH PLENARY minutes file (`*-plenary-meeting-minutes.md`) — motion numbers, movers, and seconders must be verbatim from that file, not from any January interim minutes.
+- § 5 Presentations rows and § 6 Q&A subsections only contain DCNs, authors, affiliations, and questions/answers that actually appear in the extracted Markdown files you read in Step 3b.
+- No `*[...]*` placeholders remain. No `> **AGENT INSTRUCTION:** ...` blockquotes remain.
+- The chart image reference is present in § 5 and `./company_contributions.png` exists in the working directory (from Step 4).
 
-Interpretation:
-
-- **If the result is `12/12 checks passed`** — proceed to Step 6.
-- **If any check shows `[FAIL]`** — do NOT push. Treat it as work in progress:
-  1. Re-read `/home/node/.openclaw/workspace/skills/ieee-meeting-report/assets/Template_Basic_Meeting_Report.md`.
-  2. Re-read your last `./Report_Basic_*.md`.
-  3. Fix the failing invariant(s) with a fresh `write` call (full-file rewrite; avoid `edit` for large rewrites).
-  4. Run `check_report.py` again.
-  5. Iterate. Do not skip steps 1–3 hoping the next `write` is better; the failure detail tells you exactly what's missing.
-
-**A report that has not shown `12/12 checks passed` in this session must not be pushed to the node.** In your final summary to the user, echo the verifier's tail line so it is visible in chat.
+If anything is off, fix it with a fresh `write` (full-file rewrite; avoid `edit` for large rewrites) before pushing. If you never ran Step 4, go back and run it — do not push a report whose § 5 chart reference points at a missing file.
 
 ## Step 6 — Push BOTH artifacts back to the node
 
