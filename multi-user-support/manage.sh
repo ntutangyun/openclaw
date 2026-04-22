@@ -6,6 +6,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 USERS_DIR="$SCRIPT_DIR/users"
 SETUP_MARKER="$SCRIPT_DIR/.setup-done"
 
+# Custom workspace skills are sourced from this directory and bind-mounted
+# read-only at /home/node/.openclaw/workspace/skills inside every user container.
+SKILLS_DIR="$SCRIPT_DIR/skills"
+
 # Default image: use the same as the main repo, fallback to published image
 DEFAULT_IMAGE="${OPENCLAW_IMAGE:-openclaw:local}"
 
@@ -44,12 +48,17 @@ Ollama:
   sync-ollama <username> [ollama-host]                  Sync Ollama models to user gateway
   list-ollama [ollama-host]                             List available Ollama models
 
+vLLM:
+  sync-vllm   <username> [vllm-host]                   Sync vLLM models to user gateway
+  list-vllm   [vllm-host]                              List available vLLM models
+
 Environment variables:
   OPENCLAW_IMAGE              Docker image (default: openclaw:local)
   OPENCLAW_MULTI_BASE_PORT    Base port for auto-assignment (default: 19000)
   OPENCLAW_EXTENSIONS         Space-separated extensions to include in build
   OPENCLAW_VARIANT            Image variant: "default" or "slim"
   OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
+  VLLM_HOST                   vLLM API host (default: http://localhost:8000)
 EOF
   exit 1
 }
@@ -199,6 +208,7 @@ services:
     volumes:
       - ${config_vol}:/home/node/.openclaw
       - ${workspace_vol}:/home/node/.openclaw/workspace
+      - \${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro
     ports:
       - "${gw_port}:18789"
       - "${br_port}:18790"
@@ -260,6 +270,7 @@ services:
     volumes:
       - ${config_vol}:/home/node/.openclaw
       - ${workspace_vol}:/home/node/.openclaw/workspace
+      - \${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro
     stdin_open: true
     tty: true
     init: true
@@ -271,6 +282,49 @@ volumes:
   ${config_vol}:
   ${workspace_vol}:
 YAML
+}
+
+# Ensure the user's .env has OPENCLAW_SKILLS_DIR pointing at the current repo,
+# and the compose file has the read-only skills bind-mount on both services.
+# Idempotent: safe to call on every start/restart.
+ensure_skills_wiring() {
+  local username="$1"
+  local env_file compose_file
+  env_file="$(user_env_file "$username")"
+  compose_file="$(user_compose_file "$username")"
+
+  [[ -f "$env_file" ]] || return 0
+  [[ -d "$SKILLS_DIR" ]] || return 0
+
+  # 1) Sync OPENCLAW_SKILLS_DIR in .env to the current on-disk location.
+  if grep -q '^OPENCLAW_SKILLS_DIR=' "$env_file" 2>/dev/null; then
+    # portable in-place edit (works on GNU and BSD sed)
+    local tmp
+    tmp="$(mktemp)"
+    sed "s#^OPENCLAW_SKILLS_DIR=.*#OPENCLAW_SKILLS_DIR=${SKILLS_DIR}#" "$env_file" > "$tmp"
+    mv "$tmp" "$env_file"
+  else
+    echo "OPENCLAW_SKILLS_DIR=${SKILLS_DIR}" >> "$env_file"
+  fi
+
+  # 2) Patch the compose file if the skills mount line is missing for either service.
+  if [[ -f "$compose_file" ]] \
+     && ! grep -q 'workspace/skills:ro' "$compose_file" 2>/dev/null; then
+    echo "==> Patching compose file to add workspace/skills bind-mount..."
+    # Insert the skills mount line after every workspace volume line.
+    # The leading 6 spaces match the current indent on volume entries.
+    local tmp
+    tmp="$(mktemp)"
+    awk '
+      {
+        print
+        if ($0 ~ /^      - .+:\/home\/node\/\.openclaw\/workspace$/) {
+          print "      - ${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro"
+        }
+      }
+    ' "$compose_file" > "$tmp"
+    mv "$tmp" "$compose_file"
+  fi
 }
 
 # List all configured usernames (helper for iterating)
@@ -398,10 +452,14 @@ OPENCLAW_GATEWAY_TOKEN=${token}
 OPENCLAW_GATEWAY_BIND=lan
 OPENCLAW_IMAGE=${DEFAULT_IMAGE}
 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=
+OPENCLAW_SKILLS_DIR=${SKILLS_DIR}
 EOF
 
   # Generate compose file with literal volume names for this user
   generate_compose_file "$username" "$gateway_port" "$bridge_port"
+
+  # Make sure the skills bind-mount is present (idempotent; no-op on fresh add).
+  ensure_skills_wiring "$username"
 
   # Fix volume permissions so the container's node user (uid 1000) can write
   echo "==> Fixing volume permissions..."
@@ -541,6 +599,8 @@ cmd_start() {
   validate_username "$username"
   user_exists "$username" || fail "User '$username' does not exist."
 
+  ensure_skills_wiring "$username"
+
   echo "Starting gateway for user '$username'..."
   compose_cmd "$username" up -d openclaw-gateway
   echo "Gateway started."
@@ -619,6 +679,8 @@ cmd_restart() {
   validate_username "$username"
   user_exists "$username" || fail "User '$username' does not exist."
 
+  ensure_skills_wiring "$username"
+
   echo "Stopping gateway for user '$username'..."
   compose_cmd "$username" down
   echo "Starting gateway for user '$username' (picks up new image if rebuilt)..."
@@ -630,6 +692,7 @@ cmd_start_all() {
   require_setup
   local count=0
   while IFS= read -r name; do
+    ensure_skills_wiring "$name"
     echo "Starting '$name'..."
     compose_cmd "$name" up -d openclaw-gateway
     count=$((count + 1))
@@ -1288,6 +1351,208 @@ for m in models:
   echo "Done. Select Ollama models from the control UI model picker."
 }
 
+# ── vLLM ─────────────────────────────────────────────────────
+
+# Resolve the vLLM API base URL.
+# Priority: argument > VLLM_HOST env > default localhost.
+resolve_vllm_host() {
+  local arg="${1:-}"
+  if [[ -n "$arg" ]]; then
+    echo "$arg"
+  elif [[ -n "${VLLM_HOST:-}" ]]; then
+    echo "$VLLM_HOST"
+  else
+    echo "http://localhost:8000"
+  fi
+}
+
+# Resolve the vLLM URL reachable from inside Docker containers.
+resolve_vllm_docker_url() {
+  local host_url="$1"
+  local bridge_ip
+  bridge_ip="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || echo "172.17.0.1")"
+  python3 -c "
+import sys, re
+url = sys.argv[1]
+bridge = sys.argv[2]
+url = re.sub(r'://localhost([:/]|$)', '://' + bridge + r'\1', url)
+url = re.sub(r'://127\.0\.0\.1([:/]|$)', '://' + bridge + r'\1', url)
+print(url)
+" "$host_url" "$bridge_ip"
+}
+
+# Query vLLM for available models (OpenAI-compatible /v1/models endpoint).
+query_vllm_models() {
+  local vllm_url="$1"
+  curl -sf --connect-timeout 5 "${vllm_url}/v1/models" 2>/dev/null \
+    || { echo ""; return 1; }
+}
+
+cmd_list_vllm() {
+  local vllm_url
+  vllm_url="$(resolve_vllm_host "${1:-}")"
+
+  echo "==> Querying vLLM at ${vllm_url}"
+  local raw
+  raw="$(query_vllm_models "$vllm_url")"
+  if [[ -z "$raw" ]]; then
+    fail "Cannot reach vLLM at ${vllm_url}. Is vLLM running?"
+  fi
+
+  echo ""
+  echo "$raw" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+models = data.get('data', [])
+if not models:
+    print('  No models found.')
+else:
+    print(f'  Found {len(models)} model(s):')
+    print()
+    for m in models:
+        mid = m.get('id', '?')
+        owned_by = m.get('owned_by', '?')
+        max_model_len = m.get('max_model_len', '?')
+        print(f'    {mid:<40s}  owner={owned_by:<12s}  max_len={max_model_len}')
+"
+}
+
+cmd_sync_vllm() {
+  local username="${1:?Username required}"
+  local vllm_url
+  vllm_url="$(resolve_vllm_host "${2:-}")"
+
+  validate_username "$username"
+  user_exists "$username" || fail "User '$username' does not exist."
+
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    fail "Gateway for '$username' is not running. Start it first."
+  fi
+
+  echo "==> Querying vLLM at ${vllm_url}"
+  local raw
+  raw="$(query_vllm_models "$vllm_url")"
+  if [[ -z "$raw" ]]; then
+    fail "Cannot reach vLLM at ${vllm_url}. Is vLLM running?"
+  fi
+
+  local docker_url
+  docker_url="$(resolve_vllm_docker_url "$vllm_url")"
+
+  # Build the config JSON using Python
+  local tmp_provider tmp_models
+  tmp_provider="$(mktemp)"
+  tmp_models="$(mktemp)"
+  echo "$raw" | python3 -c "
+import json, sys
+
+data = json.load(sys.stdin)
+models = data.get('data', [])
+
+docker_url = sys.argv[1]
+provider_file = sys.argv[2]
+models_file = sys.argv[3]
+
+DEFAULT_CTX = 131072
+
+provider_models = []
+for m in models:
+    mid = m.get('id', '')
+    ctx = m.get('max_model_len', DEFAULT_CTX) or DEFAULT_CTX
+    provider_models.append({
+        'id': mid,
+        'name': mid,
+        'contextWindow': ctx,
+    })
+
+# vLLM exposes an OpenAI-compatible API at /v1
+with open(provider_file, 'w') as f:
+    json.dump({
+        'baseUrl': docker_url + '/v1',
+        'models': provider_models,
+        'apiKey': 'vllm-local',
+    }, f)
+
+vllm_models = {}
+for m in models:
+    mid = m.get('id', '')
+    vllm_models[f'vllm/{mid}'] = {'alias': mid}
+
+with open(models_file, 'w') as f:
+    json.dump(vllm_models, f)
+" "$docker_url" "$tmp_provider" "$tmp_models"
+
+  local provider_config models_config
+  provider_config="$(cat "$tmp_provider")"
+  models_config="$(cat "$tmp_models")"
+  rm -f "$tmp_provider" "$tmp_models"
+
+  echo "==> Updating vLLM provider config for '$username'"
+  echo "    Docker vLLM URL: ${docker_url}"
+  docker exec "$container" node dist/index.js config set \
+    models.providers.vllm "$provider_config" 2>&1 | grep -v DEP0040
+
+  # Merge vllm models into existing agents.defaults.models (preserve non-vllm entries)
+  echo "==> Updating model selection list"
+  docker exec "$container" node -e "
+    const fs = require('fs');
+    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const existing = cfg.agents?.defaults?.models || {};
+    // Remove old vllm entries
+    for (const key of Object.keys(existing)) {
+      if (key.startsWith('vllm/')) delete existing[key];
+    }
+    // Add new vllm entries
+    const newVllm = JSON.parse(process.argv[1]);
+    Object.assign(existing, newVllm);
+    if (!cfg.agents) cfg.agents = {};
+    if (!cfg.agents.defaults) cfg.agents.defaults = {};
+    cfg.agents.defaults.models = existing;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log('  Models updated:', Object.keys(existing).join(', '));
+  " "$models_config" 2>&1 | grep -v DEP0040
+
+  # Ensure VLLM env vars are set in the user .env
+  local env_file
+  env_file="$(user_env_file "$username")"
+  if ! grep -q 'VLLM_API_KEY' "$env_file" 2>/dev/null; then
+    echo "VLLM_API_KEY=vllm-local" >> "$env_file"
+    echo "  Added VLLM_API_KEY to env"
+  fi
+  if ! grep -q 'VLLM_HOST' "$env_file" 2>/dev/null; then
+    echo "VLLM_HOST=${docker_url}" >> "$env_file"
+    echo "  Added VLLM_HOST=${docker_url} to env"
+  else
+    sed -i "s#^VLLM_HOST=.*#VLLM_HOST=${docker_url}#" "$env_file"
+  fi
+  # Ensure compose file has VLLM env vars in gateway service
+  local compose_file
+  compose_file="$(user_compose_file "$username")"
+  if ! grep -q 'VLLM_API_KEY' "$compose_file" 2>/dev/null; then
+    sed -i '/OPENCLAW_DIAGNOSTICS/a\      VLLM_HOST: ${VLLM_HOST:-}\n      VLLM_API_KEY: ${VLLM_API_KEY:-vllm-local}' "$compose_file"
+    echo "  Added VLLM env vars to compose file"
+  fi
+
+  # Show summary
+  echo ""
+  echo "$provider_config" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+models = data.get('models', [])
+print(f'  Synced {len(models)} vLLM model(s):')
+for m in models:
+    ctx_k = m.get('contextWindow', 0) // 1024
+    print(f'    vllm/{m[\"id\"]} — {ctx_k}k context')
+"
+  echo ""
+  echo "==> Restarting gateway for '$username' to apply changes..."
+  cmd_restart "$username"
+  echo ""
+  echo "Done. Select vLLM models from the control UI model picker."
+}
+
 # ── Main ──────────────────────────────────────────────────────
 
 require_cmd docker
@@ -1321,6 +1586,8 @@ case "$command" in
   info)      cmd_info "${1:?Username required}" ;;
   sync-ollama)  cmd_sync_ollama "${1:?Username required}" "${2:-}" ;;
   list-ollama)  cmd_list_ollama "${1:-}" ;;
+  sync-vllm)    cmd_sync_vllm "${1:?Username required}" "${2:-}" ;;
+  list-vllm)    cmd_list_vllm "${1:-}" ;;
   help|-h|--help) usage ;;
   *)         fail "Unknown command: $command. Run '$(basename "$0") help' for usage." ;;
 esac
