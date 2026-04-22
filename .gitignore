@@ -136,6 +136,9 @@ ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
 
+# Per-user runtime state created by multi-user-support/manage.sh — local only.
+multi-user-support/users/
+
 # Generated docs baseline artifacts (locally generated, only hashes tracked)
 docs/.generated/*.json
 docs/.generated/*.jsonl
