@@ -310,8 +310,12 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
-    "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    ...(params.availableTools.has("sessions_send")
+      ? ["- Cross-session messaging → use sessions_send(sessionKey, message)"]
+      : []),
+    ...(params.availableTools.has("subagents")
+      ? ["- Sub-agent orchestration → use subagents(action=list|steer|kill)"]
+      : []),
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
@@ -657,7 +661,11 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-    "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    ...(hasSessionsSpawn
+      ? [
+          "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+        ]
+      : []),
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
@@ -666,7 +674,11 @@ export function buildAgentSystemPrompt(params: {
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
         ]
       : []),
-    "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+    ...(availableTools.has("subagents") || availableTools.has("sessions_list")
+      ? [
+          "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+        ]
+      : []),
     "",
     ...buildOverridablePromptSection({
       override: providerSectionOverrides.interaction_style,
@@ -751,7 +763,9 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "You are running in a sandboxed runtime (tools execute in Docker).",
           "Some tools may be unavailable due to sandbox policy.",
-          "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+          hasSessionsSpawn
+            ? "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first."
+            : "",
           hasSessionsSpawn && acpEnabled
             ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
             : "",

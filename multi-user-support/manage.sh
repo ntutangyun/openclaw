@@ -530,7 +530,16 @@ EOF
           "exec": {
             "security": "full",
             "ask": "off"
-          }
+          },
+          "deny": [
+            "sessions_spawn",
+            "sessions_send",
+            "sessions_yield",
+            "sessions_list",
+            "sessions_history",
+            "subagents",
+            "agents_list"
+          ]
         },
         "logging": {
           "level": "debug",

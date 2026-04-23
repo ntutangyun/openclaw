@@ -269,9 +269,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
-  it("guides subagent workflows to avoid polling loops", () => {
+  it("guides subagent workflows to avoid polling loops when those tools are available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "process", "sessions_spawn", "subagents", "sessions_list"],
     });
 
     expect(prompt).toContain(
@@ -282,6 +283,22 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+  });
+
+  it("omits subagent spawn/poll guidance when those tools are denied", () => {
+    // Only exec + read available; no sessions_spawn / subagents / sessions_list.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "read", "write"],
+    });
+
+    // The generic long-wait guidance stays.
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
+    // But the sub-agent-specific lines must not appear when the tools aren't available.
+    expect(prompt).not.toContain("spawn a sub-agent. Completion is push-based");
+    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list`");
   });
 
   it("lists available tools when provided", () => {
@@ -751,6 +768,8 @@ describe("buildAgentSystemPrompt", () => {
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      // sessions_spawn must be available for the sub-agent-specific sandbox line.
+      toolNames: ["exec", "read", "write", "sessions_spawn"],
       sandboxInfo: {
         enabled: true,
         workspaceDir: "/tmp/sandbox",
@@ -773,6 +792,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
+  });
+
+  it("omits sub-agent sandbox note when sessions_spawn is denied", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "read", "write"],
+      sandboxInfo: {
+        enabled: true,
+        workspaceDir: "/tmp/sandbox",
+        containerWorkspaceDir: "/workspace",
+        workspaceAccess: "ro",
+        agentWorkspaceMount: "/agent",
+        elevated: { allowed: true, defaultLevel: "on", fullAccessAvailable: true },
+      },
+    });
+
+    expect(prompt).toContain("You are running in a sandboxed runtime");
+    expect(prompt).not.toContain("Sub-agents stay sandboxed");
+    expect(prompt).not.toContain("ACP harness spawns are blocked from sandboxed sessions");
   });
 
   it("does not advertise /elevated full when auto-approved full access is unavailable", () => {

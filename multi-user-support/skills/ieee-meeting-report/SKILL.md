@@ -22,12 +22,7 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
 
 ## Hard rules for this task
 
-- **Do the entire task yourself in this session. Do not delegate.** This task runs in the foreground chat so the user can monitor progress turn by turn. Delegating to a sub-agent hides the work and defeats observability, even if the sub-agent would succeed.
-  - **Do NOT call `sessions_spawn` for any reason.** Not to "synthesize the report", not to "read the documents", not to "fill the template", not with attachments, not without attachments.
-  - **Do NOT call `subagents`** (list / steer / kill) or any other delegation tool.
-  - **Do NOT call `sessions_send`** to hand the task off to another session.
-  - The only tools you need for this task are: `read`, `write`, `exec`, `process` (for long-running `exec`). `read` + `write` alone cover Steps 3 and 5.
-  - If you find yourself thinking "a sub-agent can do this better", that is wrong — the user has already chosen you for this run. Do the work.
+- The tools you need for this task are `read`, `write`, `exec`, and `process` (for long-running `exec`). `read` + `write` alone cover Steps 3 and 5. Do the entire task yourself in this session — the user is watching the chat turn by turn.
 - **Only three scripts exist under `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/`:**
   `fetch_workspace.sh`, `extract_all.py`, `build_chart.py`.
   Do not invent or invoke any other name (e.g. `generate_report.py`, `synthesize.py`, `fill_template.py`, `check_report.py`). **If a synthesis or verifier script appears to be missing, it is not missing — the synthesis is YOUR job, done via `read` + `write`.**
