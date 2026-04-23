@@ -1027,58 +1027,35 @@ APPROVALS
     cat > "$tmp_tools" <<TOOLS_MD
 # TOOLS.md - Local Notes
 
-## Exec Tool — Host Selection
+## Remote Node Access (Windows)
 
-You have access to two execution environments via the \`host\` parameter:
+You have a paired Windows node named \`${node_name}\` (case-sensitive). The node holds the user's files at Windows paths like \`C:\\Users\\<user>\\...\`.
 
-- **gateway** (Linux): The default host. Use Linux commands (\`ls\`, \`cat\`, \`grep\`, \`bash\`, etc.). This is the machine running your gateway process.
-- **node** (Windows): A remote Windows desktop. The exact node name is \`${node_name}\` (case-sensitive). Use Windows commands (\`dir\`, \`type\`, \`findstr\`, etc.) and Windows-style paths (\`C:\\Users\\...\`).
+### Read/write workflow — always copy through the gateway
 
-### Rules
+For any task that needs to read, write, create, or modify files on the node, use this single workflow. Do not run commands directly on the node.
 
-1. **Always set \`host\` explicitly.** Use \`"host": "gateway"\` for Linux commands and \`"host": "node"\` for Windows commands.
-2. **The node name is case-sensitive.** Always use \`"node": "${node_name}"\` — do not change the casing.
-3. **Never use \`cmd /c\` or \`powershell -Command\` wrappers.** Run executables directly (e.g. \`dir C:\\Users\\...\` not \`cmd /c dir C:\\Users\\...\`).
-4. **Never send Windows commands to the gateway** — it runs Linux and does not have \`cmd.exe\`.
-5. **Never send Linux commands to the node** — it runs Windows and does not have \`bash\` or \`ls\`.
-6. When checking connectivity or status, use \`"host": "gateway"\` to run gateway-side commands like \`openclaw nodes status\`.
-7. **Never run bare interpreter commands** like \`node -v\`, \`python --version\`, or \`ruby -e ...\` on the node — these are blocked by the security policy. Run concrete tools or scripts instead (e.g. \`markitdown file.pptx\`, \`node script.js\`, \`python script.py\`).
-8. **For complex file work, use \`openclaw nodes copy\` on the gateway** to transfer files to your local workspace, work on them locally, then copy results back. This avoids shell quoting and approval issues on the node.
+1. **Pull** the files from the node into your local gateway workspace.
+2. **Work on them locally** inside the gateway (Linux) — read, edit, run scripts, extract, render.
+3. **Push** the results back to the node.
 
-## Document Extraction (Windows Node)
+The same pair of gateway-side commands covers every task, so the workflow is deterministic and avoids Windows path, quoting, and interpreter issues that routinely derail agents.
 
-The \`markitdown\` tool is installed globally on the Windows node. Use it to extract text content from Microsoft Office documents (pptx, docx, xlsx, etc.).
-
-- **Print content to terminal:** \`markitdown document.pptx\`
-- **Save content to markdown:** \`markitdown document.pptx > document.md\`
-
-Always run \`markitdown\` on the node host (\`"host": "node"\`), since it is installed on the Windows machine.
-
-## File Transfer Between Gateway and Node
-
-For complex tasks involving files on the Windows node (Python scripts, document generation, etc.),
-**pull the files to your local gateway workspace first**, work on them locally, then push the results back.
-This avoids shell quoting issues, path format problems, and exec approval restrictions on the node.
-
-### Commands (run on the gateway with \`"host": "gateway"\`)
+### Commands (always run on the gateway: \`"host": "gateway"\` on \`exec\`)
 
 - **List remote files:**
-  \`openclaw nodes ls --node ${node_name} --path "C:\\Users\\capyb\\Desktop\\folder"\`
-
+  \`openclaw nodes ls --node ${node_name} --path "C:\\Users\\<user>\\Desktop\\folder"\`
 - **Copy from node to gateway:**
-  \`openclaw nodes copy --node ${node_name} --from node:C:\\Users\\capyb\\Desktop\\folder --to ./working-copy\`
-
+  \`openclaw nodes copy --node ${node_name} --from "node:C:\\Users\\<user>\\Desktop\\folder" --to ./working-copy\`
 - **Copy from gateway back to node:**
-  \`openclaw nodes copy --node ${node_name} --from ./output.docx --to node:C:\\Users\\capyb\\Desktop\\folder\\output.docx --overwrite\`
+  \`openclaw nodes copy --node ${node_name} --from ./output.md --to "node:C:\\Users\\<user>\\Desktop\\folder\\output.md" --overwrite\`
 
-### When to use pull/push vs. direct node execution
+Relative paths like \`./working-copy\` resolve inside the gateway workspace (\`/home/node/.openclaw/workspace/\`). Copy the user's Windows path verbatim into \`--path\` / \`--from\` / \`--to\` — do not reformat it.
 
-- **Use \`host: "node"\` directly** for simple, quick commands: \`dir\`, \`type\`, \`markitdown\`
-- **Use pull/push** when you need to:
-  - Run Python scripts or other interpreters on files
-  - Build or generate documents (docx, xlsx, etc.)
-  - Process multiple files in a pipeline
-  - Do any work that requires complex shell commands
+### Hard rules
+
+- **Do NOT set \`"host": "node"\` on \`exec\` calls.** Do not run \`dir\`, \`type\`, \`mkdir\`, \`findstr\`, \`markitdown\`, Python, or any other command on the Windows node. Pull the files to the gateway, do the work in Linux, push the results back.
+- **Do use \`"host": "gateway"\`** (or leave \`host\` unset — gateway is the default) for every shell command, including \`openclaw nodes ...\`, \`bash\`, \`python\`, \`ls\`, \`cat\`, and any skill script under \`/home/node/.openclaw/workspace/skills/\`.
 
 ## Environment-Specific Notes
 
