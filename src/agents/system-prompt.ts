@@ -159,6 +159,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
+    // Small local models (e.g. ollama/gemma4:e4b) sometimes substitute
+    // `/app/skills/<name>/SKILL.md` for workspace skills by pattern-matching
+    // against the bundled skills' paths. Pin the contract explicitly.
+    "- The `<location>` path shown per skill is authoritative: copy it character-for-character into the `read` call. Do not guess `/app/skills/<name>/SKILL.md` for workspace skills — those live under `~/.openclaw/workspace/skills/`.",
+    "- If the first `read` on a skill's `<location>` returns ENOENT, the path is wrong — re-examine the exact `<location>` string in `<available_skills>` and retry. Do NOT abandon the skill; the user expects you to follow it.",
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,

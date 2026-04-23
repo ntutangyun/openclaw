@@ -538,6 +538,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
     );
+    // Anti-hallucination pins for small local models that substitute /app/skills/... for
+    // workspace skills and then bail on the first ENOENT.
+    expect(prompt).toContain("The `<location>` path shown per skill is authoritative");
+    expect(prompt).toContain(
+      "If the first `read` on a skill's `<location>` returns ENOENT, the path is wrong",
+    );
   });
 
   it("appends available skills when provided", () => {
