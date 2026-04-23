@@ -297,6 +297,51 @@ YAML
 # Ensure the user's .env has OPENCLAW_SKILLS_DIR pointing at the current repo,
 # and the compose file has the read-only skills bind-mount on both services.
 # Idempotent: safe to call on every start/restart.
+ensure_tools_deny() {
+  # Backfill the sub-agent tools.deny list into an existing user's
+  # openclaw.json. Users provisioned before the default-deny change
+  # (ccef2168fc) never had these entries written, which lets the agent
+  # discover and call `sessions_spawn` etc. — a regression that showed up
+  # on 2026-04-23 Run #15 when gemma escaped into a sub-agent spawn
+  # attempt and stalled. Helper is idempotent so it is safe to run on
+  # every start/restart path.
+  local username="$1"
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    return 0
+  fi
+
+  local output
+  output="$(docker exec "$container" node -e '
+    const fs = require("fs");
+    const cfgPath = "/home/node/.openclaw/openclaw.json";
+    if (!fs.existsSync(cfgPath)) process.exit(0);
+    const REQUIRED = [
+      "sessions_spawn",
+      "sessions_send",
+      "sessions_yield",
+      "sessions_list",
+      "sessions_history",
+      "subagents",
+      "agents_list"
+    ];
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); }
+    catch { process.exit(0); }
+    if (!cfg.tools) cfg.tools = {};
+    const existing = Array.isArray(cfg.tools.deny) ? cfg.tools.deny : [];
+    const merged = Array.from(new Set([...existing, ...REQUIRED]));
+    if (merged.length === existing.length) process.exit(0);
+    cfg.tools.deny = merged;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+    console.log("updated");
+  ' 2>&1)"
+  if [[ "$output" == *updated* ]]; then
+    echo "==> Backfilled sub-agent tools.deny for '$username'; recreating gateway to apply..."
+    compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
+  fi
+}
+
 ensure_skills_wiring() {
   local username="$1"
   local env_file compose_file
@@ -695,6 +740,7 @@ cmd_start() {
 
   echo "Starting gateway for user '$username'..."
   compose_cmd "$username" up -d openclaw-gateway
+  ensure_tools_deny "$username"
   echo "Gateway started."
 
   # Start background auto-approve watcher for node pairing requests
@@ -777,6 +823,7 @@ cmd_restart() {
   compose_cmd "$username" down
   echo "Starting gateway for user '$username' (picks up new image if rebuilt)..."
   compose_cmd "$username" up -d openclaw-gateway
+  ensure_tools_deny "$username"
   echo "Gateway restarted."
 }
 
@@ -787,6 +834,7 @@ cmd_start_all() {
     ensure_skills_wiring "$name"
     echo "Starting '$name'..."
     compose_cmd "$name" up -d openclaw-gateway
+    ensure_tools_deny "$name"
     count=$((count + 1))
   done < <(all_usernames)
 
@@ -1069,6 +1117,7 @@ TOOLS_MD
   # Restart gateway to pick up config changes
   echo "==> Restarting gateway to apply changes..."
   compose_cmd "$username" up -d --force-recreate openclaw-gateway
+  ensure_tools_deny "$username"
 
   echo ""
   echo "Exec approval prompts disabled for '$username' (gateway side)."
