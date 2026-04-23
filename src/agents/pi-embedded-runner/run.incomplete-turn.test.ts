@@ -1055,6 +1055,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: true,
       attempt: makeAttemptResult({
         assistantTexts: ["I have completed the extraction step."],
         toolMetas: [
@@ -1077,6 +1078,43 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT).toBe(1);
   });
 
+  it("nudges a text-only attempt whose own toolMetas is empty when an earlier attempt in the turn ran tools", () => {
+    // Repro of the 2026-04-23 15:55 UTC tangyun session:
+    // Attempt 1 ran 15 tool calls then produced an empty turn (Harmony
+    // leak). The EMPTY_RESPONSE_RETRY fired. Attempt 2 came back with a
+    // large thinking block + a "The structured steps for generating..."
+    // text payload, but zero tool calls. The old `toolMetas.length === 0`
+    // gate inside the resolver looked at THIS attempt's `toolMetas` only
+    // and bailed, even though the turn was firmly in an agentic workflow.
+    // The runner now tracks `turnHasToolActivity` across attempts and
+    // passes it in, so the nudge fires even when the current attempt
+    // itself is pure text.
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      turnHasToolActivity: true,
+      attempt: makeAttemptResult({
+        assistantTexts: ["The structured steps for generating a high-quality report are complex."],
+        toolMetas: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [
+            { type: "thinking", thinking: "Plan the next synthesis step." },
+            {
+              type: "text",
+              text: "The structured steps for generating a high-quality report are complex.",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBe(NO_TOOL_CALL_NUDGE_INSTRUCTION);
+  });
+
   it("nudges text-only 'I'll do X next' turns when prior tool calls ran", () => {
     // Repro of the 2026-04-23 13:32 UTC tangyun session: after the user
     // typed "continue", gemma produced a thinking block plus a text block
@@ -1090,6 +1128,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: true,
       attempt: makeAttemptResult({
         assistantTexts: ["I am moving to Step 3: Reading the source documents."],
         toolMetas: [{ toolName: "read" }, { toolName: "exec" }, { toolName: "read" }],
@@ -1116,6 +1155,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: true,
       attempt: makeAttemptResult({
         toolMetas: [{ toolName: "read" }],
         lastAssistant: {
@@ -1135,11 +1175,13 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     // User asked "what's 2+2?" and the assistant replied "4". No tools
     // were called anywhere in this turn. The nudge must not fire or
     // every simple Q&A becomes a two-message exchange ("did you finish?"
-    // → "yes the task is complete"). The `toolMetas.length === 0` gate
-    // scopes the nudge to multi-step workflows.
+    // → "yes the task is complete"). The `turnHasToolActivity` gate
+    // scopes the nudge to multi-step workflows by looking at the whole
+    // turn, not just this attempt.
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: false,
       attempt: makeAttemptResult({
         assistantTexts: ["4"],
         toolMetas: [],
@@ -1163,6 +1205,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: true,
       attempt: makeAttemptResult({
         toolMetas: [{ toolName: "exec" }],
         didSendViaMessagingTool: true,
@@ -1187,6 +1230,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
+      turnHasToolActivity: true,
       attempt: makeAttemptResult({
         toolMetas: [{ toolName: "exec" }],
         lastToolError: {

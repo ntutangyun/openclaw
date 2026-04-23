@@ -470,6 +470,12 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let noToolCallNudgeAttempts = 0;
+      // Tracks whether any attempt in this outer user turn has run a tool
+      // successfully. Used by the no-tool-call nudge to scope itself to
+      // agentic workflows without losing rescue coverage when a later
+      // attempt in the same turn happens to produce only text. Stays true
+      // once flipped for the rest of the run.
+      let turnHasToolActivity = false;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -1703,6 +1709,9 @@ export async function runEmbeddedPiAgent(
           if (attempt.toolMetas.length > 0 && !attempt.lastToolError) {
             noToolCallNudgeAttempts = 0;
           }
+          if (attempt.toolMetas.length > 0) {
+            turnHasToolActivity = true;
+          }
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
@@ -1730,6 +1739,7 @@ export async function runEmbeddedPiAgent(
             aborted,
             timedOut,
             attempt,
+            turnHasToolActivity,
           });
           if (
             nextPlanningOnlyRetryInstruction &&

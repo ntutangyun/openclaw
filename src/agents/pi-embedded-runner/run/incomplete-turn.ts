@@ -36,7 +36,6 @@ type NoToolCallNudgeAttempt = Pick<
   | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
-  | "toolMetas"
 >;
 
 type PlanningOnlyAttempt = Pick<
@@ -419,6 +418,16 @@ export function resolveNoToolCallNudgeInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: NoToolCallNudgeAttempt;
+  /**
+   * True if any attempt in this outer user turn has successfully run a
+   * tool. Scopes the nudge to agentic workflows so pure Q&A replies
+   * ("what's 2+2?" → "4") are not turned into multi-message exchanges.
+   * Caller is responsible for tracking this across attempts — the flag
+   * must be sticky for the rest of the run once flipped, because a later
+   * stall inside the same turn can produce an attempt with empty
+   * `toolMetas` even though earlier attempts ran tools.
+   */
+  turnHasToolActivity: boolean;
 }): string | null {
   if (
     params.aborted ||
@@ -439,11 +448,14 @@ export function resolveNoToolCallNudgeInstruction(params: {
   }
 
   // Scope the nudge to turns where agentic work is already in progress. For a
-  // pure chat reply with no tool activity, a "did you finish?" nudge would
-  // turn every one-shot Q&A into a two-message exchange. Requiring at least
-  // one prior tool call in this turn keeps the nudge focused on the failure
-  // mode it is designed for: a multi-step workflow that stops mid-task.
-  if (params.attempt.toolMetas.length === 0) {
+  // pure chat reply with no tool activity anywhere in the turn, a "did you
+  // finish?" nudge would turn every one-shot Q&A into a two-message
+  // exchange. We look at the TURN's cumulative activity (not just this
+  // attempt's) because gemma's typical stall pattern is "reads + fetch +
+  // extract (attempt 1 with many tools) → EMPTY_RESPONSE retry → attempt 2
+  // with thinking+text but zero tools": the second attempt's `toolMetas` is
+  // empty, but the turn is firmly mid-workflow.
+  if (!params.turnHasToolActivity) {
     return null;
   }
 

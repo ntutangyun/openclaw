@@ -348,23 +348,24 @@ human would. This is where its reasoning strength is visible.
 
 Ten live foreground runs against the real task.
 
-| #   | Date        | Time                                  | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                                                   |
-| --- | ----------- | ------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| 1   | 04-21       | 38 min                                | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                                                      |
-| 2   | 04-22       | 11 min                                | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                                                         |
-| 3   | 04-22       | ~5 min visible                        | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                                                        |
-| 4   | 04-22       | **stuck** after minutes read          | no                  | n/a                                      | no                      | empty-response after long thinking                                                                                        |
-| 5   | 04-23 06:20 | **14 min**                            | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                                                    |
-| 6   | 04-23 06:41 | stuck after chart                     | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                                                        |
-| 7   | 04-23 07:46 | stuck after SKILL.md guess            | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`)                                   |
-| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull` | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)                                         |
-| 9   | 04-23 12:22 | **failed in 34 s** (Windows node)     | no                  | n/a                                      | no                      | `exec` routed to `host: "node"`; bash script not found on Windows (fixed by `d61afa44a2`)                                 |
-| 10  | 04-23 12:53 | **3 min** (Windows node)              | no                  | **✅ (correct session, motions, DCNs)**  | **✅ both pushes auto** | end-to-end success; cosmetic: § 6 used `### 6.N` + duplicated DCN (SKILL.md tightened)                                    |
-| 11  | 04-23 13:21 | stalled twice                         | no                  | partial                                  | no                      | terminal empty + text-only turns not caught by existing retries; `resolveNoToolCallNudgeInstruction` added                |
-| 12  | 04-23 14:06 | **3 min** (Windows node)              | no                  | **✅**                                   | **✅ both pushes**      | end-to-end success with one nudge auto-fire; cosmetic § 3 Agenda table populated with presentations not meeting items     |
-| 13  | 04-23 14:31 | chart never rendered                  | no                  | partial (report yes, chart no)           | ❌                      | gemma invoked `bash build_chart.py` six times → bash parse error on Python docstring; wrapper `build_chart.sh` added      |
-| 14  | 04-23 14:48 | one nudge, second stall unrescued     | no                  | partial                                  | no                      | nudge fired correctly at stall #1, gemma made progress and stalled again; nudge counter reset-on-progress added           |
-| 15  | 04-23 15:15 | sub-agent escape, ~30 s               | attempted           | n/a                                      | no                      | `tools.deny` was missing from tangyun's openclaw.json — gemma called `sessions_spawn`; `ensure_tools_deny` backfill added |
+| #   | Date        | Time                                                | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                                                     |
+| --- | ----------- | --------------------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 1   | 04-21       | 38 min                                              | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                                                        |
+| 2   | 04-22       | 11 min                                              | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                                                           |
+| 3   | 04-22       | ~5 min visible                                      | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                                                          |
+| 4   | 04-22       | **stuck** after minutes read                        | no                  | n/a                                      | no                      | empty-response after long thinking                                                                                          |
+| 5   | 04-23 06:20 | **14 min**                                          | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                                                      |
+| 6   | 04-23 06:41 | stuck after chart                                   | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                                                          |
+| 7   | 04-23 07:46 | stuck after SKILL.md guess                          | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`)                                     |
+| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull`               | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)                                           |
+| 9   | 04-23 12:22 | **failed in 34 s** (Windows node)                   | no                  | n/a                                      | no                      | `exec` routed to `host: "node"`; bash script not found on Windows (fixed by `d61afa44a2`)                                   |
+| 10  | 04-23 12:53 | **3 min** (Windows node)                            | no                  | **✅ (correct session, motions, DCNs)**  | **✅ both pushes auto** | end-to-end success; cosmetic: § 6 used `### 6.N` + duplicated DCN (SKILL.md tightened)                                      |
+| 11  | 04-23 13:21 | stalled twice                                       | no                  | partial                                  | no                      | terminal empty + text-only turns not caught by existing retries; `resolveNoToolCallNudgeInstruction` added                  |
+| 12  | 04-23 14:06 | **3 min** (Windows node)                            | no                  | **✅**                                   | **✅ both pushes**      | end-to-end success with one nudge auto-fire; cosmetic § 3 Agenda table populated with presentations not meeting items       |
+| 13  | 04-23 14:31 | chart never rendered                                | no                  | partial (report yes, chart no)           | ❌                      | gemma invoked `bash build_chart.py` six times → bash parse error on Python docstring; wrapper `build_chart.sh` added        |
+| 14  | 04-23 14:48 | one nudge, second stall unrescued                   | no                  | partial                                  | no                      | nudge fired correctly at stall #1, gemma made progress and stalled again; nudge counter reset-on-progress added             |
+| 15  | 04-23 15:15 | sub-agent escape, ~30 s                             | attempted           | n/a                                      | no                      | `tools.deny` was missing from tangyun's openclaw.json — gemma called `sessions_spawn`; `ensure_tools_deny` backfill added   |
+| 16  | 04-23 15:52 | EMPTY_RESPONSE recovered, nudge missed second stall | no                  | partial (template read)                  | no                      | attempt 2 had 0 tools → old `toolMetas.length === 0` gate declined the nudge; runner-level `turnHasToolActivity` flag added |
 
 Read runs 4, 6, 7, 8 together: each of them stalled at an internal
 `thinking → empty content` turn, but the proximate cause drifted each
@@ -533,6 +534,30 @@ session ended silently.
   need to sequence the restart themselves; the helper does it only
   when it actually changed the file.
 
+Run #16 (2026-04-23 15:52 UTC) uncovered an oversight in the nudge
+gate itself. Attempt 1 ran 15 tool calls (read SKILL, fetch, extract,
+6 source reads, chart, template read) and then produced an empty
+terminal turn (Harmony leak, 1513 thinking tokens). The existing
+empty-response retry correctly fired and attempt 2 came back with a
+long thinking block + text announcing the fill plan — no tool call.
+The no-tool-call nudge was supposed to catch this second stall but
+didn't: the resolver checked `params.attempt.toolMetas.length === 0`
+as the "agentic workflow in progress?" gate, but attempt 2's own
+`toolMetas` was empty even though the turn was firmly mid-workflow.
+
+- The gate semantics are now turn-scoped, not attempt-scoped. The run
+  loop tracks a `turnHasToolActivity` flag that flips to true the
+  first time any attempt in the user turn runs a tool successfully
+  and stays sticky for the rest of the run. The flag is passed into
+  `resolveNoToolCallNudgeInstruction`, which uses it in place of the
+  old per-attempt `toolMetas.length` check.
+- The "pure chat" protection is preserved: if no attempt in the turn
+  ever called a tool, `turnHasToolActivity` stays false and the
+  nudge still declines on simple Q&A replies.
+- A new unit test repros the exact Run #16 pattern (turn with earlier
+  tool-heavy attempt followed by a text-only stall attempt) and
+  asserts the nudge fires.
+
 Run #11 (2026-04-23 13:20 UTC) stalled twice in the same session: once
 at an empty terminal turn after reading `_summary.txt`, and once after
 the user nudged with "continue" and gemma replied with a text-only
@@ -591,31 +616,32 @@ two-message exchanges.
 Nineteen commits, all on `main` at `github.com:ntutangyun/openclaw`,
 each with pre-commit `pnpm check` green.
 
-| #   | SHA          | Scope      | Summary                                                                                         |
-| --- | ------------ | ---------- | ----------------------------------------------------------------------------------------------- |
-| 01  | `4508414319` | multi-user | stop tracking per-user runtime state                                                            |
-| 02  | `f93409bfa1` | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
-| 03  | `bece61dd56` | multi-user | tighten `ieee-meeting-report` against template drift                                            |
-| 04  | `285ddc4037` | multi-user | require source reads + forbid made-up scripts                                                   |
-| 05  | `b927682985` | multi-user | forbid all delegation in SKILL.md                                                               |
-| 06  | `c136c00f49` | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
-| 07  | `afbecce67a` | multi-user | generalize for any node + ENOENT recovery                                                       |
-| 08  | `03ae15ae8a` | multi-user | call out H2 Q&A headings and require both pushes                                                |
-| 09  | `732d83ace9` | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
-| 10  | `dcca2e3f04` | **core**   | extend empty-response retry to non-strict-agentic models                                        |
-| 11  | `ccef2168fc` | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
-| 12  | `ef9de9de79` | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
-| 13  | `c1a346106c` | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
-| 14  | `5fb7d17b2e` | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
-| 15  | `8f75f7a4ec` | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
-| 16  | `7b0249f387` | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
-| 17  | `18f8e498f1` | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
-| 18  | `d61afa44a2` | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
-| 19  | `a06ca403f2` | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
-| 20  | `2254a2a984` | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
-| 21  | `b7aa8ddbf7` | multi-user | add `build_chart.sh` / `extract_all.sh` wrappers so every skill entrypoint is `bash <path>.sh`  |
-| 22  | `73a80853d7` | **core**   | reset no-tool-call nudge counter on progress (once-per-stall instead of once-per-user-message)  |
-| 23  | `0faa3d7ad1` | multi-user | `ensure_tools_deny` helper backfills the sub-agent deny list into existing users' config        |
+| #   | SHA           | Scope      | Summary                                                                                         |
+| --- | ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| 01  | `4508414319`  | multi-user | stop tracking per-user runtime state                                                            |
+| 02  | `f93409bfa1`  | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
+| 03  | `bece61dd56`  | multi-user | tighten `ieee-meeting-report` against template drift                                            |
+| 04  | `285ddc4037`  | multi-user | require source reads + forbid made-up scripts                                                   |
+| 05  | `b927682985`  | multi-user | forbid all delegation in SKILL.md                                                               |
+| 06  | `c136c00f49`  | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
+| 07  | `afbecce67a`  | multi-user | generalize for any node + ENOENT recovery                                                       |
+| 08  | `03ae15ae8a`  | multi-user | call out H2 Q&A headings and require both pushes                                                |
+| 09  | `732d83ace9`  | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
+| 10  | `dcca2e3f04`  | **core**   | extend empty-response retry to non-strict-agentic models                                        |
+| 11  | `ccef2168fc`  | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
+| 12  | `ef9de9de79`  | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
+| 13  | `c1a346106c`  | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
+| 14  | `5fb7d17b2e`  | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
+| 15  | `8f75f7a4ec`  | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
+| 16  | `7b0249f387`  | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
+| 17  | `18f8e498f1`  | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
+| 18  | `d61afa44a2`  | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
+| 19  | `a06ca403f2`  | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
+| 20  | `2254a2a984`  | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
+| 21  | `b7aa8ddbf7`  | multi-user | add `build_chart.sh` / `extract_all.sh` wrappers so every skill entrypoint is `bash <path>.sh`  |
+| 22  | `73a80853d7`  | **core**   | reset no-tool-call nudge counter on progress (once-per-stall instead of once-per-user-message)  |
+| 23  | `0faa3d7ad1`  | multi-user | `ensure_tools_deny` helper backfills the sub-agent deny list into existing users' config        |
+| 24  | (this commit) | **core**   | no-tool-call nudge gate is turn-scoped (`turnHasToolActivity`), not attempt-scoped              |
 
 ### Core code changes explained
 
