@@ -19,6 +19,7 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -339,8 +340,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects
+    params.attempt.lastToolError
   ) {
     return null;
   }
@@ -351,7 +351,25 @@ export function resolveEmptyResponseRetryInstruction(params: {
   // failure mode seen across hosted and self-hosted models — for example
   // ollama/gemma4:e4b intermittently emits its end-of-turn token with no
   // visible content after Harmony-style template tokens leak into the output
-  // stream. One steer retry is cheap and universally applicable.
+  // stream.
+  //
+  // Side-effect handling. The planning-only / reasoning-only retries block
+  // on the coarse `replayMetadata.hadPotentialSideEffects` flag (any
+  // mutating tool, any message send, any cron add), but that is too
+  // conservative for the empty-response case. An empty-response retry does
+  // NOT replay the prior attempt — the conversation state (including the
+  // already-executed tool_result) is handed to the model unchanged, and the
+  // steer instruction asks it to "continue from the current state", not to
+  // "redo". For local file/exec mutations (write, edit, exec, fetch) a
+  // duplicate call from the retry would overwrite with identical content or
+  // re-read, which is safe. For user-visible messaging we DO still gate —
+  // a duplicated Slack/Discord/Telegram send is externally observable and
+  // the retry's "continue" framing is not a strong enough constraint on
+  // small models to guarantee they won't re-send. If this proves too
+  // restrictive in practice, relax it per-provider.
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
 
   if (
     !isEmptyResponseAssistantTurn({

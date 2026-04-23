@@ -870,7 +870,11 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
-  it("does not retry generic empty GPT turns after side effects", () => {
+  it("does not retry empty turns after a user-visible messaging send", () => {
+    // didSendViaMessagingTool = true means the assistant already sent a
+    // Slack/Discord/Telegram message. A retry could cause the small model
+    // to re-send that message (duplicate externally-visible side effect),
+    // so this gate stays.
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -891,6 +895,37 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("retries empty turns after file-side-effect tool calls (exec, write, fetch)", () => {
+    // Observed 2026-04-23 on ollama/gemma4:e4b: after a successful
+    // `fetch_workspace.sh pull` exec tool call, the model emitted an empty
+    // next turn. Coarse `hadPotentialSideEffects=true` (from exec being a
+    // mutating tool) blocked the retry, and the run stalled even though a
+    // retry would have succeeded — the tool_result for the fetch was
+    // already in history, so a retry just asks the model to "continue",
+    // not "redo the fetch".
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:e4b",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        // Simulate a mutating-tool side effect (exec) without a messaging send.
+        didSendViaMessagingTool: false,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
