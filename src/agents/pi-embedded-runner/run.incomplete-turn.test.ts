@@ -457,7 +457,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       runId: "run-empty-response-exhausted",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // One initial attempt + DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT (3) retries.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT + 1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("Please try again");
     expect(mockedLog.warn).toHaveBeenCalledWith(
@@ -839,7 +840,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+    expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(3);
   });
 
   it("retries empty turns for non-strict-agentic models (e.g. ollama/gemma)", () => {

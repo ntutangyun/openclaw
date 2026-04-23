@@ -1265,6 +1265,16 @@ def get_context_window(model_name, base_url):
         pass
     return DEFAULT_CTX
 
+# Mirror src/agents/self-hosted-provider-defaults.ts. 8192 is usually too
+# tight for reasoning-capable self-hosted models (ollama/gemma4, qwen3,
+# etc.) because `thinking` + visible output + tool-call JSON share one
+# budget; 16384 gives the agent room to emit a tool_call after a long
+# thinking pass. Keeping this hard-coded (rather than inferred from the
+# shared default constant inside the image) means the resulting
+# openclaw.json stays explicit after `sync-ollama` and is independent
+# of which image version the container is running.
+SELF_HOSTED_MAX_TOKENS = 16384
+
 provider_models = []
 for m in models:
     name = m['name']
@@ -1274,6 +1284,7 @@ for m in models:
         'id': name,
         'name': f'{name} ({params})' if params else name,
         'contextWindow': ctx,
+        'maxTokens': SELF_HOSTED_MAX_TOKENS,
     })
 
 with open(provider_file, 'w') as f:
@@ -1464,6 +1475,11 @@ provider_file = sys.argv[2]
 models_file = sys.argv[3]
 
 DEFAULT_CTX = 131072
+# Same 16384 rationale as cmd_sync_ollama: reasoning-capable self-hosted
+# models share one output budget across thinking + visible text + tool
+# calls, and 8192 is often exhausted by thinking alone on a ~30k-token
+# prompt. Keep this explicit in the written config.
+SELF_HOSTED_MAX_TOKENS = 16384
 
 provider_models = []
 for m in models:
@@ -1473,6 +1489,7 @@ for m in models:
         'id': mid,
         'name': mid,
         'contextWindow': ctx,
+        'maxTokens': SELF_HOSTED_MAX_TOKENS,
     })
 
 # vLLM exposes an OpenAI-compatible API at /v1

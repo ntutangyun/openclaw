@@ -80,7 +80,15 @@ const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
-export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
+// Local-model runs on small self-hosted LLMs (e.g. ollama/gemma4:e4b on
+// Jetson) intermittently emit an end-of-turn token with no parseable visible
+// content once the accumulated prompt is large enough (~25-35k tokens) and
+// `thinking` has eaten most of the output budget. One retry rescues many of
+// those cases, but not all — the retry itself can also come back empty on the
+// same context. Raising the limit to 3 gives the runner a second and third
+// shot before giving up; each retry is bounded by the normal per-turn budget
+// so the worst case is a handful of extra inference calls, not an open loop.
+export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 3;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
