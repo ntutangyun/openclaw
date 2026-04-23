@@ -563,30 +563,30 @@ two-message exchanges.
 Nineteen commits, all on `main` at `github.com:ntutangyun/openclaw`,
 each with pre-commit `pnpm check` green.
 
-| #   | SHA           | Scope      | Summary                                                                                         |
-| --- | ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| 01  | `4508414319`  | multi-user | stop tracking per-user runtime state                                                            |
-| 02  | `f93409bfa1`  | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
-| 03  | `bece61dd56`  | multi-user | tighten `ieee-meeting-report` against template drift                                            |
-| 04  | `285ddc4037`  | multi-user | require source reads + forbid made-up scripts                                                   |
-| 05  | `b927682985`  | multi-user | forbid all delegation in SKILL.md                                                               |
-| 06  | `c136c00f49`  | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
-| 07  | `afbecce67a`  | multi-user | generalize for any node + ENOENT recovery                                                       |
-| 08  | `03ae15ae8a`  | multi-user | call out H2 Q&A headings and require both pushes                                                |
-| 09  | `732d83ace9`  | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
-| 10  | `dcca2e3f04`  | **core**   | extend empty-response retry to non-strict-agentic models                                        |
-| 11  | `ccef2168fc`  | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
-| 12  | `ef9de9de79`  | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
-| 13  | `c1a346106c`  | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
-| 14  | `5fb7d17b2e`  | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
-| 15  | `8f75f7a4ec`  | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
-| 16  | `7b0249f387`  | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
-| 17  | `18f8e498f1`  | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
-| 18  | `d61afa44a2`  | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
-| 19  | `a06ca403f2`  | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
-| 20  | `2254a2a984`  | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
-| 21  | `b7aa8ddbf7`  | multi-user | add `build_chart.sh` / `extract_all.sh` wrappers so every skill entrypoint is `bash <path>.sh`  |
-| 22  | (this commit) | **core**   | reset no-tool-call nudge counter on progress (once-per-stall instead of once-per-user-message)  |
+| #   | SHA          | Scope      | Summary                                                                                         |
+| --- | ------------ | ---------- | ----------------------------------------------------------------------------------------------- |
+| 01  | `4508414319` | multi-user | stop tracking per-user runtime state                                                            |
+| 02  | `f93409bfa1` | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
+| 03  | `bece61dd56` | multi-user | tighten `ieee-meeting-report` against template drift                                            |
+| 04  | `285ddc4037` | multi-user | require source reads + forbid made-up scripts                                                   |
+| 05  | `b927682985` | multi-user | forbid all delegation in SKILL.md                                                               |
+| 06  | `c136c00f49` | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
+| 07  | `afbecce67a` | multi-user | generalize for any node + ENOENT recovery                                                       |
+| 08  | `03ae15ae8a` | multi-user | call out H2 Q&A headings and require both pushes                                                |
+| 09  | `732d83ace9` | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
+| 10  | `dcca2e3f04` | **core**   | extend empty-response retry to non-strict-agentic models                                        |
+| 11  | `ccef2168fc` | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
+| 12  | `ef9de9de79` | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
+| 13  | `c1a346106c` | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
+| 14  | `5fb7d17b2e` | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
+| 15  | `8f75f7a4ec` | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
+| 16  | `7b0249f387` | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
+| 17  | `18f8e498f1` | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
+| 18  | `d61afa44a2` | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
+| 19  | `a06ca403f2` | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
+| 20  | `2254a2a984` | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
+| 21  | `b7aa8ddbf7` | multi-user | add `build_chart.sh` / `extract_all.sh` wrappers so every skill entrypoint is `bash <path>.sh`  |
+| 22  | `73a80853d7` | **core**   | reset no-tool-call nudge counter on progress (once-per-stall instead of once-per-user-message)  |
 
 ### Core code changes explained
 
