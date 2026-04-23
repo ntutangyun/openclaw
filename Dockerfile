@@ -79,12 +79,24 @@ COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
-# The pnpm content-addressable store lives in a regular layer directory (not a
-# BuildKit cache mount) so `runtime-assets` can reuse it when `pnpm prune --prod`
-# re-resolves against the trimmed workspace. Cache mounts here were unreliable:
-# `docker builder prune` or cache aging could wipe them while the install layer
-# stayed cached, leaving prune with an empty store and a 25+ minute cold fetch.
-RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+#
+# The BuildKit cache mount persists the pnpm content-addressable store across
+# builds so `pnpm install --frozen-lockfile` does not re-fetch every tarball
+# on every rebuild. On a low-bandwidth host (Jetson Orin over home broadband)
+# this is the difference between ~12 min and ~1-2 min for the install step.
+#
+# Edge case: if BuildKit prunes the store mount between builds but keeps the
+# install layer cached, a later step that re-resolves (`pnpm prune --prod` in
+# runtime-assets) may hit an empty store and need to re-fetch. The prune step
+# therefore mounts the same cache so the store is visible there too; if the
+# cache genuinely is gone, prune transparently falls back to the network.
+#
+# First-build warm-up: for the very first rebuild after `docker builder prune`
+# (or a fresh Docker install), the cache mount starts empty and the install
+# step is slow. See `multi-user-support/manage.sh cache-warm` for a one-time
+# seed that pre-populates the BuildKit cache from the host's own pnpm store.
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Fail fast here if the Matrix native binding did not materialize after install.
@@ -128,7 +140,11 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # the root, `ui`, and opted-in plugin manifests into the install layer, so
 # prune must not rediscover unrelated workspaces from the later full source
 # copy.
-RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
+# Share the pnpm store cache with the install step so prune's (re-)resolution
+# still sees the populated store. If the cache was pruned between stages,
+# pnpm transparently falls back to the network.
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
     for ext in $OPENCLAW_EXTENSIONS; do \
       printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
     done && \

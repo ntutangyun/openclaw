@@ -23,6 +23,9 @@ Usage: $(basename "$0") <command> [options]
 Setup:
   setup                                             Build Docker image and prepare environment
   rebuild                                           Rebuild Docker image (e.g. after git pull)
+  cache-warm                                        Pre-seed the BuildKit pnpm cache from the host pnpm
+                                                    store (~/.local/share/pnpm/store). Run once before
+                                                    the first rebuild to avoid a cold 12-min pnpm fetch.
 
 User management:
   add       <username>                              Create and start a new user gateway
@@ -439,6 +442,66 @@ cmd_rebuild() {
     echo "  Restart them to use the new image:"
     echo "    $(basename "$0") stop-all && $(basename "$0") start-all"
   fi
+}
+
+# One-time pre-seed of the BuildKit pnpm cache from the host's pnpm store.
+#
+# The main Dockerfile uses a BuildKit cache mount to persist the pnpm store
+# across builds. That makes the SECOND and subsequent builds fast (~1-2 min
+# for the install step), but the very FIRST build on a fresh cache starts
+# empty and re-downloads every tarball from npm registry (~12 min on Jetson
+# over home broadband).
+#
+# This command feeds the cache once using the host's existing pnpm store,
+# which normally already has every tarball the lockfile needs. Subsequent
+# `manage.sh rebuild` invocations then read from a warm cache.
+#
+# The technique: issue a tiny dedicated `docker build` whose only purpose
+# is to `cp -a` from a build context (the host pnpm store dir) into the
+# same cache mount the main Dockerfile uses. BuildKit treats the write
+# as persistent.
+cmd_cache_warm() {
+  require_cmd docker
+  local host_store
+  host_store="${OPENCLAW_HOST_PNPM_STORE:-$HOME/.local/share/pnpm/store}"
+
+  if [[ ! -d "$host_store" ]]; then
+    fail "Host pnpm store not found at $host_store. Set OPENCLAW_HOST_PNPM_STORE=<path> if it lives elsewhere. Install pnpm and run \`pnpm install\` against this repo at least once to populate it."
+  fi
+
+  local size
+  size="$(du -sh "$host_store" 2>/dev/null | cut -f1 || echo '?')"
+  echo "==> Pre-seeding BuildKit pnpm cache from $host_store ($size)"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  # Tiny dedicated Dockerfile whose only job is to copy the host pnpm store
+  # into the cache mount the real Dockerfile shares (same id).
+  cat > "$tmpdir/Dockerfile.cache-warm" <<'WARMDF'
+# syntax=docker/dockerfile:1.7
+FROM alpine:3.20 AS warm
+RUN --mount=type=bind,from=host-pnpm-store,target=/src,readonly \
+    --mount=type=cache,id=openclaw-pnpm-store,target=/dst,sharing=locked \
+    echo "==> Copying host pnpm store into BuildKit cache..." && \
+    apk add --no-cache --quiet rsync 2>/dev/null || true && \
+    cp -a /src/. /dst/ && \
+    du -sh /dst
+WARMDF
+
+  docker build \
+    --network=host \
+    --build-context "host-pnpm-store=$host_store" \
+    -t openclaw-cache-warm-sentinel \
+    -f "$tmpdir/Dockerfile.cache-warm" \
+    "$tmpdir"
+
+  # The sentinel image itself is useless; remove it to free the layer.
+  docker image rm -f openclaw-cache-warm-sentinel >/dev/null 2>&1 || true
+
+  echo ""
+  echo "==> Cache-warm complete. The next \`$(basename "$0") rebuild\` should reuse the seeded store."
 }
 
 # ── User Commands ─────────────────────────────────────────────
@@ -1614,6 +1677,7 @@ shift
 case "$command" in
   setup)     cmd_setup ;;
   rebuild)   cmd_rebuild ;;
+  cache-warm) cmd_cache_warm ;;
   add)       cmd_add "$@" ;;
   remove)    cmd_remove "${1:?Username required}" ;;
   start)     cmd_start "${1:?Username required}" ;;
