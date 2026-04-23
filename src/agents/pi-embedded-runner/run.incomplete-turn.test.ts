@@ -13,14 +13,17 @@ import {
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
+  NO_TOOL_CALL_NUDGE_INSTRUCTION,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveEmptyResponseRetryInstruction,
+  resolveNoToolCallNudgeInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
@@ -926,6 +929,171 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("nudges gemma stalls where earlier cycles already produced text", () => {
+    // Repro of the 2026-04-23 13:21 UTC tangyun session: after reading
+    // SKILL.md, pulling the workspace, extracting docs, and reading the
+    // summary, gemma emitted an empty terminal turn (content=[],
+    // stopReason="stop", 1 output token). The empty-response retry bails
+    // on that case because `attempt.assistantTexts` is non-empty from the
+    // earlier cycles ("I have successfully pulled…", "I have completed
+    // the extraction step…"). The no-tool-call nudge steps in on exactly
+    // this case — earlier tool activity (toolMetas non-empty) plus a
+    // terminal turn without a tool call → fire the "continue or confirm"
+    // nudge once.
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I have completed the extraction step."],
+        toolMetas: [
+          { toolName: "read" },
+          { toolName: "exec" },
+          { toolName: "exec" },
+          { toolName: "read" },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBe(NO_TOOL_CALL_NUDGE_INSTRUCTION);
+    expect(DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT).toBe(1);
+  });
+
+  it("nudges text-only 'I'll do X next' turns when prior tool calls ran", () => {
+    // Repro of the 2026-04-23 13:32 UTC tangyun session: after the user
+    // typed "continue", gemma produced a thinking block plus a text block
+    // ("With the file extraction complete, I am moving to Step 3: Reading
+    // the source documents…") and then stopped with stopReason="stop" —
+    // no tool_use block at all. The reasoning-only and planning-only
+    // retries are gated to the GPT-5 strict-agentic contract so they do
+    // nothing for ollama. The no-tool-call nudge catches this: tool
+    // activity exists, last turn did not call a tool, and stopReason is
+    // not "toolUse".
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I am moving to Step 3: Reading the source documents."],
+        toolMetas: [{ toolName: "read" }, { toolName: "exec" }, { toolName: "read" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [
+            { type: "thinking", thinking: "Planning to read sources next." },
+            { type: "text", text: "I will begin by reading the key documents." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBe(NO_TOOL_CALL_NUDGE_INSTRUCTION);
+  });
+
+  it("does not nudge turns that ended by calling a tool", () => {
+    // Healthy path: assistant called a tool and is waiting for the tool
+    // result. The outer loop will dispatch the tool and keep running.
+    // `stopReason: "toolUse"` is the marker for this case.
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        toolMetas: [{ toolName: "read" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "Reading now." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBeNull();
+  });
+
+  it("does not nudge pure chat replies with no prior tool activity", () => {
+    // User asked "what's 2+2?" and the assistant replied "4". No tools
+    // were called anywhere in this turn. The nudge must not fire or
+    // every simple Q&A becomes a two-message exchange ("did you finish?"
+    // → "yes the task is complete"). The `toolMetas.length === 0` gate
+    // scopes the nudge to multi-step workflows.
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["4"],
+        toolMetas: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "4" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBeNull();
+  });
+
+  it("does not nudge after a user-visible messaging send", () => {
+    // Mirrors the empty-response retry gate: a second inference after a
+    // Slack/Discord/Telegram send could produce a duplicate external
+    // message, which is worse than a potential stall.
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        toolMetas: [{ toolName: "exec" }],
+        didSendViaMessagingTool: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "Sent." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBeNull();
+  });
+
+  it("does not nudge when the last tool call errored", () => {
+    // `lastToolError` is already surfaced to the user as its own signal;
+    // nudging on top of it would be confusing and might cause the model
+    // to retry the failed tool (the nudge says "call the next concrete
+    // tool action").
+    const nudge = resolveNoToolCallNudgeInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        toolMetas: [{ toolName: "exec" }],
+        lastToolError: {
+          toolName: "exec",
+          error: "command not found",
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "Encountered an error." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(nudge).toBeNull();
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {

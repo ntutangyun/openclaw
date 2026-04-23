@@ -416,6 +416,23 @@ prefix) and writing the report from memory instead of the template.
   format so the H2/H3 distinction is learned from an example, not
   from an abstract rule.
 
+Run #11 (2026-04-23 13:20 UTC) stalled twice in the same session: once
+at an empty terminal turn after reading `_summary.txt`, and once after
+the user nudged with "continue" and gemma replied with a text-only
+"I will begin by reading the key documents…" but no tool call. Neither
+stall triggered any existing retry, because the empty-response retry
+bails out on `attempt.assistantTexts` once any earlier cycle produced
+text, and the reasoning-only / planning-only retries are gated to the
+GPT-5 strict-agentic contract. The user's original fix request
+("whenever the agent responds without a tool call, auto-nudge once
+per user message") was only implemented narrowly for the fully-empty
+content case. The new no-tool-call nudge closes that gap — it fires
+for any terminal turn (`stopReason !== "toolUse"`) when prior tool
+activity exists (`toolMetas.length > 0`), sends one nudge ("confirm if
+done, else call the next concrete tool action"), and caps at one
+nudge per user message so pure-chat replies aren't turned into
+two-message exchanges.
+
 ---
 
 ## 6. What's in the repo now
@@ -457,27 +474,28 @@ prefix) and writing the report from memory instead of the template.
 Nineteen commits, all on `main` at `github.com:ntutangyun/openclaw`,
 each with pre-commit `pnpm check` green.
 
-| #   | SHA          | Scope      | Summary                                                                                         |
-| --- | ------------ | ---------- | ----------------------------------------------------------------------------------------------- |
-| 01  | `4508414319` | multi-user | stop tracking per-user runtime state                                                            |
-| 02  | `f93409bfa1` | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
-| 03  | `bece61dd56` | multi-user | tighten `ieee-meeting-report` against template drift                                            |
-| 04  | `285ddc4037` | multi-user | require source reads + forbid made-up scripts                                                   |
-| 05  | `b927682985` | multi-user | forbid all delegation in SKILL.md                                                               |
-| 06  | `c136c00f49` | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
-| 07  | `afbecce67a` | multi-user | generalize for any node + ENOENT recovery                                                       |
-| 08  | `03ae15ae8a` | multi-user | call out H2 Q&A headings and require both pushes                                                |
-| 09  | `732d83ace9` | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
-| 10  | `dcca2e3f04` | **core**   | extend empty-response retry to non-strict-agentic models                                        |
-| 11  | `ccef2168fc` | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
-| 12  | `ef9de9de79` | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
-| 13  | `c1a346106c` | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
-| 14  | `5fb7d17b2e` | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
-| 15  | `8f75f7a4ec` | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
-| 16  | `7b0249f387` | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
-| 17  | `18f8e498f1` | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
-| 18  | `d61afa44a2` | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
-| 19  | `a06ca403f2` | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
+| #   | SHA           | Scope      | Summary                                                                                         |
+| --- | ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| 01  | `4508414319`  | multi-user | stop tracking per-user runtime state                                                            |
+| 02  | `f93409bfa1`  | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
+| 03  | `bece61dd56`  | multi-user | tighten `ieee-meeting-report` against template drift                                            |
+| 04  | `285ddc4037`  | multi-user | require source reads + forbid made-up scripts                                                   |
+| 05  | `b927682985`  | multi-user | forbid all delegation in SKILL.md                                                               |
+| 06  | `c136c00f49`  | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
+| 07  | `afbecce67a`  | multi-user | generalize for any node + ENOENT recovery                                                       |
+| 08  | `03ae15ae8a`  | multi-user | call out H2 Q&A headings and require both pushes                                                |
+| 09  | `732d83ace9`  | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
+| 10  | `dcca2e3f04`  | **core**   | extend empty-response retry to non-strict-agentic models                                        |
+| 11  | `ccef2168fc`  | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
+| 12  | `ef9de9de79`  | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
+| 13  | `c1a346106c`  | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
+| 14  | `5fb7d17b2e`  | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
+| 15  | `8f75f7a4ec`  | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
+| 16  | `7b0249f387`  | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
+| 17  | `18f8e498f1`  | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
+| 18  | `d61afa44a2`  | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
+| 19  | `a06ca403f2`  | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
+| 20  | (this commit) | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
 
 ### Core code changes explained
 
@@ -648,6 +666,53 @@ Standardization) (11-26/512r0)`
 Small models learn from examples more reliably than from abstract
 rules, and both defects observed in Run #10 now have a direct
 counter-example in the prompt.
+
+**No-tool-call nudge — `src/agents/pi-embedded-runner/run/incomplete-turn.ts` + `run.ts`**
+
+Run #11 exposed two stalls that none of the existing retries covered:
+
+1. A terminal empty turn (`content: []`, `stopReason: "stop"`, 1 output
+   token) _after_ earlier cycles in the same turn produced text. The
+   empty-response retry checks `attempt.assistantTexts.join(...).trim().length
+   > 0` and bails out as soon as any earlier cycle had text — fine for
+   > GPT-5 (first-turn-only empty is the failure mode it was written for),
+   > not fine for gemma (Harmony-token leak can happen 5 cycles in).
+2. A text-only terminal turn with a thinking block and a "I will begin
+   by reading the key documents" text block but no tool call at all.
+   This is exactly what `resolveReasoningOnlyRetryInstruction` and
+   `resolvePlanningOnlyRetryInstruction` are supposed to catch, but both
+   are gated to `shouldApplyPlanningOnlyRetryGuard` →
+   `isStrictAgenticSupportedProviderModel`, i.e. the GPT-5 family only.
+   For ollama/gemma4 they always return null.
+
+The new `resolveNoToolCallNudgeInstruction` is a single per-user-message
+rescue that catches both cases:
+
+- Fires when `lastAssistant.stopReason !== "toolUse"` and not `"error"`.
+- Skips when `didSendViaMessagingTool` (same gate as empty-response —
+  a duplicate Slack/Discord send is worse than a stall).
+- Skips when `toolMetas.length === 0` (no prior tool activity). This
+  scopes the nudge to agentic workflows so a pure "what's 2+2?"
+  reply doesn't get a "did you finish?" nudge.
+- Skips the usual aborted / timedOut / clientToolCall / yieldDetected /
+  lastToolError / didSendDeterministicApprovalPrompt guards.
+
+Placed last in the retry cascade (after planning-only, reasoning-only,
+empty-response), limited to 1 per user message
+(`DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT = 1`). The nudge text is
+deliberately dual-purpose so a genuine completion and a mid-task stall
+share the same rescue:
+
+> "The previous turn ended without a tool call. If you have fully
+> completed the task, confirm it in one brief sentence and stop.
+> Otherwise, continue now by calling the next concrete tool action —
+> do not restate the plan."
+
+If the task was genuinely done, the model spends one extra inference
+confirming "yes, done" and stops (second `stop` is accepted without
+further nudging because the counter is capped at 1). If gemma stalled,
+the nudge typically unsticks the loop by forcing a concrete next
+action.
 
 **`18f8e498f1` — `src/agents/pi-embedded-runner/run/incomplete-turn.ts`**
 

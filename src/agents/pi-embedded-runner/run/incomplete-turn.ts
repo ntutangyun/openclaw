@@ -27,6 +27,18 @@ type IncompleteTurnAttempt = Pick<
   | "timedOutDuringCompaction"
 >;
 
+type NoToolCallNudgeAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCall"
+  | "currentAttemptAssistant"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "lastToolError"
+  | "lastAssistant"
+  | "toolMetas"
+>;
+
 type PlanningOnlyAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
@@ -90,6 +102,21 @@ export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 // shot before giving up; each retry is bounded by the normal per-turn budget
 // so the worst case is a handful of extra inference calls, not an open loop.
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 3;
+// Small local models (notably ollama/gemma4:e4b) routinely end a mid-task turn
+// with `stopReason: "stop"` and no tool call — sometimes with visible text
+// announcing "I'll do X next" and sometimes with empty content after a
+// Harmony-token leak. The existing empty/reasoning/planning-only retries miss
+// both cases: empty-response bails out once any earlier text is in
+// `assistantTexts`, and planning/reasoning-only are gated to the GPT-5
+// strict-agentic contract. This nudge is a single per-user-message rescue
+// for both cases. If the task is genuinely done, one extra inference
+// confirms it and stops; if gemma stalled, the nudge prompt ("continue with
+// the next concrete tool action") typically unsticks the loop. Limited to 1
+// so a pure Q&A reply (no prior tool activity) isn't turned into a
+// multi-message exchange — the gate on `toolMetas.length > 0` in
+// `resolveNoToolCallNudgeInstruction` scopes the nudge to turns where
+// agentic work is already in progress.
+export const DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT = 1;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
@@ -142,6 +169,8 @@ export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+export const NO_TOOL_CALL_NUDGE_INSTRUCTION =
+  "The previous turn ended without a tool call. If you have fully completed the task, confirm it in one brief sentence and stop. Otherwise, continue now by calling the next concrete tool action — do not restate the plan.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
@@ -381,6 +410,55 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+}
+
+export function resolveNoToolCallNudgeInstruction(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: NoToolCallNudgeAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return null;
+  }
+
+  // Gate to user-visible messaging the same way the empty-response retry does
+  // — a duplicate Slack/Discord/Telegram send after a nudge is worse than the
+  // stall itself.
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
+
+  // Scope the nudge to turns where agentic work is already in progress. For a
+  // pure chat reply with no tool activity, a "did you finish?" nudge would
+  // turn every one-shot Q&A into a two-message exchange. Requiring at least
+  // one prior tool call in this turn keeps the nudge focused on the failure
+  // mode it is designed for: a multi-step workflow that stops mid-task.
+  if (params.attempt.toolMetas.length === 0) {
+    return null;
+  }
+
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant) {
+    return null;
+  }
+  // `toolUse` means the turn ended because the model is waiting for a tool
+  // result — the outer loop will dispatch that tool and keep running, no
+  // nudge needed. `error` is surfaced through the existing error-path, also
+  // not something to nudge on. Anything else (stop / end_turn / undefined
+  // from small models) is the "terminal without tool call" case we want to
+  // catch.
+  if (assistant.stopReason === "toolUse" || assistant.stopReason === "error") {
+    return null;
+  }
+
+  return NO_TOOL_CALL_NUDGE_INSTRUCTION;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {
