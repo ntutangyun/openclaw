@@ -19,6 +19,9 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageError: null,
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
+    // Default to "user has edited the range" so the existing date-interpretation
+    // tests pin the explicit 2026-02-16 window without the auto-advance kicking in.
+    usageDateRangeDirty: true,
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,
@@ -103,6 +106,78 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expect(state.usageError).toBe("request failed");
+  });
+
+  it("auto-advances a stale end-date to today when the picker is not dirty", async () => {
+    // Pin "today" so the assertion is stable regardless of when the test runs.
+    const fakeNow = new Date(2026, 3, 23, 10, 0, 0); // 2026-04-23 local
+    vi.useFakeTimers();
+    vi.setSystemTime(fakeNow);
+    try {
+      const request = vi.fn(async () => ({ totals: { totalTokens: 0 } }));
+      const state = createState(request, {
+        usageStartDate: "2026-04-21",
+        usageEndDate: "2026-04-22",
+        usageDateRangeDirty: false,
+      });
+
+      await loadUsage(state);
+
+      expect(state.usageStartDate).toBe("2026-04-23");
+      expect(state.usageEndDate).toBe("2026-04-23");
+      expect(request).toHaveBeenCalledWith(
+        "sessions.usage",
+        expect.objectContaining({ startDate: "2026-04-23", endDate: "2026-04-23" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a dirty date range alone even when it has fallen behind today", async () => {
+    const fakeNow = new Date(2026, 3, 23, 10, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(fakeNow);
+    try {
+      const request = vi.fn(async () => ({ totals: { totalTokens: 0 } }));
+      const state = createState(request, {
+        usageStartDate: "2026-04-21",
+        usageEndDate: "2026-04-22",
+        usageDateRangeDirty: true,
+      });
+
+      await loadUsage(state);
+
+      expect(state.usageStartDate).toBe("2026-04-21");
+      expect(state.usageEndDate).toBe("2026-04-22");
+      expect(request).toHaveBeenCalledWith(
+        "sessions.usage",
+        expect.objectContaining({ startDate: "2026-04-21", endDate: "2026-04-22" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not advance a future end-date when clock skew runs ahead of the picker", async () => {
+    const fakeNow = new Date(2026, 3, 23, 10, 0, 0);
+    vi.useFakeTimers();
+    vi.setSystemTime(fakeNow);
+    try {
+      const request = vi.fn(async () => ({ totals: { totalTokens: 0 } }));
+      const state = createState(request, {
+        usageStartDate: "2026-04-23",
+        usageEndDate: "2026-04-23",
+        usageDateRangeDirty: false,
+      });
+
+      await loadUsage(state);
+
+      expect(state.usageStartDate).toBe("2026-04-23");
+      expect(state.usageEndDate).toBe("2026-04-23");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("serializes non-Error objects without object-to-string coercion", () => {

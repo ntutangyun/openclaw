@@ -1973,6 +1973,27 @@ function renderUsageOverview(props: ProtocolMonitorProps): TemplateResult {
     ? html`<span class="pm-model-filter-active">${modelFilter}</span>`
     : nothing;
 
+  // When the gateway returned a result (not loading, no error) and every
+  // rolled-up metric is zero, the usage window almost certainly does not
+  // cover the user's active sessions. Render a short hint instead of a grid
+  // of zeros — the date picker lives on the Usage tab.
+  const hasResult = totals !== null || agg !== null;
+  const allZero =
+    msgTotal === 0 && toolCalls === 0 && totalTokens === 0 && (totals?.totalCost ?? 0) === 0;
+  if (!props.usageLoading && hasResult && allZero) {
+    return html`
+      <div class="pm-overview">
+        <div class="pm-filters-title">Usage Overview ${modelLabel}</div>
+        <div class="pm-usage-empty">
+          No activity in the currently selected usage window. Open the
+          <strong>Usage</strong> tab and widen the date range (the picker defaults to "today"; if
+          you have left this page open past midnight, bump the end-date to today's date). The Usage
+          Overview and the Usage tab share the same query.
+        </div>
+      </div>
+    `;
+  }
+
   return html`
     <div class="pm-overview">
       <div class="pm-filters-title">Usage Overview ${modelLabel}</div>
@@ -3398,6 +3419,18 @@ const STYLES = /* css */ `
   /* Usage overview */
   .pm-overview {
     padding: 0;
+  }
+  .pm-usage-empty {
+    padding: 8px 10px;
+    border: 1px dashed #d4d8e8;
+    border-radius: 6px;
+    background: #fafbff;
+    color: #6b7280;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .pm-usage-empty strong {
+    color: #374151;
   }
   .pm-overview-grid {
     display: grid;

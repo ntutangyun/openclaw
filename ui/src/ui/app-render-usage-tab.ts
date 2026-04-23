@@ -70,6 +70,7 @@ export function renderUsageTab(state: AppViewState) {
       filters: {
         onStartDateChange: (date) => {
           state.usageStartDate = date;
+          state.usageDateRangeDirty = true;
           state.usageSelectedDays = [];
           state.usageSelectedHours = [];
           state.usageSelectedSessions = [];
@@ -77,6 +78,7 @@ export function renderUsageTab(state: AppViewState) {
         },
         onEndDateChange: (date) => {
           state.usageEndDate = date;
+          state.usageDateRangeDirty = true;
           state.usageSelectedDays = [];
           state.usageSelectedHours = [];
           state.usageSelectedSessions = [];

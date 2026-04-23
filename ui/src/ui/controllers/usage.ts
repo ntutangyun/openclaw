@@ -17,6 +17,14 @@ export type UsageState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
+  /**
+   * True once the user has explicitly edited either date input in this
+   * session. While false, `loadUsage` auto-advances the end-date to the
+   * browser's "today" before issuing the request, so an app that was kept
+   * open across midnight (or set to "today" on a different day) still pulls
+   * data for the current day instead of a stale window from yesterday.
+   */
+  usageDateRangeDirty: boolean;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -28,6 +36,14 @@ export type UsageState = {
   usageTimeZone: "local" | "utc";
   settings?: { gatewayUrl?: string };
 };
+
+/**
+ * Format a Date as `YYYY-MM-DD` in the browser's local timezone.
+ * Must stay consistent with the initializer in `app.ts`.
+ */
+export function formatLocalDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
@@ -172,6 +188,25 @@ export async function loadUsage(
   if (!client || !state.connected || state.usageLoading) {
     return;
   }
+
+  // Auto-advance a stale date range to today when the user hasn't explicitly
+  // picked one. This fixes the "page left open across midnight" case where the
+  // `usageEndDate` was initialized to the previous calendar day and every
+  // subsequent `sessions.usage` request silently excludes today's activity.
+  // Only applies when no override is being passed and the range hasn't been
+  // manually edited in this session.
+  if (!overrides?.startDate && !overrides?.endDate && !state.usageDateRangeDirty) {
+    const today = formatLocalDate(new Date());
+    if (state.usageEndDate < today) {
+      state.usageEndDate = today;
+      // If the range was a default single-day window, slide the start too so
+      // the user sees "today" rather than "yesterday → today".
+      if (state.usageStartDate < today) {
+        state.usageStartDate = today;
+      }
+    }
+  }
+
   state.usageLoading = true;
   state.usageError = null;
   try {

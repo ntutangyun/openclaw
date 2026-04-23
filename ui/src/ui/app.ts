@@ -357,6 +357,10 @@ export class OpenClawApp extends LitElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
+  // False until the user edits either date picker. When false, `loadUsage`
+  // auto-advances `usageEndDate` to today before the request so a page kept
+  // open across midnight does not silently query a stale window.
+  @state() usageDateRangeDirty = false;
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
