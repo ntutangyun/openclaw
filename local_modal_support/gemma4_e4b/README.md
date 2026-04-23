@@ -348,18 +348,21 @@ human would. This is where its reasoning strength is visible.
 
 Ten live foreground runs against the real task.
 
-| #   | Date        | Time                                  | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                   |
-| --- | ----------- | ------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
-| 1   | 04-21       | 38 min                                | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                      |
-| 2   | 04-22       | 11 min                                | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                         |
-| 3   | 04-22       | ~5 min visible                        | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                        |
-| 4   | 04-22       | **stuck** after minutes read          | no                  | n/a                                      | no                      | empty-response after long thinking                                                        |
-| 5   | 04-23 06:20 | **14 min**                            | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                    |
-| 6   | 04-23 06:41 | stuck after chart                     | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                        |
-| 7   | 04-23 07:46 | stuck after SKILL.md guess            | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`)   |
-| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull` | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)         |
-| 9   | 04-23 12:22 | **failed in 34 s** (Windows node)     | no                  | n/a                                      | no                      | `exec` routed to `host: "node"`; bash script not found on Windows (fixed by `d61afa44a2`) |
-| 10  | 04-23 12:53 | **3 min** (Windows node)              | no                  | **✅ (correct session, motions, DCNs)**  | **✅ both pushes auto** | end-to-end success; cosmetic: § 6 used `### 6.N` + duplicated DCN (SKILL.md tightened)    |
+| #   | Date        | Time                                  | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                                               |
+| --- | ----------- | ------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1   | 04-21       | 38 min                                | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                                                  |
+| 2   | 04-22       | 11 min                                | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                                                     |
+| 3   | 04-22       | ~5 min visible                        | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                                                    |
+| 4   | 04-22       | **stuck** after minutes read          | no                  | n/a                                      | no                      | empty-response after long thinking                                                                                    |
+| 5   | 04-23 06:20 | **14 min**                            | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                                                |
+| 6   | 04-23 06:41 | stuck after chart                     | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                                                    |
+| 7   | 04-23 07:46 | stuck after SKILL.md guess            | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`)                               |
+| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull` | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)                                     |
+| 9   | 04-23 12:22 | **failed in 34 s** (Windows node)     | no                  | n/a                                      | no                      | `exec` routed to `host: "node"`; bash script not found on Windows (fixed by `d61afa44a2`)                             |
+| 10  | 04-23 12:53 | **3 min** (Windows node)              | no                  | **✅ (correct session, motions, DCNs)**  | **✅ both pushes auto** | end-to-end success; cosmetic: § 6 used `### 6.N` + duplicated DCN (SKILL.md tightened)                                |
+| 11  | 04-23 13:21 | stalled twice                         | no                  | partial                                  | no                      | terminal empty + text-only turns not caught by existing retries; `resolveNoToolCallNudgeInstruction` added            |
+| 12  | 04-23 14:06 | **3 min** (Windows node)              | no                  | **✅**                                   | **✅ both pushes**      | end-to-end success with one nudge auto-fire; cosmetic § 3 Agenda table populated with presentations not meeting items |
+| 13  | 04-23 14:31 | chart never rendered                  | no                  | partial (report yes, chart no)           | ❌                      | gemma invoked `bash build_chart.py` six times → bash parse error on Python docstring; wrapper `build_chart.sh` added  |
 
 Read runs 4, 6, 7, 8 together: each of them stalled at an internal
 `thinking → empty content` turn, but the proximate cause drifted each
@@ -415,6 +418,66 @@ prefix) and writing the report from memory instead of the template.
   directive plus correct/wrong worked examples for the § 6 heading
   format so the H2/H3 distinction is learned from an example, not
   from an abstract rule.
+
+Run #12 (2026-04-23 14:06 UTC) closed the post-nudge-deploy path:
+task completed end-to-end in ~3 minutes with one empty-response stall
+auto-recovered by the existing empty-response retry (the new
+`resolveNoToolCallNudgeInstruction` was not needed this run because
+`attempt.assistantTexts` happened to be empty — gemma went
+tool-call-only through Steps 1–3 without intermediate narration).
+Both artifacts pushed, § 6 H2 headings correct, DCN appears once.
+One cosmetic defect remained: § 3 Agenda Overview was populated with
+the 4 technical presentations (DCN-titled) instead of the meeting
+structure items (Call to Order, Agenda Approval, Minutes Approval,
+etc.). Root cause was SKILL.md Step 3c #3 saying "the ordered
+agenda-item list" without a concrete example of what "agenda item"
+looks like vs "technical contribution". Analogous to the H2/H3 fix
+— small models need examples, not abstract labels.
+
+Run #13 (2026-04-23 14:31 UTC) produced the report but lost the
+chart. Gemma invoked `build_chart.py` with `bash` instead of the
+`/opt/python-tools/bin/python` interpreter that SKILL.md Step 4
+specified:
+
+```
+bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/build_chart.py \
+  --affiliations "Qualcomm,Nokia,DeepSig,Intel" \
+  --title "..." \
+  --out ./company_contributions.png
+```
+
+Bash then tried to parse Python and died on the opening `(` in the
+docstring on line 9 (`syntax error near unexpected token '('`).
+Gemma retried the same invocation six times in a row, each time
+varying the `--title` text because it thought the title was the
+problem — six parse errors later it gave up, falsely reported both
+artifacts were created, then hit ENOENT when trying to push the
+(never-created) chart, retried build_chart.py three more times with
+`bash`, and finally pushed only the Markdown report with a broken
+image link.
+
+Root cause was the pattern-match between `fetch_workspace.sh` (a real
+bash script that IS correctly invoked with `bash /path/to/*.sh`) and
+`build_chart.py` / `extract_all.py` (Python files that SKILL.md
+specified with `/opt/python-tools/bin/python ...`). A small model
+cannot reliably reproduce two invocation styles in one skill and will
+generalize the most-visible pattern. The fix makes every skill
+script look the same from the agent's perspective.
+
+- Two new `.sh` wrappers sit next to the `.py` implementations:
+  `build_chart.sh` and `extract_all.sh`. Each does
+  `exec /opt/python-tools/bin/python "$(dirname "$0")/<script>.py"
+"$@"` and shares the `.sh` + `set -euo pipefail` convention with
+  `fetch_workspace.sh`. Every skill entrypoint is now a `.sh` file
+  and every invocation pattern is `bash /path/to/skill.sh args`.
+- SKILL.md Steps 2 and 4 were rewritten to invoke the wrappers, and
+  the "paths" + "hard rules" sections were tightened with an
+  explicit "never invoke the `.py` files directly, never prefix
+  them with `bash`" guardrail so a future agent reading the skill
+  cold cannot fall into the same trap.
+- The skills directory is bind-mounted read-only into the container,
+  so the wrappers land immediately on the next task run without a
+  rebuild.
 
 Run #11 (2026-04-23 13:20 UTC) stalled twice in the same session: once
 at an empty terminal turn after reading `_summary.txt`, and once after
@@ -474,28 +537,29 @@ two-message exchanges.
 Nineteen commits, all on `main` at `github.com:ntutangyun/openclaw`,
 each with pre-commit `pnpm check` green.
 
-| #   | SHA          | Scope      | Summary                                                                                         |
-| --- | ------------ | ---------- | ----------------------------------------------------------------------------------------------- |
-| 01  | `4508414319` | multi-user | stop tracking per-user runtime state                                                            |
-| 02  | `f93409bfa1` | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
-| 03  | `bece61dd56` | multi-user | tighten `ieee-meeting-report` against template drift                                            |
-| 04  | `285ddc4037` | multi-user | require source reads + forbid made-up scripts                                                   |
-| 05  | `b927682985` | multi-user | forbid all delegation in SKILL.md                                                               |
-| 06  | `c136c00f49` | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
-| 07  | `afbecce67a` | multi-user | generalize for any node + ENOENT recovery                                                       |
-| 08  | `03ae15ae8a` | multi-user | call out H2 Q&A headings and require both pushes                                                |
-| 09  | `732d83ace9` | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
-| 10  | `dcca2e3f04` | **core**   | extend empty-response retry to non-strict-agentic models                                        |
-| 11  | `ccef2168fc` | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
-| 12  | `ef9de9de79` | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
-| 13  | `c1a346106c` | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
-| 14  | `5fb7d17b2e` | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
-| 15  | `8f75f7a4ec` | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
-| 16  | `7b0249f387` | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
-| 17  | `18f8e498f1` | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
-| 18  | `d61afa44a2` | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
-| 19  | `a06ca403f2` | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
-| 20  | `2254a2a984` | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
+| #   | SHA           | Scope      | Summary                                                                                         |
+| --- | ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| 01  | `4508414319`  | multi-user | stop tracking per-user runtime state                                                            |
+| 02  | `f93409bfa1`  | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
+| 03  | `bece61dd56`  | multi-user | tighten `ieee-meeting-report` against template drift                                            |
+| 04  | `285ddc4037`  | multi-user | require source reads + forbid made-up scripts                                                   |
+| 05  | `b927682985`  | multi-user | forbid all delegation in SKILL.md                                                               |
+| 06  | `c136c00f49`  | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
+| 07  | `afbecce67a`  | multi-user | generalize for any node + ENOENT recovery                                                       |
+| 08  | `03ae15ae8a`  | multi-user | call out H2 Q&A headings and require both pushes                                                |
+| 09  | `732d83ace9`  | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
+| 10  | `dcca2e3f04`  | **core**   | extend empty-response retry to non-strict-agentic models                                        |
+| 11  | `ccef2168fc`  | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
+| 12  | `ef9de9de79`  | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
+| 13  | `c1a346106c`  | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
+| 14  | `5fb7d17b2e`  | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
+| 15  | `8f75f7a4ec`  | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
+| 16  | `7b0249f387`  | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
+| 17  | `18f8e498f1`  | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
+| 18  | `d61afa44a2`  | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
+| 19  | `a06ca403f2`  | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
+| 20  | `2254a2a984`  | **core**   | no-tool-call nudge: one-shot rescue for terminal turns that stop without a tool call            |
+| 21  | (this commit) | multi-user | add `build_chart.sh` / `extract_all.sh` wrappers so every skill entrypoint is `bash <path>.sh`  |
 
 ### Core code changes explained
 

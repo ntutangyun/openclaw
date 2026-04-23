@@ -13,7 +13,7 @@ Produce a Basic Meeting Participation Report as **Markdown** from a workspace fo
 
 - **Skill root:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/`
 - **Template:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/assets/Template_Basic_Meeting_Report.md`
-- **Scripts:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/{fetch_workspace.sh,extract_all.py,build_chart.py}`
+- **Scripts:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/{fetch_workspace.sh,extract_all.sh,build_chart.sh}` — invoke every script with `bash <path>`. The two `.sh` wrappers delegate to the underlying `extract_all.py` / `build_chart.py` with the correct Python interpreter, so **you never need to run the `.py` files directly and must NOT prefix them with `bash`** (a Python file run under bash fails with `syntax error near unexpected token '('`).
 - **References:** `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md`
 
 ## Agent working directory
@@ -23,8 +23,9 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
 ## Hard rules for this task
 
 - The tools you need for this task are `read`, `write`, `exec`, and `process` (for long-running `exec`). `read` + `write` alone cover Steps 3 and 5. Do the entire task yourself in this session — the user is watching the chat turn by turn.
-- **Only three scripts exist under `/home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/`:**
-  `fetch_workspace.sh`, `extract_all.py`, `build_chart.py`.
+- **Only three entrypoint scripts are meant to be invoked, all via `bash <path>`:**
+  `fetch_workspace.sh`, `extract_all.sh`, `build_chart.sh`.
+  The same directory also contains `extract_all.py` and `build_chart.py` — those are the implementations that the `.sh` wrappers delegate to with the correct Python interpreter. **Never invoke the `.py` files directly, and NEVER prefix them with `bash`** — that fails with `syntax error near unexpected token '('` because bash cannot parse a Python docstring. Always invoke the `.sh` wrapper.
   Do not invent or invoke any other name (e.g. `generate_report.py`, `synthesize.py`, `fill_template.py`, `check_report.py`). **If a synthesis or verifier script appears to be missing, it is not missing — the synthesis is YOUR job, done via `read` + `write`.**
 - **You MUST `read` the minutes file, the agenda file, and every technical contribution in `./_extracted/` before you produce a `write` to `./Report_*.md`.** Reading `./_extracted/_summary.txt` is not a substitute. Without reading the source documents, you will fabricate motion numbers, DCNs, author names, affiliations, and Q&A — which is a task failure, not a stylistic choice.
 - Use `exec` (not `read`) for any path under `/home/<user>/...` or anything described as being on a remote node.
@@ -35,7 +36,7 @@ Your `exec` tool runs in `/home/node/.openclaw/workspace/`. All relative paths l
 ## Step 0 — Decide where the inputs live
 
 - **Remote node** (most common) — the user's `.pptx`/`.docx` live on a named OpenClaw node. The node can be Linux (paths look like `/home/<user>/...`) or Windows (paths look like `C:\Users\<user>\...`). Any path the user describes as being "on <node>" is REMOTE and you CANNOT read it with the local `read` tool — pull it first. Use the exact node name and path the user gave; if unsure about the node name, run `exec openclaw nodes status` on the gateway to list available nodes.
-- **Gateway workspace** (rare) — already under `/home/node/.openclaw/workspace/`. Skip Step 1 and point `extract_all.py` at that folder.
+- **Gateway workspace** (rare) — already under `/home/node/.openclaw/workspace/`. Skip Step 1 and point `extract_all.sh` at that folder.
 
 ## Step 1 — Pull the workspace folder (remote case only)
 
@@ -52,8 +53,7 @@ bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_wor
 ## Step 2 — Extract every input document to Markdown
 
 ```bash
-/opt/python-tools/bin/python \
-  /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/extract_all.py \
+bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/extract_all.sh \
   --input  ./input \
   --output ./_extracted
 ```
@@ -119,11 +119,10 @@ See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-s
 
 ## Step 4 — Render the company-contribution chart (MANDATORY — do not skip)
 
-You MUST run `build_chart.py` before Step 5. The template's § 5 embeds `./company_contributions.png`; if that file does not exist, Step 6b will fail with "local source does not exist" and the remote report will have a broken image link.
+You MUST run `build_chart.sh` before Step 5. The template's § 5 embeds `./company_contributions.png`; if that file does not exist, Step 6b will fail with "local source does not exist" and the remote report will have a broken image link.
 
 ```bash
-/opt/python-tools/bin/python \
-  /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/build_chart.py \
+bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/build_chart.sh \
   --affiliations "Qualcomm,Nokia,DeepSig,Intel" \
   --title "Presentations by contributing company (<Meeting> <Date>)" \
   --out ./company_contributions.png
