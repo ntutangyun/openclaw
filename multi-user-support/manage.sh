@@ -57,6 +57,13 @@ Environment variables:
   OPENCLAW_MULTI_BASE_PORT    Base port for auto-assignment (default: 19000)
   OPENCLAW_EXTENSIONS         Space-separated extensions to include in build
   OPENCLAW_VARIANT            Image variant: "default" or "slim"
+  OPENCLAW_MARKITDOWN_EXTRAS  markitdown pip extras to install (default: "docx,pptx"
+                              for faster builds; set to "all" to restore the
+                              upstream Office+PDF+xlsx+audio+youtube bundle)
+  OPENCLAW_DOCKER_APT_UPGRADE Set to "1" to run apt-get upgrade during build
+                              (default: 0 — skipped; saves 1-3 min on low-bandwidth
+                              hosts. The pinned node base image already ships
+                              weekly security patches)
   OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
   VLLM_HOST                   vLLM API host (default: http://localhost:8000)
 EOF
@@ -348,11 +355,24 @@ build_image() {
     fail "Dockerfile not found at $dockerfile. Make sure this folder is inside the openclaw repo."
   fi
 
+  # Lean defaults for multi-user-support builds:
+  #   OPENCLAW_MARKITDOWN_EXTRAS=docx,pptx — drops pandas (79 MB),
+  #     speech_recognition (43 MB), pdf stack, Azure SDK, youtube-transcript-api
+  #     etc. from the image. The multi-user-support workflows only need
+  #     Office-file extraction for the bundled skills.
+  #     Override with `OPENCLAW_MARKITDOWN_EXTRAS=all bash manage.sh rebuild`
+  #     to restore the upstream full-extras bundle.
+  #   OPENCLAW_DOCKER_APT_UPGRADE=0 — skip the `apt-get upgrade -y` on the
+  #     already-fresh node:24-bookworm base. Saves 1-3 min on low-bandwidth
+  #     / low-CPU hosts (Jetson) and has no practical security impact as long
+  #     as the base image digest is pinned and rebuilt periodically.
   echo "==> Building Docker image: $DEFAULT_IMAGE"
   docker build \
     --network=host \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS:-}" \
     --build-arg "OPENCLAW_VARIANT=${OPENCLAW_VARIANT:-default}" \
+    --build-arg "OPENCLAW_MARKITDOWN_EXTRAS=${OPENCLAW_MARKITDOWN_EXTRAS:-docx,pptx}" \
+    --build-arg "OPENCLAW_DOCKER_APT_UPGRADE=${OPENCLAW_DOCKER_APT_UPGRADE:-0}" \
     -t "$DEFAULT_IMAGE" \
     -f "$dockerfile" \
     "$REPO_ROOT"

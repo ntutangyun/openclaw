@@ -16,6 +16,14 @@ ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_APT_UPGRADE=1
+# markitdown extras installed into /opt/python-tools. Default `all` preserves
+# the upstream product behavior (Office + PDF + HTML + Excel + audio + YouTube
+# transcripts). Build with `--build-arg OPENCLAW_MARKITDOWN_EXTRAS="docx,pptx"`
+# to drop pandas, numpy.libs, speech_recognition, pdf stack, Azure SDK,
+# youtube-transcript-api — saves ~200 MB in the image and ~3-5 min of ARM pip
+# install on low-spec hosts (Jetson, etc.). onnxruntime + numpy stay because
+# markitdown hard-requires `magika` for file-type detection.
+ARG OPENCLAW_MARKITDOWN_EXTRAS=all
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -71,8 +79,12 @@ COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
-RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+# The pnpm content-addressable store lives in a regular layer directory (not a
+# BuildKit cache mount) so `runtime-assets` can reuse it when `pnpm prune --prod`
+# re-resolves against the trimmed workspace. Cache mounts here were unreliable:
+# `docker builder prune` or cache aging could wipe them while the install layer
+# stayed cached, leaving prune with an empty store and a 25+ minute cold fetch.
+RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Fail fast here if the Matrix native binding did not materialize after install.
@@ -207,8 +219,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     fi
 
 # Install Python environment and document processing tools.
-# markitdown[all] converts Office/PDF/HTML/etc to Markdown.
+# markitdown converts Office/PDF/HTML/etc to Markdown. Extras are controlled
+# by OPENCLAW_MARKITDOWN_EXTRAS (default `all`, override to e.g. `docx,pptx`
+# to drop pandas/pdf/audio).
 # python-docx and python-pptx provide direct .docx/.pptx manipulation.
+ARG OPENCLAW_MARKITDOWN_EXTRAS
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
@@ -216,7 +231,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       python3 python3-pip python3-venv && \
     python3 -m venv /opt/python-tools && \
     /opt/python-tools/bin/pip install --no-cache-dir \
-      'markitdown[all]' python-docx python-pptx && \
+      "markitdown[${OPENCLAW_MARKITDOWN_EXTRAS}]" python-docx python-pptx && \
     ln -sf /opt/python-tools/bin/markitdown /usr/local/bin/markitdown && \
     ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python-tools && \
     ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python3 && \
