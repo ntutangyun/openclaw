@@ -51,9 +51,31 @@ was 3, but the retry was silently vetoed by a coarse safety gate
 including idempotent ones like `fetch_workspace.sh pull`. The
 2026-04-23 evening commit `18f8e498f1` narrows that gate to just
 user-visible messaging side effects, so file / exec / cron mutations no
-longer block the retry. Reliability on the 5-minute task should now
-climb substantially once the image is rebuilt — the rescue mechanism
-finally gets a chance to fire on the dominant failure mode.
+longer block the retry.
+
+Run #9 (2026-04-23 12:22 UTC, Windows CapybaraHome node) surfaced a
+new failure mode unrelated to empty-response: gemma routed every
+`exec` for `fetch_workspace.sh` with `"host": "node"`, so the bash
+script could not be found on the Windows target. The proximate cause
+was `multi-user-support/manage.sh ask-off <user> <node>`, which
+installs a workspace `TOOLS.md` that advertised `host: "node"` as "use
+for Windows commands"; gemma pattern-matched on the Windows path in
+the arguments, not the Linux binary in the command. Commit
+`d61afa44a2` rewrites the generated `TOOLS.md` to forbid `host: "node"`
+entirely and mandate a single "pull-to-gateway → work locally → push
+back" workflow through `openclaw nodes copy`.
+
+Run #10 (2026-04-23 12:50-12:53 UTC) closed the loop: the TOOLS.md
+rewrite + all prior fixes delivered a **fully grounded, both-pushes
+report in ~3 minutes**, with correct minutes selection, correct DCNs,
+and both artifacts pushed. Two cosmetic defects remained — § 6 Q&A
+used `### 6.N` (H3) instead of `## 6.N` (H2), and the § 6 subsection
+titles duplicated the DCN. Root cause: gemma skipped the `read` of
+the template after one path-guess ENOENT and wrote the report from
+memory. The 2026-04-23 commit following Run #10 tightens SKILL.md
+Step 5 with an explicit "use the absolute path verbatim, do not prefix
+with `./_extracted/`" directive plus correct/wrong worked examples
+for the Q&A heading format.
 
 Also shipped on 2026-04-23: major build-speed cuts. The ~32 min
 rebuild on Jetson Orin drops to **~8-12 min on warm rebuilds** via
@@ -324,18 +346,20 @@ human would. This is where its reasoning strength is visible.
 
 ## 5. Iteration history
 
-Eight live foreground runs against the real task.
+Ten live foreground runs against the real task.
 
-| #   | Date        | Time                                  | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                 |
-| --- | ----------- | ------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
-| 1   | 04-21       | 38 min                                | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                    |
-| 2   | 04-22       | 11 min                                | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                       |
-| 3   | 04-22       | ~5 min visible                        | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                      |
-| 4   | 04-22       | **stuck** after minutes read          | no                  | n/a                                      | no                      | empty-response after long thinking                                                      |
-| 5   | 04-23 06:20 | **14 min**                            | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                  |
-| 6   | 04-23 06:41 | stuck after chart                     | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                      |
-| 7   | 04-23 07:46 | stuck after SKILL.md guess            | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`) |
-| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull` | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)       |
+| #   | Date        | Time                                  | Delegation?         | Grounded?                                | Chart pushed?           | Verdict                                                                                   |
+| --- | ----------- | ------------------------------------- | ------------------- | ---------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| 1   | 04-21       | 38 min                                | no                  | roughly                                  | ✅ (manual nudge)       | works but long; tool-selection shaky                                                      |
+| 2   | 04-22       | 11 min                                | no                  | **fabricated**                           | ✅ (manual nudge)       | structure right, content invented                                                         |
+| 3   | 04-22       | ~5 min visible                        | **yes (sub-agent)** | ✅                                       | ✅                      | correct but opaque                                                                        |
+| 4   | 04-22       | **stuck** after minutes read          | no                  | n/a                                      | no                      | empty-response after long thinking                                                        |
+| 5   | 04-23 06:20 | **14 min**                            | **no**              | **✅ (all DCNs, motions, Q&A grounded)** | **✅ both pushes auto** | **first fully autonomous correct run**                                                    |
+| 6   | 04-23 06:41 | stuck after chart                     | no                  | n/a                                      | no                      | empty-response — retry blocked by side-effect gate                                        |
+| 7   | 04-23 07:46 | stuck after SKILL.md guess            | no                  | n/a                                      | no                      | gemma substituted `/app/skills/…` path and bailed on one ENOENT (fixed by `5fb7d17b2e`)   |
+| 8   | 04-23 09:09 | stuck after `fetch_workspace.sh pull` | no                  | n/a                                      | no                      | empty response, retry vetoed by `hadPotentialSideEffects` (fixed by `18f8e498f1`)         |
+| 9   | 04-23 12:22 | **failed in 34 s** (Windows node)     | no                  | n/a                                      | no                      | `exec` routed to `host: "node"`; bash script not found on Windows (fixed by `d61afa44a2`) |
+| 10  | 04-23 12:53 | **3 min** (Windows node)              | no                  | **✅ (correct session, motions, DCNs)**  | **✅ both pushes auto** | end-to-end success; cosmetic: § 6 used `### 6.N` + duplicated DCN (SKILL.md tightened)    |
 
 Read runs 4, 6, 7, 8 together: each of them stalled at an internal
 `thinking → empty content` turn, but the proximate cause drifted each
@@ -359,9 +383,38 @@ the rescue. The 2026-04-23 commits address each one independently:
   mutating tool) to just `didSendViaMessagingTool`, so file/exec/cron
   side effects no longer block the rescue.
 
-All four land together in the next rebuild. Run #9 will test the
-full stack; any remaining failure should surface a new signature
-rather than re-run one of these four.
+Run #9 then surfaced a fresh signature when the workload moved from
+the Jetson Linux node to a Windows CapybaraHome node: every
+`exec` for `fetch_workspace.sh` was sent with `"host": "node"`, the
+bash script path was a gateway path, Windows returned
+`The system cannot find the path specified.` three times in a row,
+and gemma gave up in 34 seconds. Root cause was not the skill but the
+generated `TOOLS.md` that `manage.sh ask-off <user> <node>` installs:
+Rule 1 said "use `host: node` for Windows commands", and gemma
+classified the command as Windows because its **arguments** were a
+Windows path, even though the **binary** was Linux `bash`. A small
+model cannot be trusted to resolve that category conflict.
+
+- `d61afa44a2` (04-23 pm) — rewrote `cmd_ask_off`'s generated
+  `TOOLS.md` to forbid `host: "node"` entirely and document a single
+  "pull to gateway, work in Linux, push back" workflow via `openclaw
+nodes copy`. Removes the `dir`/`type`/`markitdown`-on-node guidance
+  that was tempting small models into Windows-native exec paths.
+
+Run #10 closed the end-to-end path in ~3 minutes on the Windows node,
+with correct session-minutes selection, correct motion numbers, and
+both artifacts pushed. Two cosmetic defects remained — § 6 Q&A used
+`### 6.N` (H3) instead of `## 6.N` (H2), and the § 6 subsection titles
+repeated the DCN (`### 6.1 11-26/512r0 (Title) (11-26/512r0)`). Root
+cause was gemma bailing on a single ENOENT when it tried to read the
+template under `./_extracted/skills/…` (a made-up working-directory
+prefix) and writing the report from memory instead of the template.
+
+- SKILL.md Step 5 now carries an explicit "use the absolute path
+  verbatim, do not prefix it with `./_extracted/` / `./input/`"
+  directive plus correct/wrong worked examples for the § 6 heading
+  format so the H2/H3 distinction is learned from an example, not
+  from an abstract rule.
 
 ---
 
@@ -401,28 +454,30 @@ rather than re-run one of these four.
 
 ## 7. Code changes made to OpenClaw core
 
-Seventeen commits, all on `main` at `github.com:ntutangyun/openclaw`,
+Nineteen commits, all on `main` at `github.com:ntutangyun/openclaw`,
 each with pre-commit `pnpm check` green.
 
-| #   | SHA          | Scope      | Summary                                                                                       |
-| --- | ------------ | ---------- | --------------------------------------------------------------------------------------------- |
-| 01  | `4508414319` | multi-user | stop tracking per-user runtime state                                                          |
-| 02  | `f93409bfa1` | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                         |
-| 03  | `bece61dd56` | multi-user | tighten `ieee-meeting-report` against template drift                                          |
-| 04  | `285ddc4037` | multi-user | require source reads + forbid made-up scripts                                                 |
-| 05  | `b927682985` | multi-user | forbid all delegation in SKILL.md                                                             |
-| 06  | `c136c00f49` | multi-user | skip read-only skills mount in `manage.sh` chown fix                                          |
-| 07  | `afbecce67a` | multi-user | generalize for any node + ENOENT recovery                                                     |
-| 08  | `03ae15ae8a` | multi-user | call out H2 Q&A headings and require both pushes                                              |
-| 09  | `732d83ace9` | multi-user | drop `check_report.py`; gate against wrong-session minutes                                    |
-| 10  | `dcca2e3f04` | **core**   | extend empty-response retry to non-strict-agentic models                                      |
-| 11  | `ccef2168fc` | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user               |
-| 12  | `ef9de9de79` | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                    |
-| 13  | `c1a346106c` | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                 |
-| 14  | `5fb7d17b2e` | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT         |
-| 15  | `8f75f7a4ec` | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade |
-| 16  | `7b0249f387` | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper              |
-| 17  | `18f8e498f1` | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)    |
+| #   | SHA           | Scope      | Summary                                                                                         |
+| --- | ------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| 01  | `4508414319`  | multi-user | stop tracking per-user runtime state                                                            |
+| 02  | `f93409bfa1`  | multi-user | add `ieee-meeting-report` skill and auto-mount wiring                                           |
+| 03  | `bece61dd56`  | multi-user | tighten `ieee-meeting-report` against template drift                                            |
+| 04  | `285ddc4037`  | multi-user | require source reads + forbid made-up scripts                                                   |
+| 05  | `b927682985`  | multi-user | forbid all delegation in SKILL.md                                                               |
+| 06  | `c136c00f49`  | multi-user | skip read-only skills mount in `manage.sh` chown fix                                            |
+| 07  | `afbecce67a`  | multi-user | generalize for any node + ENOENT recovery                                                       |
+| 08  | `03ae15ae8a`  | multi-user | call out H2 Q&A headings and require both pushes                                                |
+| 09  | `732d83ace9`  | multi-user | drop `check_report.py`; gate against wrong-session minutes                                      |
+| 10  | `dcca2e3f04`  | **core**   | extend empty-response retry to non-strict-agentic models                                        |
+| 11  | `ccef2168fc`  | **core**   | hide sub-agent tools from system prompt when denied; default-deny in multi-user                 |
+| 12  | `ef9de9de79`  | **ui**     | auto-advance stale usage date-range + empty-state hint in protocol monitor                      |
+| 13  | `c1a346106c`  | **core**   | raise self-hosted output budget 8K → 16K and empty-response retry limit 1 → 3                   |
+| 14  | `5fb7d17b2e`  | **core**   | pin `<location>` as authoritative in skills prompt; forbid abandoning on first ENOENT           |
+| 15  | `8f75f7a4ec`  | **build**  | expose `OPENCLAW_MARKITDOWN_EXTRAS`; multi-user defaults to `docx,pptx` and skips apt-upgrade   |
+| 16  | `7b0249f387`  | **build**  | pnpm store BuildKit cache mount + `manage.sh cache-warm` one-shot seeding helper                |
+| 17  | `18f8e498f1`  | **core**   | narrow empty-response retry side-effect gate to messaging-only (unblock file/exec retries)      |
+| 18  | `d61afa44a2`  | multi-user | rewrite generated `TOOLS.md` to forbid `host: "node"`; mandate pull/copy-back for all node work |
+| 19  | (this commit) | multi-user | SKILL.md Step 5: verbatim template path + correct/wrong worked examples for § 6 headings        |
 
 ### Core code changes explained
 
@@ -525,6 +580,75 @@ first rebuild after `docker builder prune` runs warm. Smoke-tested
 locally: 135 s bind-mount transfer + 365 s cache copy = ~8 min one-time
 cost, plus unlimited warm-build savings afterwards.
 
+**`d61afa44a2` — `multi-user-support/manage.sh` (`cmd_ask_off` heredoc)**
+
+`manage.sh ask-off <user> <node>` generates a workspace-level
+`TOOLS.md` to teach the agent how to pick an `exec` host. The old
+content led with "use `host: gateway` for Linux commands and `host:
+node` for Windows commands", plus an "Exec Tool — Host Selection"
+section, a "Document Extraction (Windows Node)" section that said
+always run `markitdown` on the node, and a "When to use pull/push vs.
+direct node execution" section that kept a loophole for `dir`,
+`type`, and `markitdown` on the node.
+
+That structure works for a capable model that can tell the difference
+between "the binary is Linux `bash`" and "the arguments happen to
+contain a Windows path", but gemma4:e4b cannot — in Run #9 it
+pattern-matched on the Windows path in the arguments and sent
+`bash /home/node/.openclaw/workspace/skills/.../fetch_workspace.sh` to
+the Windows node, which failed three times with "The system cannot
+find the path specified." before the model gave up.
+
+The rewrite replaces all of the above with a single workflow:
+
+1. Pull the files from the node into the gateway workspace.
+2. Work on them locally in Linux.
+3. Push the results back.
+
+And a hard rule: never set `"host": "node"` on `exec`; never run
+`dir`, `type`, `mkdir`, `markitdown`, Python, or any command directly
+on the node. All shell commands — `openclaw nodes copy`, `bash`,
+`python`, skill scripts — run on the gateway with `"host":
+"gateway"`. Small-model agents now have one path, not two, and the
+path does not depend on correctly classifying arguments.
+
+The container's workspace copy is refreshed in-place by re-running
+`manage.sh ask-off <user> <node>`, which also performs a
+`--force-recreate` of the gateway.
+
+**Workspace skill tightening (SKILL.md Step 5)**
+
+Run #10 exposed a secondary failure mode in the skill itself: gemma
+tried to read the template at `./_extracted/skills/ieee-meeting-report/
+assets/Template_Basic_Meeting_Report.md` — a path that does not exist
+because the agent prefixed the absolute skill path with its working
+directory. A single ENOENT was enough for it to skip reading the
+template and write the report from memory. The report came out
+structurally close but with `### 6.N` (H3) instead of `## 6.N` (H2)
+for § 6 Q&A subsections and duplicated DCN in each subsection title.
+
+Step 5 now leads with:
+
+- "Use the absolute path above verbatim. Do NOT prefix it with
+  `./_extracted/`, `./input/`, or any working-directory path — the
+  template lives under the skill directory, not in your working
+  directory."
+- "If the first `read` returns ENOENT, re-check the path and retry.
+  Do NOT skip this step and try to reconstruct the template from
+  memory — that is how H2/H3 heading violations and duplicated-DCN
+  subsection titles sneak into the output."
+
+The § 6 checklist entry also now carries three worked examples:
+
+- Correct: `## 6.1 AI Offload Standardization (11-26/512r0)`
+- Wrong (H3): `### 6.1 AI Offload Standardization (11-26/512r0)`
+- Wrong (DCN repeated): `### 6.1 11-26/512r0 (AI Offload
+Standardization) (11-26/512r0)`
+
+Small models learn from examples more reliably than from abstract
+rules, and both defects observed in Run #10 now have a direct
+counter-example in the prompt.
+
 **`18f8e498f1` — `src/agents/pi-embedded-runner/run/incomplete-turn.ts`**
 
 Run #8 showed the empty-response retry was **silently vetoed** by the
@@ -591,6 +715,9 @@ Call to order | Completed |`") would fix this; not yet done.
 - **Agenda-DCN revision ambiguity** — gemma sometimes picks `r0` (as
   quoted in Motion 33) and sometimes `r1` (the latest). Both are
   defensible; minor.
+- **Motion Booklet extraction** — Run #10 left Motion Booklet as
+  `11-24/765r10 (Not directly readable)` rather than extracting a
+  clean DCN from the agenda. Partial credit, cosmetic.
 - **Deep-context empty-response stalls** past the 3-retry budget —
   theoretically possible if the model is genuinely stuck on a
   Harmony-token leak. Hasn't been observed after the retry-gate fix
@@ -730,15 +857,18 @@ Expected tool-call sequence for a successful run:
 
 ## Appendix A — file-by-file diff footprint
 
-17 commits; cumulative source-tree changes:
+19 commits; cumulative source-tree changes:
 
 ```
 .gitignore                                          +1 rule (multi-user-support/users/)
 multi-user-support/.gitignore                       +1 rule
-multi-user-support/manage.sh                        +~370 lines (skills mount, tools.deny default,
+multi-user-support/manage.sh                        +~350 lines (skills mount, tools.deny default,
                                                      explicit maxTokens in sync-*, cache-warm command,
-                                                     markitdown-extras + apt-upgrade build args)
-multi-user-support/skills/ieee-meeting-report/      new (SKILL.md + 3 scripts + 1 reference + 1 asset)
+                                                     markitdown-extras + apt-upgrade build args,
+                                                     rewritten TOOLS.md heredoc in cmd_ask_off)
+multi-user-support/skills/ieee-meeting-report/      new (SKILL.md + 3 scripts + 1 reference + 1 asset),
+                                                     + Step 5 verbatim-path directive and worked-example
+                                                     fixes for § 6 Q&A headings
 Dockerfile                                          +OPENCLAW_MARKITDOWN_EXTRAS ARG, pnpm BuildKit cache mount
                                                      on install + prune, updated comments
 src/agents/self-hosted-provider-defaults.ts         +1 constant change (8192 → 16384)

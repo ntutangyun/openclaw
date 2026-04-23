@@ -141,6 +141,8 @@ After the script exits, verify the PNG exists with `ls -l ./company_contribution
 read /home/node/.openclaw/workspace/skills/ieee-meeting-report/assets/Template_Basic_Meeting_Report.md
 ```
 
+Use the absolute path above **verbatim**. Do NOT prefix it with `./_extracted/`, `./input/`, or any working-directory path — the template lives under the skill directory, not in your working directory. If the first `read` returns ENOENT, re-check the path (it must start with `/home/node/.openclaw/workspace/skills/`) and retry. Do NOT skip this step and try to reconstruct the template from memory — that is how H2/H3 heading violations and duplicated-DCN subsection titles sneak into the output.
+
 Then produce the filled report with a single `write` tool call to `./Report_Basic_<Meeting>_<Date>.md` (e.g. `./Report_Basic_AIML_SC_March2026_Plenary.md`). **Do not invent a new structure** — preserve every heading, every table header, and the chart image reference from the template.
 
 ### Template-preservation checklist (all must be true in the output)
@@ -160,7 +162,10 @@ Then produce the filled report with a single `write` tool call to `./Report_Basi
 6. **§ 4 Motions and Votes** contains a Markdown table with header `| Motion # | Description | Mover | Second | Result |`, one real row per motion.
 7. **§ 5 Presentations** contains a Markdown table with header `| DCN | Title | Author | Affiliation | Key points | Comments |`, one real row per presentation (all 6 columns filled).
 8. **§ 5** also contains the chart image reference: `![Figure 1. Presentations by contributing company](./company_contributions.png)` with a caption line below it.
-9. **§ 6 Questions & Answers Summary** has one `## 6.N <Title> (<DCN>)` subsection per presentation that had Q&A, with bulleted `- Q: ...` / `- A: ...` pairs. **Use exactly two `#` (H2), not three (`### 6.N`) or four.** The template uses H2 for these subsections; the verifier only matches `## 6.N`.
+9. **§ 6 Questions & Answers Summary** has one `## 6.N <Title> (<DCN>)` subsection per presentation that had Q&A, with bulleted `- Q: ...` / `- A: ...` pairs. **Use exactly two `#` (H2), not three (`### 6.N`) or four.** The template uses H2 for these subsections. The DCN appears **once** at the end, in parentheses — do not also inline it at the start of the title.
+   - **Correct:** `## 6.1 AI Offload Standardization (11-26/512r0)`
+   - **Wrong (H3):** `### 6.1 AI Offload Standardization (11-26/512r0)`
+   - **Wrong (DCN repeated):** `### 6.1 11-26/512r0 (AI Offload Standardization) (11-26/512r0)`
 10. **§ 7 Next Meeting & Action Items** has all 4 labels filled (`Next Meeting`, `Teleconference Planned`, `Contribution Deadline`, `Expected Topics`).
 11. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed** (those are notes for the author, not part of the final report).
 12. **Zero `*[...]*` or `*[e.g.,...]*` placeholder strings remain** anywhere in the output.
