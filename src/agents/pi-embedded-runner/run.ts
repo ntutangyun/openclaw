@@ -1691,6 +1691,18 @@ export async function runEmbeddedPiAgent(
           }
 
           const payloadCount = payloadsWithToolMedia?.length ?? 0;
+          // Reset the no-tool-call nudge counter when the attempt made
+          // forward progress via a successful tool call. This gives us
+          // "once per stall" semantics instead of "once per user message":
+          // each distinct no-tool-call terminal after prior progress gets a
+          // rescue nudge, but a pure no-tool-call loop (where the nudge
+          // itself yields no progress) still trips the cap and exits. Small
+          // models like ollama/gemma4:e4b frequently stall multiple times in
+          // one user turn with thinking-then-text-then-stop patterns between
+          // tool clusters; one nudge per user message is not enough.
+          if (attempt.toolMetas.length > 0 && !attempt.lastToolError) {
+            noToolCallNudgeAttempts = 0;
+          }
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,

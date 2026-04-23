@@ -108,14 +108,17 @@ export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 3;
 // Harmony-token leak. The existing empty/reasoning/planning-only retries miss
 // both cases: empty-response bails out once any earlier text is in
 // `assistantTexts`, and planning/reasoning-only are gated to the GPT-5
-// strict-agentic contract. This nudge is a single per-user-message rescue
-// for both cases. If the task is genuinely done, one extra inference
-// confirms it and stops; if gemma stalled, the nudge prompt ("continue with
-// the next concrete tool action") typically unsticks the loop. Limited to 1
-// so a pure Q&A reply (no prior tool activity) isn't turned into a
-// multi-message exchange — the gate on `toolMetas.length > 0` in
-// `resolveNoToolCallNudgeInstruction` scopes the nudge to turns where
-// agentic work is already in progress.
+// strict-agentic contract. This nudge covers both cases.
+//
+// The limit here is "once per STALL", not "once per user message": the run
+// loop resets the counter whenever an attempt makes forward progress via a
+// successful tool call, so multiple distinct stalls inside one user turn
+// each get one rescue. The limit of 1 still matters when the model is in a
+// pure no-tool-call loop (text-only reply → nudge → text-only reply again)
+// — in that case no reset happens, the limit bites, and the run exits
+// cleanly instead of nudging forever. Combined with the
+// `toolMetas.length > 0` gate in `resolveNoToolCallNudgeInstruction`, a
+// pure Q&A reply with no prior tool activity also stays single-message.
 export const DEFAULT_NO_TOOL_CALL_NUDGE_LIMIT = 1;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",

@@ -438,6 +438,116 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("empty response detected"));
   });
 
+  it("re-fires the no-tool-call nudge when each stall follows forward progress", async () => {
+    // Gemma-style stall pattern: call tools → stall with text-only terminal
+    // → recover via nudge → call tools again → stall again → recover again.
+    // The nudge limit is 1 per stall, not 1 per user message, so each
+    // distinct stall (progress then terminal without tool_use) gets its own
+    // rescue. The counter resets when the prior attempt made forward
+    // progress via a successful tool call.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+
+    // Attempt 1: called a tool then stalled with text-only terminal.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["I will start by reading the sources."],
+        toolMetas: [{ toolName: "read" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "I will start by reading the sources." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    // Attempt 2 (after nudge #1): more tool calls, then stall again.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Now proceeding to the next step."],
+        toolMetas: [{ toolName: "read" }, { toolName: "exec" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "Now proceeding to the next step." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    // Attempt 3 (after nudge #2): concludes with no tool activity — the
+    // `toolMetas.length > 0` gate in resolveNoToolCallNudgeInstruction
+    // declines a third nudge here, so the loop exits cleanly.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Task complete."],
+        toolMetas: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "gemma4:e4b",
+          content: [{ type: "text", text: "Task complete." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "gemma4:e4b",
+      runId: "run-no-tool-call-nudge-reset",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const thirdCall = mockedRunEmbeddedAttempt.mock.calls[2]?.[0] as { prompt?: string };
+    expect(secondCall.prompt).toContain(NO_TOOL_CALL_NUDGE_INSTRUCTION);
+    expect(thirdCall.prompt).toContain(NO_TOOL_CALL_NUDGE_INSTRUCTION);
+    // Should see exactly two nudge log lines, one per stall.
+    const nudgeWarnCalls = mockedLog.warn.mock.calls.filter((call) => {
+      const first = call[0];
+      return typeof first === "string" && first.includes("no-tool-call terminal turn detected");
+    });
+    expect(nudgeWarnCalls.length).toBe(2);
+  });
+
+  it("does not re-fire the nudge when the model keeps replying text-only with no progress", async () => {
+    // Same user message, but every attempt replies with text and zero tool
+    // calls. The `toolMetas.length === 0` gate in
+    // `resolveNoToolCallNudgeInstruction` blocks the nudge after the first
+    // attempt (no prior tool activity), so the loop exits cleanly without
+    // spinning forever.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["4"],
+        toolMetas: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "4" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-no-tool-call-nudge-pure-chat",
+    });
+
+    // Exactly one attempt — the nudge gate on `toolMetas.length > 0`
+    // refuses to fire for pure chat, so the loop exits after the first
+    // response.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces an error after exhausting empty-response retries", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
