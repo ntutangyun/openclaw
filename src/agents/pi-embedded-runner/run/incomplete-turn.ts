@@ -434,11 +434,21 @@ export function resolveNoToolCallNudgeInstruction(params: {
     params.timedOut ||
     params.attempt.clientToolCall ||
     params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.didSendDeterministicApprovalPrompt
   ) {
     return null;
   }
+
+  // `lastToolError` is intentionally NOT a short-circuit here. The empty-response
+  // and reasoning-only retries both bail on tool errors (they assume the error
+  // surface handles it), but small local models frequently hit a recoverable
+  // tool error (e.g. ENOENT on a wrong skill path) and then terminate the turn
+  // thinking-only with no visible text — the user sees a failed tool card and
+  // silence. The nudge is the only rescue for that pattern, and its instruction
+  // ("continue now by calling the next concrete tool action") is exactly what
+  // the model should do: retry with a corrected argument. Capped at 1/turn so
+  // it cannot loop, and still gated by stopReason below so an in-progress
+  // toolUse is untouched.
 
   // Gate to user-visible messaging the same way the empty-response retry does
   // — a duplicate Slack/Discord/Telegram send after a nudge is worse than the

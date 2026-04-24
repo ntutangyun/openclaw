@@ -1222,32 +1222,36 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(nudge).toBeNull();
   });
 
-  it("does not nudge when the last tool call errored", () => {
-    // `lastToolError` is already surfaced to the user as its own signal;
-    // nudging on top of it would be confusing and might cause the model
-    // to retry the failed tool (the nudge says "call the next concrete
-    // tool action").
+  it("nudges after a tool error when the model ghosts the user", () => {
+    // Live repro from session e8839808-…/run eca32d60-…: qwen3.5:4b called
+    // `read("/app/skills/ieee-meeting-report/SKILL.md")`, got ENOENT, then
+    // emitted a thinking-only follow-up with no visible text and
+    // stopReason=stop. The user saw a failed tool card and then silence.
+    // The nudge is the only rescue for that pattern — the empty-response
+    // and reasoning-only retries both bail on `lastToolError`, so if this
+    // resolver also bails, the run ends with the user ghosted.
     const nudge = resolveNoToolCallNudgeInstruction({
       aborted: false,
       timedOut: false,
       turnHasToolActivity: true,
       attempt: makeAttemptResult({
-        toolMetas: [{ toolName: "exec" }],
+        toolMetas: [{ toolName: "read" }],
         lastToolError: {
-          toolName: "exec",
-          error: "command not found",
+          toolName: "read",
+          error:
+            "ENOENT: no such file or directory, access '/app/skills/ieee-meeting-report/SKILL.md'",
         },
         lastAssistant: {
           role: "assistant",
           stopReason: "stop",
           provider: "ollama",
-          model: "gemma4:e4b",
-          content: [{ type: "text", text: "Encountered an error." }],
+          model: "qwen3.5:4b",
+          content: [],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     });
 
-    expect(nudge).toBeNull();
+    expect(nudge).not.toBeNull();
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
