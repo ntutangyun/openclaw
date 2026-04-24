@@ -15,6 +15,13 @@ session transcripts, and filled reports, lives at
 `~/Desktop/openclaw-gemma-investigation/`. This README is the
 condensed version.
 
+A follow-on note for the qwen3.5 family (9b too large, 4b evicts, 0.8b
+is the one to use on this Jetson) lives at
+`local_modal_support/qwen3_5_0_8b/README.md`. It introduces the
+`agents.defaults.llm.idleTimeoutSeconds = 300` backfill via
+`ensure_llm_idle_timeout` in `manage.sh`, which also applies to gemma
+runs going forward.
+
 ---
 
 ## TL;DR
