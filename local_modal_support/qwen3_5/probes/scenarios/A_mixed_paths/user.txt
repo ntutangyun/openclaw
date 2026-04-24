@@ -1,0 +1,1 @@
+generate a basic meeting report from the 802.11 AIML SC docs in C:\Users\capyb\Desktop\openclaw_workspace on CapybaraHome

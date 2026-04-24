@@ -1,0 +1,50 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read",
+      "description": "Read a file from the workspace. Path must be absolute (or begin with ~/ which expands to the home dir).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path or ~/... path to the file to read."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write",
+      "description": "Write content to a file in the workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["path", "content"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "exec",
+      "description": "Run a shell command. Use host='gateway' (or omit host) for commands inside the container.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "host": { "type": "string", "enum": ["gateway", "node"] },
+          "node": { "type": "string" }
+        },
+        "required": ["command"]
+      }
+    }
+  }
+]

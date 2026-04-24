@@ -1,0 +1,82 @@
+{
+  "model": "qwen3.5:4b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an OpenClaw coding agent running in a Docker container.\n\nRuntime:\n- workspace: /home/node/.openclaw/workspace (your cwd)\n- home: /home/node\n- provider: ollama\n- model: qwen3.5:4b\n\n## Skills (mandatory)\nBefore replying: scan <available_skills> <description> entries.\n- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.\n- If multiple could apply: choose the most specific one, then read/follow it.\n- If none clearly apply: do not read any SKILL.md.\n- The `<location>` path shown per skill is authoritative: copy it character-for-character into the `read` call. Do not guess `/app/skills/<name>/SKILL.md` for workspace skills \u2014 those live under `~/.openclaw/workspace/skills/`.\n- If the first `read` on a skill's `<location>` returns ENOENT, the path is wrong \u2014 re-examine the exact `<location>` string in `<available_skills>` and retry. Do NOT abandon the skill; the user expects you to follow it.\nConstraints: never read more than one skill up front; only read after selecting.\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthcheck</name>\n    <description>Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).</description>\n    <location>/app/skills/healthcheck/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>ieee-meeting-report</name>\n    <description>Produce a Basic Meeting Participation Report (Markdown) from IEEE 802.11 working-group and standing-committee documents (AIML SC, TGbn, TGbf, EHT, UHR, etc.). Use when the user asks to generate, write, fill, or draft a meeting report, plenary report, interim report, or participation report from a folder of IEEE 802.11 documents (agenda, opening snapshot, closing report, meeting minutes, technical contributions in .pptx/.docx). The report is produced as Markdown (.md) \u2014 the user can convert to Word later if needed. Trigger phrases: &apos;basic meeting report&apos;, &apos;IEEE plenary report&apos;, &apos;fill the meeting report template&apos;, &apos;802.11 interim report&apos;, &apos;AIML SC report&apos;, &apos;follow basic_guidelines.md&apos;.</description>\n    <location>~/.openclaw/workspace/skills/ieee-meeting-report/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>node-connect</name>\n    <description>Diagnose OpenClaw node connection and pairing failures for Android, iOS, and macOS companion apps. Use when QR/setup code/manual connect fails, local Wi-Fi works but VPS/tailnet does not, or errors mention pairing required, unauthorized, bootstrap token invalid or expired, gateway.bind, gateway.remote.url, Tailscale, or plugins.entries.device-pair.config.publicUrl.</description>\n    <location>/app/skills/node-connect/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file.</description>\n    <location>/app/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>taskflow</name>\n    <description>Use when work should span one or more detached tasks but still behave like one job with a single owner context.</description>\n    <location>/app/skills/taskflow/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>taskflow-inbox-triage</name>\n    <description>Example TaskFlow authoring pattern for inbox triage.</description>\n    <location>/app/skills/taskflow-inbox-triage/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts via wttr.in or Open-Meteo.</description>\n    <location>/app/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>\n"
+    },
+    {
+      "role": "user",
+      "content": "generate a basic meeting report from the 802.11 AIML SC docs in C:\\Users\\capyb\\Desktop\\openclaw_workspace on CapybaraHome"
+    }
+  ],
+  "stream": false,
+  "think": true,
+  "keep_alive": "30m",
+  "options": {
+    "temperature": 0.6,
+    "seed": 1337,
+    "num_ctx": 32768
+  },
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read",
+        "description": "Read a file from the workspace. Path must be absolute (or begin with ~/ which expands to the home dir).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path or ~/... path to the file to read."
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write",
+        "description": "Write content to a file in the workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": ["path", "content"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "exec",
+        "description": "Run a shell command. Use host='gateway' (or omit host) for commands inside the container.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "host": {
+              "type": "string",
+              "enum": ["gateway", "node"]
+            },
+            "node": {
+              "type": "string"
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  ]
+}
