@@ -397,6 +397,53 @@ ensure_llm_idle_timeout() {
   fi
 }
 
+ensure_agents_skills_allow() {
+  # Backfill agents.defaults.skills with a conservative allowlist. Small local
+  # models (ollama/qwen3.5:4b, ollama/gemma4:e4b) pattern-match on the majority
+  # `<location>` template in the `<available_skills>` system-prompt block and
+  # substitute the bundled `/app/skills/<name>/SKILL.md` path for workspace
+  # skills, producing ENOENT + a silent terminal turn. Probing in
+  # local_modal_support/qwen3_5/probes/ shows 4/5 wrong-path substitutions with
+  # the default 7-bundled + 1-workspace prompt, vs 4/5 correct reads when the
+  # prompt contains only the workspace skill.
+  #
+  # Helper is idempotent: if the key is already set to any array value we leave
+  # it alone. Override via OPENCLAW_AGENTS_SKILLS_ALLOW (comma-separated), or
+  # set to the literal "-" to skip the backfill entirely.
+  local username="$1"
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    return 0
+  fi
+
+  local desired="${OPENCLAW_AGENTS_SKILLS_ALLOW:-ieee-meeting-report}"
+  if [[ "$desired" == "-" ]]; then
+    return 0
+  fi
+
+  local output
+  output="$(docker exec "$container" node -e "
+    const fs = require('fs');
+    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    if (!fs.existsSync(cfgPath)) process.exit(0);
+    const desired = String(process.argv[1] || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (desired.length === 0) process.exit(0);
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
+    catch { process.exit(0); }
+    if (!cfg.agents) cfg.agents = {};
+    if (!cfg.agents.defaults) cfg.agents.defaults = {};
+    if (Array.isArray(cfg.agents.defaults.skills)) process.exit(0);
+    cfg.agents.defaults.skills = desired;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log('updated');
+  " "$desired" 2>&1)"
+  if [[ "$output" == *updated* ]]; then
+    echo "==> Backfilled agents.defaults.skills=[${desired}] for '$username'; recreating gateway to apply..."
+    compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
+  fi
+}
+
 ensure_skills_wiring() {
   local username="$1"
   local env_file compose_file
@@ -797,6 +844,7 @@ cmd_start() {
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_agents_skills_allow "$username"
   echo "Gateway started."
 
   # Start background auto-approve watcher for node pairing requests
@@ -881,6 +929,7 @@ cmd_restart() {
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_agents_skills_allow "$username"
   echo "Gateway restarted."
 }
 
@@ -893,6 +942,7 @@ cmd_start_all() {
     compose_cmd "$name" up -d openclaw-gateway
     ensure_tools_deny "$name"
     ensure_llm_idle_timeout "$name"
+    ensure_agents_skills_allow "$name"
     count=$((count + 1))
   done < <(all_usernames)
 
@@ -1177,6 +1227,7 @@ TOOLS_MD
   compose_cmd "$username" up -d --force-recreate openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_agents_skills_allow "$username"
 
   echo ""
   echo "Exec approval prompts disabled for '$username' (gateway side)."
