@@ -52,6 +52,28 @@ case "$action" in
   pull)
     [[ $# -ne 3 ]] && usage
     node="$1"; remote="$2"; local_dest="$3"
+
+    # Wipe the destination before copying so ad-hoc files from a previous run
+    # (e.g. agent-written extract_*.py, stale _extracted/) don't get mixed with
+    # the authoritative pulled copy. Guardrail: only wipe paths that resolve
+    # strictly under the gateway workspace. realpath -m normalizes even for
+    # not-yet-existing targets, and the suffix check rejects both the
+    # workspace root itself and any ../ escape.
+    WORKSPACE_ROOT="/home/node/.openclaw/workspace"
+    abs_dest="$(realpath -m -- "$local_dest" 2>/dev/null || true)"
+    suffix=""
+    if [[ "$abs_dest" == "$WORKSPACE_ROOT"/* ]]; then
+      suffix="${abs_dest#$WORKSPACE_ROOT/}"
+    fi
+    if [[ -n "$suffix" ]]; then
+      if [[ -d "$local_dest" ]]; then
+        echo "Wiping ${local_dest} before pull" >&2
+        rm -rf "$local_dest"
+      fi
+    else
+      echo "Refusing to wipe ${local_dest} — does not resolve under ${WORKSPACE_ROOT}/<name>. Proceeding without wipe." >&2
+    fi
+
     mkdir -p "$local_dest"
     echo "Pulling ${remote} → ${local_dest} (node=${node})" >&2
     exec openclaw nodes copy \
