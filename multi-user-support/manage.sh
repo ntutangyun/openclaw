@@ -69,6 +69,12 @@ Environment variables:
                               weekly security patches)
   OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
   VLLM_HOST                   vLLM API host (default: http://localhost:8000)
+  OPENCLAW_OLLAMA_CTX_CAP     Max num_ctx written to openclaw.json by sync-ollama
+                              (default: 131072). Ollama pre-allocates the full
+                              KV cache at load, so values larger than the host
+                              can fit inside the 120s LLM idle watchdog cause
+                              first-turn timeouts. Jetson Orin 32GB: keep at
+                              131072. Larger hosts can raise or disable (0).
 EOF
   exit 1
 }
@@ -1340,6 +1346,11 @@ cmd_sync_ollama() {
   local docker_url
   docker_url="$(resolve_ollama_docker_url "$ollama_url")"
 
+  local ctx_cap="${OPENCLAW_OLLAMA_CTX_CAP:-131072}"
+  if [[ "$ctx_cap" -gt 0 ]]; then
+    echo "    Clamping contextWindow to ${ctx_cap} (set OPENCLAW_OLLAMA_CTX_CAP=0 to disable)"
+  fi
+
   # Build the config JSON using Python, write to temp files to avoid shell quoting issues
   local tmp_provider tmp_models
   tmp_provider="$(mktemp)"
@@ -1354,11 +1365,20 @@ ollama_url = sys.argv[1]
 docker_url = sys.argv[2]
 provider_file = sys.argv[3]
 models_file = sys.argv[4]
+# Cap comes from OPENCLAW_OLLAMA_CTX_CAP (0 = no cap). See the env docs in
+# usage() for the rationale; the short version is that OpenClaw's Ollama
+# stream adapter sends options.num_ctx = model.contextWindow, and Ollama
+# pre-allocates the full KV cache at load. On Jetson Orin, a 256K cache
+# takes ~160s to allocate and trips the 120s LLM idle watchdog on the first
+# turn. 131072 (128K) loads in ~18s and generally fits; anything larger
+# needs measurement.
+ctx_cap = int(sys.argv[5])
 
 DEFAULT_CTX = 131072
 
 def get_context_window(model_name, base_url):
-    \"\"\"Query /api/show to get the model's actual context_length.\"\"\"
+    \"\"\"Query /api/show to get the model's context_length, clamped to ctx_cap.\"\"\"
+    detected = DEFAULT_CTX
     try:
         req = urllib.request.Request(
             base_url.rstrip('/') + '/api/show',
@@ -1369,10 +1389,13 @@ def get_context_window(model_name, base_url):
             info = json.load(resp)
         for key, value in (info.get('model_info') or {}).items():
             if key.endswith('.context_length') and isinstance(value, (int, float)) and value > 0:
-                return int(value)
+                detected = int(value)
+                break
     except Exception:
         pass
-    return DEFAULT_CTX
+    if ctx_cap > 0 and detected > ctx_cap:
+        return ctx_cap
+    return detected
 
 # Mirror src/agents/self-hosted-provider-defaults.ts. 8192 is usually too
 # tight for reasoning-capable self-hosted models (ollama/gemma4, qwen3,
@@ -1408,7 +1431,7 @@ for m in models:
 
 with open(models_file, 'w') as f:
     json.dump(ollama_models, f)
-" "$ollama_url" "$docker_url" "$tmp_provider" "$tmp_models"
+" "$ollama_url" "$docker_url" "$tmp_provider" "$tmp_models" "$ctx_cap"
 
   local provider_config models_config
   provider_config="$(cat "$tmp_provider")"
