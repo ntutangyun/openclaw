@@ -69,12 +69,17 @@ Environment variables:
                               weekly security patches)
   OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
   VLLM_HOST                   vLLM API host (default: http://localhost:8000)
-  OPENCLAW_OLLAMA_CTX_CAP     Max num_ctx written to openclaw.json by sync-ollama
-                              (default: 131072). Ollama pre-allocates the full
-                              KV cache at load, so values larger than the host
-                              can fit inside the 120s LLM idle watchdog cause
-                              first-turn timeouts. Jetson Orin 32GB: keep at
-                              131072. Larger hosts can raise or disable (0).
+  OPENCLAW_OLLAMA_CTX_CAP     Cap the num_ctx written to openclaw.json by
+                              sync-ollama (default: 0 = no cap; use the
+                              native context_length reported by /api/show).
+                              Ollama pre-allocates the full KV cache at load,
+                              so overly large values can trip the LLM idle
+                              watchdog on memory-constrained hosts. The
+                              preferred mitigation is to raise
+                              agents.defaults.llm.idleTimeoutSeconds (which
+                              ensure_llm_idle_timeout backfills to 300s).
+                              Use this cap only when you cannot fit the
+                              model's native KV cache in RAM at all.
 EOF
   exit 1
 }
@@ -344,6 +349,46 @@ ensure_tools_deny() {
   ' 2>&1)"
   if [[ "$output" == *updated* ]]; then
     echo "==> Backfilled sub-agent tools.deny for '$username'; recreating gateway to apply..."
+    compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
+  fi
+}
+
+ensure_llm_idle_timeout() {
+  # Backfill agents.defaults.llm.idleTimeoutSeconds into an existing user's
+  # openclaw.json. The upstream default (120s) was calibrated for cloud
+  # providers; self-hosted Ollama on a memory-constrained host (Jetson Orin,
+  # anything that has to swap or cold-reload between turns) regularly exceeds
+  # 120s just loading the model + allocating a large KV cache. See
+  # local_modal_support/qwen3_5_0_8b/README.md for the measurements.
+  # Helper is idempotent: if the key is already set to any positive value we
+  # leave it alone. Default bumped to 300s.
+  local username="$1"
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    return 0
+  fi
+
+  local desired="${OPENCLAW_LLM_IDLE_TIMEOUT_SECONDS:-300}"
+  local output
+  output="$(docker exec "$container" node -e "
+    const fs = require('fs');
+    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    if (!fs.existsSync(cfgPath)) process.exit(0);
+    const desired = Number(process.argv[1]) || 300;
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
+    catch { process.exit(0); }
+    if (!cfg.agents) cfg.agents = {};
+    if (!cfg.agents.defaults) cfg.agents.defaults = {};
+    if (!cfg.agents.defaults.llm) cfg.agents.defaults.llm = {};
+    const current = cfg.agents.defaults.llm.idleTimeoutSeconds;
+    if (typeof current === 'number' && current > 0) process.exit(0);
+    cfg.agents.defaults.llm.idleTimeoutSeconds = desired;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log('updated');
+  " "$desired" 2>&1)"
+  if [[ "$output" == *updated* ]]; then
+    echo "==> Backfilled agents.defaults.llm.idleTimeoutSeconds=${desired}s for '$username'; recreating gateway to apply..."
     compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
   fi
 }
@@ -747,6 +792,7 @@ cmd_start() {
   echo "Starting gateway for user '$username'..."
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
+  ensure_llm_idle_timeout "$username"
   echo "Gateway started."
 
   # Start background auto-approve watcher for node pairing requests
@@ -830,6 +876,7 @@ cmd_restart() {
   echo "Starting gateway for user '$username' (picks up new image if rebuilt)..."
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
+  ensure_llm_idle_timeout "$username"
   echo "Gateway restarted."
 }
 
@@ -841,6 +888,7 @@ cmd_start_all() {
     echo "Starting '$name'..."
     compose_cmd "$name" up -d openclaw-gateway
     ensure_tools_deny "$name"
+    ensure_llm_idle_timeout "$name"
     count=$((count + 1))
   done < <(all_usernames)
 
@@ -1124,6 +1172,7 @@ TOOLS_MD
   echo "==> Restarting gateway to apply changes..."
   compose_cmd "$username" up -d --force-recreate openclaw-gateway
   ensure_tools_deny "$username"
+  ensure_llm_idle_timeout "$username"
 
   echo ""
   echo "Exec approval prompts disabled for '$username' (gateway side)."
@@ -1346,9 +1395,9 @@ cmd_sync_ollama() {
   local docker_url
   docker_url="$(resolve_ollama_docker_url "$ollama_url")"
 
-  local ctx_cap="${OPENCLAW_OLLAMA_CTX_CAP:-131072}"
+  local ctx_cap="${OPENCLAW_OLLAMA_CTX_CAP:-0}"
   if [[ "$ctx_cap" -gt 0 ]]; then
-    echo "    Clamping contextWindow to ${ctx_cap} (set OPENCLAW_OLLAMA_CTX_CAP=0 to disable)"
+    echo "    Clamping contextWindow to ${ctx_cap} (OPENCLAW_OLLAMA_CTX_CAP)"
   fi
 
   # Build the config JSON using Python, write to temp files to avoid shell quoting issues
