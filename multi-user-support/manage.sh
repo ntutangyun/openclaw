@@ -359,7 +359,7 @@ ensure_llm_idle_timeout() {
   # providers; self-hosted Ollama on a memory-constrained host (Jetson Orin,
   # anything that has to swap or cold-reload between turns) regularly exceeds
   # 120s just loading the model + allocating a large KV cache. See
-  # local_modal_support/qwen3_5_0_8b/README.md for the measurements.
+  # local_modal_support/qwen3_5/README.md for the measurements.
   # Helper is idempotent: if the key is already set to any positive value we
   # leave it alone. Default bumped to 300s.
   local username="$1"
