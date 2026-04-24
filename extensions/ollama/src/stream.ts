@@ -233,6 +233,7 @@ export function buildOllamaChatRequest(params: {
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
   stream?: boolean;
+  keepAlive?: string;
 }): OllamaChatRequest {
   return {
     model: normalizeOllamaWireModelId(params.modelId),
@@ -240,7 +241,28 @@ export function buildOllamaChatRequest(params: {
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
     ...(params.options ? { options: params.options } : {}),
+    ...(params.keepAlive ? { keep_alive: params.keepAlive } : {}),
   };
+}
+
+/**
+ * Resolve Ollama `keep_alive` for chat requests. Controls how long Ollama
+ * retains the model in (v)RAM between requests. The upstream default is 5
+ * minutes, which is too short for a multi-turn agent task on a Jetson: if
+ * a cold-reload has to happen mid-conversation, it can wedge the runner
+ * (seen as size_vram=0 after load and no-reply 300s timeouts). A longer
+ * keep_alive keeps the model resident across the whole session.
+ *
+ * Read from env OPENCLAW_OLLAMA_KEEP_ALIVE. Accepts any Ollama-parseable
+ * duration string (e.g. "30m", "1h", "-1" for never evict, "0" to evict
+ * immediately). Default "30m".
+ */
+function resolveOllamaKeepAlive(): string {
+  const raw = process.env.OPENCLAW_OLLAMA_KEEP_ALIVE;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return "30m";
 }
 
 type StreamModelDescriptor = {
@@ -314,6 +336,7 @@ interface OllamaChatRequest {
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
   think?: boolean;
+  keep_alive?: string;
 }
 
 interface OllamaChatMessage {
@@ -640,6 +663,7 @@ export function createOllamaStreamFn(
           stream: true,
           tools: ollamaTools,
           options: ollamaOptions,
+          keepAlive: resolveOllamaKeepAlive(),
         });
         options?.onPayload?.(body, model);
         const headers: Record<string, string> = {

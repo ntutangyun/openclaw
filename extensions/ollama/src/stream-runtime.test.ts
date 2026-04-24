@@ -55,6 +55,29 @@ describe("buildOllamaChatRequest", () => {
       model: "qwen3:14b-q8_0",
     });
   });
+
+  it("emits top-level keep_alive when provided", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "qwen3.5:4b",
+        messages: [{ role: "user", content: "hi" }],
+        keepAlive: "30m",
+      }),
+    ).toEqual({
+      model: "qwen3.5:4b",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+      keep_alive: "30m",
+    });
+  });
+
+  it("omits keep_alive when not provided", () => {
+    const body = buildOllamaChatRequest({
+      modelId: "qwen3.5:4b",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(body).not.toHaveProperty("keep_alive");
+  });
 });
 
 describe("convertToOllamaMessages", () => {
