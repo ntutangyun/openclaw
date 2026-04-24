@@ -48,8 +48,12 @@ Info:
   info      <username>                              Show connection details
 
 Ollama:
-  sync-ollama <username> [ollama-host]                  Sync Ollama models to user gateway
-  list-ollama [ollama-host]                             List available Ollama models
+  sync-ollama    <username> [ollama-host]               Sync Ollama models to user gateway
+  list-ollama    [ollama-host]                          List available Ollama models
+  restart-ollama [ollama-host]                          Force-unload every loaded model (keep_alive=0)
+                                                        to recover from a wedged Ollama runner
+                                                        (e.g. size_vram=0 after load, 300 s no-reply
+                                                        timeouts). Next request cold-loads cleanly.
 
 vLLM:
   sync-vllm   <username> [vllm-host]                   Sync vLLM models to user gateway
@@ -1372,6 +1376,62 @@ else:
 "
 }
 
+cmd_restart_ollama() {
+  # Recover from a wedged Ollama runner state (e.g. size_vram=0 after load,
+  # 300 s no-reply timeouts on the first turn). Ollama does not offer a
+  # systemctl-free "reset" — the closest is to send keep_alive=0 per loaded
+  # model, which forces the runner to release each model's weights and KV
+  # cache. The next inference then cold-loads into a clean runner.
+  #
+  # Does not restart ollama.service itself (that needs sudo and is out of
+  # scope here). If the runner is wedged badly enough that keep_alive=0
+  # does not clear it, run `sudo systemctl restart ollama` on the host.
+  local ollama_url
+  ollama_url="$(resolve_ollama_host "${1:-}")"
+
+  echo "==> Querying Ollama at ${ollama_url}"
+  local raw
+  raw="$(curl -sf --connect-timeout 5 "${ollama_url}/api/ps" 2>/dev/null || true)"
+  if [[ -z "$raw" ]]; then
+    fail "Cannot reach Ollama at ${ollama_url}. Is Ollama running?"
+  fi
+
+  local models
+  models="$(echo "$raw" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for m in data.get('models', []):
+    print(m.get('name', ''))
+" 2>/dev/null)"
+
+  if [[ -z "$models" ]]; then
+    echo "No models currently loaded. Nothing to unload."
+    return 0
+  fi
+
+  local count=0
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    echo "==> Unloading '${name}' (keep_alive=0)"
+    curl -s --max-time 30 "${ollama_url}/api/chat" \
+      -H "Content-Type: application/json" \
+      -d "$(python3 -c "import json; print(json.dumps({'model': '$name', 'keep_alive': 0}))")" \
+      >/dev/null 2>&1 || true
+    count=$((count + 1))
+  done <<<"$models"
+
+  # Short pause, then re-query to confirm the unload took effect.
+  sleep 2
+  local remaining
+  remaining="$(curl -sf --connect-timeout 5 "${ollama_url}/api/ps" 2>/dev/null \
+    | python3 -c "import json, sys; d=json.load(sys.stdin); print(len(d.get('models', [])))" 2>/dev/null || echo "?")"
+  echo "Unloaded ${count} model(s). Currently loaded: ${remaining}."
+  if [[ "$remaining" != "0" && "$remaining" != "?" ]]; then
+    echo "Note: some models are still reported as loaded. Ollama may finalize eviction asynchronously."
+    echo "      If the next inference still stalls, escalate with: sudo systemctl restart ollama"
+  fi
+}
+
 cmd_sync_ollama() {
   local username="${1:?Username required}"
   local ollama_url
@@ -1792,8 +1852,9 @@ case "$command" in
   cli)       cmd_cli "${1:?Username required}" "${@:2}" ;;
   token)     cmd_token "${1:?Username required}" ;;
   info)      cmd_info "${1:?Username required}" ;;
-  sync-ollama)  cmd_sync_ollama "${1:?Username required}" "${2:-}" ;;
-  list-ollama)  cmd_list_ollama "${1:-}" ;;
+  sync-ollama)     cmd_sync_ollama "${1:?Username required}" "${2:-}" ;;
+  list-ollama)     cmd_list_ollama "${1:-}" ;;
+  restart-ollama)  cmd_restart_ollama "${1:-}" ;;
   sync-vllm)    cmd_sync_vllm "${1:?Username required}" "${2:-}" ;;
   list-vllm)    cmd_list_vllm "${1:-}" ;;
   help|-h|--help) usage ;;
