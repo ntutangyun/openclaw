@@ -1376,11 +1376,11 @@ def get_context_window(model_name, base_url):
 
 # Mirror src/agents/self-hosted-provider-defaults.ts. 8192 is usually too
 # tight for reasoning-capable self-hosted models (ollama/gemma4, qwen3,
-# etc.) because `thinking` + visible output + tool-call JSON share one
-# budget; 16384 gives the agent room to emit a tool_call after a long
-# thinking pass. Keeping this hard-coded (rather than inferred from the
-# shared default constant inside the image) means the resulting
-# openclaw.json stays explicit after `sync-ollama` and is independent
+# etc.) because the thinking stream, visible output, and tool-call JSON
+# share one budget; 16384 gives the agent room to emit a tool_call after
+# a long thinking pass. Keeping this hard-coded (rather than inferred
+# from the shared default constant inside the image) means the resulting
+# openclaw.json stays explicit after sync-ollama and is independent
 # of which image version the container is running.
 SELF_HOSTED_MAX_TOKENS = 16384
 
