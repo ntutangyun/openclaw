@@ -48,7 +48,10 @@ Info:
   info      <username>                              Show connection details
 
 Ollama:
-  sync-ollama    <username> [ollama-host]               Sync Ollama models to user gateway
+  sync-ollama    <username> [ollama-host]               Sync Ollama models AND pin the Ollama
+                                                        Web Search baseUrl to the same docker-
+                                                        reachable host (so the plugin doesn't
+                                                        fall back to 127.0.0.1)
   list-ollama    [ollama-host]                          List available Ollama models
   restart-ollama [ollama-host]                          Force-unload every loaded model (keep_alive=0)
                                                         to recover from a wedged Ollama runner
@@ -1624,6 +1627,28 @@ with open(models_file, 'w') as f:
     console.log('  Models updated:', Object.keys(existing).join(', '));
   " "$models_config" 2>&1 | grep -v DEP0040
 
+  # Pin the Ollama Web Search plugin's base URL to the same docker-reachable
+  # host. Without this, the plugin falls back to models.providers.ollama.baseUrl
+  # (which we just set above) and otherwise to http://127.0.0.1:11434 — which is
+  # the container's loopback, not the Windows/Linux host where Ollama actually
+  # runs. Setting plugins.entries.ollama.config.webSearch.baseUrl explicitly
+  # also fixes the wizard's "Expected host: http://127.0.0.1:11434" prereq
+  # message that fires on subsequent gateway adds.
+  echo "==> Updating Ollama Web Search base URL"
+  docker exec "$container" node -e "
+    const fs = require('fs');
+    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    if (!cfg.plugins) cfg.plugins = {};
+    if (!cfg.plugins.entries) cfg.plugins.entries = {};
+    if (!cfg.plugins.entries.ollama) cfg.plugins.entries.ollama = {};
+    if (!cfg.plugins.entries.ollama.config) cfg.plugins.entries.ollama.config = {};
+    if (!cfg.plugins.entries.ollama.config.webSearch) cfg.plugins.entries.ollama.config.webSearch = {};
+    cfg.plugins.entries.ollama.config.webSearch.baseUrl = process.argv[1];
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log('  Ollama Web Search baseUrl ->', process.argv[1]);
+  " "$docker_url" 2>&1 | grep -v DEP0040
+
   # Ensure OLLAMA env vars are set in the user .env
   local env_file
   env_file="$(user_env_file "$username")"
@@ -1656,6 +1681,8 @@ for m in models:
     ctx_k = m.get('contextWindow', 0) // 1024
     print(f'    ollama/{m[\"id\"]} — {ctx_k}k context')
 "
+  echo "  Ollama provider baseUrl:    ${docker_url}"
+  echo "  Ollama Web Search baseUrl:  ${docker_url}"
   echo ""
   echo "==> Restarting gateway for '$username' to apply changes..."
   cmd_restart "$username"
