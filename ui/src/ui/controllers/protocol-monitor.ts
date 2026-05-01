@@ -220,6 +220,18 @@ export type NetworkStats = {
    * stamped by the node client. Assumes synced clocks.
    */
   nodeGatewayOneWayLatency: LatencyStats;
+  /**
+   * Gateway → Operator WS one-way latency samples, peer-measured by the
+   * operator client and reported back via `protocol-traces.rx-report`. The
+   * gateway can't observe its own outbound frames' arrival time at the
+   * peer from its own clock alone.
+   */
+  gatewayOperatorOneWayLatency: LatencyStats;
+  /**
+   * Gateway → Node WS one-way latency samples, peer-measured by the node
+   * client and reported back via `protocol-traces.rx-report`.
+   */
+  gatewayNodeOneWayLatency: LatencyStats;
   /** Agent → Model request (lifecycle start) rollup. */
   requestStats: RequestStats;
   /** Model → Agent SSE response rollup. */
@@ -867,6 +879,8 @@ export function computeNetworkStats(
     ),
     operatorGatewayOneWayLatency: computeWsOneWayLatency(traces, "operator"),
     nodeGatewayOneWayLatency: computeWsOneWayLatency(traces, "node"),
+    gatewayOperatorOneWayLatency: computeRxLatencyStats("operator"),
+    gatewayNodeOneWayLatency: computeRxLatencyStats("node"),
     requestStats: buildRequestStats(),
     responseStats: buildResponseStats(),
   };
@@ -910,6 +924,28 @@ function filterLatencyByModel(stats: LatencyStats, modelFilter?: string | null):
     return stats;
   }
   const filtered = stats.samples.filter((s) => !s.model || s.model === modelFilter);
+  return buildLatencyStats(filtered);
+}
+
+/**
+ * Build LatencyStats for the gateway → peer direction from peer-reported rx
+ * samples. Same task-relevance filter as the rest of the protocol monitor —
+ * mechanism / control-plane methods (time.sync, chat.history, etc.) and
+ * lifecycle events are dropped so the chart reflects only agentic-task
+ * traffic.
+ */
+function computeRxLatencyStats(source: "operator" | "node"): LatencyStats {
+  const arr = source === "operator" ? rxSamplesOperator : rxSamplesNode;
+  const filtered: LatencySample[] = [];
+  for (const s of arr) {
+    if (s.method && DEFAULT_INGEST_BLOCKLIST.has(s.method)) {
+      continue;
+    }
+    if (s.event && DEFAULT_INGEST_BLOCKLIST.has(s.event)) {
+      continue;
+    }
+    filtered.push({ ts: s.ts, latencyMs: s.latencyMs, label: s.method ?? s.event });
+  }
   return buildLatencyStats(filtered);
 }
 
@@ -989,6 +1025,14 @@ const ttftProcessed = new Set<string>();
 const genCache: LatencySample[] = [];
 const genRunState = new Map<string, GenRunState>();
 const genProcessed = new Set<string>();
+
+// Reverse-direction (gateway → peer) rx-latency samples, fed by
+// `handleProtocolRxSamplesEvent`. Per-source so we can chart the operator and
+// node legs separately. Capped to bound memory under long uptime.
+type RxLatencySampleEntry = { ts: number; latencyMs: number; method?: string; event?: string };
+const rxSamplesOperator: RxLatencySampleEntry[] = [];
+const rxSamplesNode: RxLatencySampleEntry[] = [];
+const RX_SAMPLE_CAP = 1000;
 
 /** Max cached samples / processed-id set size. */
 const MAX_LATENCY_CACHE = 2000;
@@ -1452,6 +1496,56 @@ export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unk
   host.protocolTraces = next.length > MAX_VISIBLE ? next.slice(next.length - MAX_VISIBLE) : next;
 }
 
+/**
+ * Append a peer-reported rx-latency batch to the per-source sliding window.
+ * Called from the WS event dispatcher when `protocol.rx.samples` arrives.
+ * Filtering by task-relevance happens at compute time (`computeRxLatencyStats`)
+ * so the buffer remains a faithful record we can re-query if the filter
+ * changes later.
+ */
+export function handleProtocolRxSamplesEvent(host: ProtocolMonitorHost, payload: unknown) {
+  if (host.protocolMonitoringPaused) {
+    return;
+  }
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const data = payload as {
+    source?: unknown;
+    samples?: unknown;
+  };
+  if (data.source !== "operator" && data.source !== "node") {
+    return;
+  }
+  if (!Array.isArray(data.samples)) {
+    return;
+  }
+  const target = data.source === "operator" ? rxSamplesOperator : rxSamplesNode;
+  for (const raw of data.samples) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const s = raw as {
+      ts?: unknown;
+      latencyMs?: unknown;
+      method?: unknown;
+      event?: unknown;
+    };
+    if (typeof s.ts !== "number" || typeof s.latencyMs !== "number") {
+      continue;
+    }
+    target.push({
+      ts: s.ts,
+      latencyMs: s.latencyMs,
+      method: typeof s.method === "string" ? s.method : undefined,
+      event: typeof s.event === "string" ? s.event : undefined,
+    });
+  }
+  if (target.length > RX_SAMPLE_CAP) {
+    target.splice(0, target.length - RX_SAMPLE_CAP);
+  }
+}
+
 export async function clearProtocolTraces(host: ProtocolMonitorHost) {
   if (!host.client || !host.connected) {
     return;
@@ -1459,6 +1553,8 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
   try {
     await host.client.request("protocol-traces.clear");
     host.protocolTraces = [];
+    rxSamplesOperator.length = 0;
+    rxSamplesNode.length = 0;
     host.protocolSelectedTrace = null;
     clearLatencyCaches();
   } catch {

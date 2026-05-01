@@ -30,6 +30,9 @@ import {
   type ClockSyncSample,
   computeClockSyncSample,
   pickBestSample,
+  type RxLatencySample,
+  RX_REPORT_BUFFER_CAP,
+  RX_REPORT_INTERVAL_MS,
   TIME_SYNC_BURST_INTERVAL_MS,
   TIME_SYNC_BURST_SAMPLES,
   TIME_SYNC_PERIODIC_INTERVAL_MS,
@@ -59,6 +62,7 @@ type Pending = {
   reject: (err: unknown) => void;
   expectFinal: boolean;
   timeout: NodeJS.Timeout | null;
+  method?: string;
 };
 
 type GatewayClientErrorShape = {
@@ -205,6 +209,13 @@ export class GatewayClient {
   private clockSyncTimer: NodeJS.Timeout | null = null;
   private clockSyncInFlight = false;
   private lastClockSyncMetrics: ClockSyncMetrics | null = null;
+  // Rx-latency capture state. Each inbound frame with `sentAt` produces a
+  // sample; periodic flushes batch them to `protocol-traces.rx-report` so the
+  // gateway can chart the gateway→node direction (which it can't measure from
+  // its own clock alone).
+  private rxSamples: RxLatencySample[] = [];
+  private rxReportTimer: NodeJS.Timeout | null = null;
+  private rxReportInFlight = false;
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
@@ -319,6 +330,8 @@ export class GatewayClient {
       // The next gateway process may be a fresh restart with a slightly
       // different clock; reset offset rather than carrying a stale value.
       this.stopClockSyncSchedule();
+      this.stopRxReportSchedule();
+      this.rxSamples = [];
       this.clockOffsetMs = 0;
       this.lastClockSyncMetrics = null;
       this.resolvePendingStop(ws);
@@ -402,6 +415,7 @@ export class GatewayClient {
       this.tickTimer = null;
     }
     this.stopClockSyncSchedule();
+    this.stopRxReportSchedule();
     this.clearConnectChallengeTimeout();
     if (this.pendingStop) {
       this.flushPendingErrors(new Error("gateway client stopped"));
@@ -561,6 +575,7 @@ export class GatewayClient {
         this.lastTick = Date.now();
         this.startTickWatch();
         this.startClockSyncSchedule();
+        this.startRxReportSchedule();
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
@@ -765,6 +780,7 @@ export class GatewayClient {
           }
           return;
         }
+        this.captureRxSample(evt.sentAt, "event", undefined, evt.event);
         const seq = typeof evt.seq === "number" ? evt.seq : null;
         if (seq !== null) {
           if (this.lastSeq !== null && seq > this.lastSeq + 1) {
@@ -784,6 +800,7 @@ export class GatewayClient {
         if (!pending) {
           return;
         }
+        this.captureRxSample(parsed.sentAt, "res", pending.method, undefined);
         // If the payload is an ack with status accepted, keep waiting for final.
         const payload = parsed.payload as { status?: unknown } | undefined;
         const status = payload?.status;
@@ -970,10 +987,66 @@ export class GatewayClient {
         reject,
         expectFinal,
         timeout,
+        method,
       });
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  private captureRxSample(sentAt: unknown, kind: string, method?: string, event?: string) {
+    if (typeof sentAt !== "number") {
+      return;
+    }
+    const peerNow = Date.now();
+    const adjustedTs = Math.round(peerNow + this.clockOffsetMs);
+    const latencyMs = adjustedTs - sentAt;
+    if (latencyMs < 0 || latencyMs >= 60_000) {
+      return;
+    }
+    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event });
+    if (this.rxSamples.length > RX_REPORT_BUFFER_CAP) {
+      this.rxSamples.splice(0, this.rxSamples.length - RX_REPORT_BUFFER_CAP);
+    }
+  }
+
+  private startRxReportSchedule() {
+    this.stopRxReportSchedule();
+    this.rxReportTimer = setInterval(() => {
+      if (this.closed) {
+        return;
+      }
+      void this.flushRxSamples();
+    }, RX_REPORT_INTERVAL_MS);
+    this.rxReportTimer.unref?.();
+  }
+
+  private stopRxReportSchedule() {
+    if (this.rxReportTimer) {
+      clearInterval(this.rxReportTimer);
+      this.rxReportTimer = null;
+    }
+  }
+
+  private async flushRxSamples(): Promise<void> {
+    if (this.rxReportInFlight || this.closed) {
+      return;
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (this.rxSamples.length === 0) {
+      return;
+    }
+    const batch = this.rxSamples.splice(0, this.rxSamples.length);
+    this.rxReportInFlight = true;
+    try {
+      await this.request("protocol-traces.rx-report", { samples: batch });
+    } catch (err) {
+      logDebug(`rx-report failed: ${String(err)}`);
+    } finally {
+      this.rxReportInFlight = false;
+    }
   }
 
   private startClockSyncSchedule() {

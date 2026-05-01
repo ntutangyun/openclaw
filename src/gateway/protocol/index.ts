@@ -274,6 +274,12 @@ import {
   TalkModeParamsSchema,
   type TickEvent,
   TickEventSchema,
+  type ProtocolRxSamplesEvent,
+  ProtocolRxSamplesEventSchema,
+  type ProtocolTracesRxReportParams,
+  ProtocolTracesRxReportParamsSchema,
+  type ProtocolTracesRxReportResult,
+  ProtocolTracesRxReportResultSchema,
   type TimeSyncParams,
   TimeSyncParamsSchema,
   type TimeSyncResult,
@@ -517,6 +523,9 @@ export const validateChatEvent = ajv.compile(ChatEventSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateTimeSyncParams = ajv.compile<TimeSyncParams>(TimeSyncParamsSchema);
 export const validateTimeSyncResult = ajv.compile<TimeSyncResult>(TimeSyncResultSchema);
+export const validateProtocolTracesRxReportParams = ajv.compile<ProtocolTracesRxReportParams>(
+  ProtocolTracesRxReportParamsSchema,
+);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
@@ -630,6 +639,9 @@ export {
   TalkSpeakResultSchema,
   TimeSyncParamsSchema,
   TimeSyncResultSchema,
+  ProtocolRxSamplesEventSchema,
+  ProtocolTracesRxReportParamsSchema,
+  ProtocolTracesRxReportResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsLogoutParamsSchema,
@@ -736,6 +748,9 @@ export type {
   TalkModeParams,
   TimeSyncParams,
   TimeSyncResult,
+  ProtocolRxSamplesEvent,
+  ProtocolTracesRxReportParams,
+  ProtocolTracesRxReportResult,
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsLogoutParams,

@@ -3,6 +3,9 @@ import {
   type ClockSyncSample,
   computeClockSyncSample,
   pickBestSample,
+  type RxLatencySample,
+  RX_REPORT_BUFFER_CAP,
+  RX_REPORT_INTERVAL_MS,
   TIME_SYNC_BURST_INTERVAL_MS,
   TIME_SYNC_BURST_SAMPLES,
   TIME_SYNC_PERIODIC_INTERVAL_MS,
@@ -139,6 +142,7 @@ export type GatewayHelloOk = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  method?: string;
 };
 
 type SelectedConnectAuth = {
@@ -315,6 +319,13 @@ export class GatewayBrowserClient {
   private clockSyncTimer: number | null = null;
   private clockSyncInFlight = false;
   private lastClockSyncMetrics: ClockSyncMetrics | null = null;
+  // Rx-latency capture state. Each inbound frame with `sentAt` produces a
+  // sample; periodic flushes batch them to `protocol-traces.rx-report` so the
+  // gateway can chart the gateway→operator direction (which it can't measure
+  // from its own clock alone).
+  private rxSamples: RxLatencySample[] = [];
+  private rxReportTimer: number | null = null;
+  private rxReportInFlight = false;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -327,6 +338,7 @@ export class GatewayBrowserClient {
     this.closed = true;
     this.clearConnectTimer();
     this.stopClockSyncSchedule();
+    this.stopRxReportSchedule();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -354,6 +366,8 @@ export class GatewayBrowserClient {
       // The next gateway process may be a fresh restart with a slightly
       // different clock; reset offset rather than carrying a stale value.
       this.stopClockSyncSchedule();
+      this.stopRxReportSchedule();
+      this.rxSamples = [];
       this.clockOffsetMs = 0;
       this.lastClockSyncMetrics = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
@@ -482,6 +496,7 @@ export class GatewayBrowserClient {
     this.backoffMs = 800;
     this.opts.onHello?.(hello);
     this.startClockSyncSchedule();
+    this.startRxReportSchedule();
   }
 
   private handleConnectFailure(err: unknown, plan: ConnectPlan) {
@@ -552,7 +567,7 @@ export class GatewayBrowserClient {
       return;
     }
 
-    const frame = parsed as { type?: unknown };
+    const frame = parsed as { type?: unknown; sentAt?: unknown };
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
       if (evt.event === "connect.challenge") {
@@ -564,6 +579,7 @@ export class GatewayBrowserClient {
         }
         return;
       }
+      this.captureRxSample(frame.sentAt, "event", undefined, evt.event);
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
@@ -585,6 +601,7 @@ export class GatewayBrowserClient {
       if (!pending) {
         return;
       }
+      this.captureRxSample(frame.sentAt, "res", pending.method, undefined);
       this.pending.delete(res.id);
       if (res.ok) {
         pending.resolve(res.payload);
@@ -654,10 +671,61 @@ export class GatewayBrowserClient {
       sentAt: Math.round(Date.now() + this.clockOffsetMs),
     };
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method });
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  private captureRxSample(sentAt: unknown, kind: string, method?: string, event?: string) {
+    if (typeof sentAt !== "number") {
+      return;
+    }
+    const peerNow = Date.now();
+    const adjustedTs = Math.round(peerNow + this.clockOffsetMs);
+    const latencyMs = adjustedTs - sentAt;
+    if (latencyMs < 0 || latencyMs >= 60_000) {
+      return;
+    }
+    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event });
+    if (this.rxSamples.length > RX_REPORT_BUFFER_CAP) {
+      this.rxSamples.splice(0, this.rxSamples.length - RX_REPORT_BUFFER_CAP);
+    }
+  }
+
+  private startRxReportSchedule() {
+    this.stopRxReportSchedule();
+    this.rxReportTimer = window.setInterval(() => {
+      void this.flushRxSamples();
+    }, RX_REPORT_INTERVAL_MS);
+  }
+
+  private stopRxReportSchedule() {
+    if (this.rxReportTimer !== null) {
+      window.clearInterval(this.rxReportTimer);
+      this.rxReportTimer = null;
+    }
+  }
+
+  private async flushRxSamples(): Promise<void> {
+    if (this.rxReportInFlight || this.closed) {
+      return;
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (this.rxSamples.length === 0) {
+      return;
+    }
+    const batch = this.rxSamples.splice(0, this.rxSamples.length);
+    this.rxReportInFlight = true;
+    try {
+      await this.request("protocol-traces.rx-report", { samples: batch });
+    } catch {
+      // Telemetry only — drop on failure rather than building unbounded queue.
+    } finally {
+      this.rxReportInFlight = false;
+    }
   }
 
   private startClockSyncSchedule() {

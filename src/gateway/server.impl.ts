@@ -611,6 +611,15 @@ export async function startGatewayServer(
           broadcastToConnIds("protocol.trace", record, allConnIds, { dropIfSlow: true });
         }
       });
+      protocolTraceStore.setRxBroadcast((info) => {
+        const allConnIds = new Set<string>();
+        for (const c of clients) {
+          allConnIds.add(c.connId);
+        }
+        if (allConnIds.size > 0) {
+          broadcastToConnIds("protocol.rx.samples", info, allConnIds, { dropIfSlow: true });
+        }
+      });
       registerWsTraceListener((direction, kind, meta) => {
         protocolTraceStore.captureTrace(direction, kind, meta);
       });

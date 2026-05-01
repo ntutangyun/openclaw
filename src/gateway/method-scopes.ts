@@ -41,11 +41,12 @@ const NODE_ROLE_METHODS = new Set([
 
 // Methods callable by both `operator` and `node` roles, requiring no scope.
 // Reserved for low-level primitives that carry no privileged data and that
-// either side must be able to invoke (currently: clock synchronization).
-// `authorizeGatewayMethod` short-circuits authorization for these methods, so
-// `isRoleAuthorizedForMethod` and the scope checks below are only consulted
-// for classification/test-drift purposes.
-const SHARED_METHODS = new Set(["time.sync"]);
+// either side must be able to invoke (currently: clock synchronization and
+// reverse-direction latency telemetry). `authorizeGatewayMethod`
+// short-circuits authorization for these methods, so `isRoleAuthorizedForMethod`
+// and the scope checks below are only consulted for classification/test-drift
+// purposes.
+const SHARED_METHODS = new Set(["time.sync", "protocol-traces.rx-report"]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [

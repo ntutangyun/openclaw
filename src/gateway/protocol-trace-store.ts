@@ -53,6 +53,23 @@ export type ProtocolTraceRecord = {
 
 export type TraceBroadcastFn = (record: ProtocolTraceRecord) => void;
 
+/** A single peer-reported gateway → peer rx-latency sample. */
+export type RxLatencySample = {
+  /** Peer's receive time, shifted into the gateway's clock frame. */
+  ts: number;
+  /** Peer-measured one-way latency (gateway send → peer recv) in milliseconds. */
+  latencyMs: number;
+  kind?: string;
+  method?: string;
+  event?: string;
+};
+
+export type RxSamplesBroadcastFn = (info: {
+  source: "operator" | "node";
+  connId?: string;
+  samples: RxLatencySample[];
+}) => void;
+
 // ---------------------------------------------------------------------------
 // Entity resolution
 // ---------------------------------------------------------------------------
@@ -204,10 +221,16 @@ function selectiveTruncatePayload(payload: unknown, meta: Record<string, unknown
 }
 
 const RING_BUFFER_CAP = 1000;
+const RX_SAMPLE_CAP_PER_SOURCE = 1000;
 
 export class ProtocolTraceStore {
   private buffer: ProtocolTraceRecord[] = [];
   private broadcastFn: TraceBroadcastFn | null = null;
+  private rxBroadcastFn: RxSamplesBroadcastFn | null = null;
+  private rxSamples: { operator: RxLatencySample[]; node: RxLatencySample[] } = {
+    operator: [],
+    node: [],
+  };
   private traceDir: string;
   private currentFile: string | null = null;
   private currentDate: string | null = null;
@@ -221,6 +244,38 @@ export class ProtocolTraceStore {
 
   setBroadcast(fn: TraceBroadcastFn) {
     this.broadcastFn = fn;
+  }
+
+  setRxBroadcast(fn: RxSamplesBroadcastFn) {
+    this.rxBroadcastFn = fn;
+  }
+
+  /**
+   * Append peer-reported rx samples to the per-source sliding window and
+   * forward to the rx broadcast hook (consumed by the protocol monitor UI).
+   */
+  recordRxSamples(
+    source: "operator" | "node",
+    samples: RxLatencySample[],
+    opts: { connId?: string } = {},
+  ) {
+    if (!samples.length) {
+      return;
+    }
+    const buf = this.rxSamples[source];
+    for (const s of samples) {
+      buf.push(s);
+    }
+    if (buf.length > RX_SAMPLE_CAP_PER_SOURCE) {
+      buf.splice(0, buf.length - RX_SAMPLE_CAP_PER_SOURCE);
+    }
+    if (this.rxBroadcastFn) {
+      this.rxBroadcastFn({ source, connId: opts.connId, samples });
+    }
+  }
+
+  getRxSamples(source: "operator" | "node"): RxLatencySample[] {
+    return this.rxSamples[source].slice();
   }
 
   /** Called by the ws-log trace listener. */
@@ -331,6 +386,8 @@ export class ProtocolTraceStore {
 
   clearTraces() {
     this.buffer = [];
+    this.rxSamples.operator = [];
+    this.rxSamples.node = [];
     // Close current write stream
     if (this.writeStream) {
       this.writeStream.end();

@@ -63,3 +63,29 @@ export function pickBestSample(samples: ClockSyncSample[]): ClockSyncSample | nu
 export const TIME_SYNC_BURST_SAMPLES = 5;
 export const TIME_SYNC_BURST_INTERVAL_MS = 200;
 export const TIME_SYNC_PERIODIC_INTERVAL_MS = 60_000;
+
+/**
+ * Maximum unflushed rx-latency samples a peer keeps in memory before the
+ * oldest get dropped. Bounds memory under prolonged disconnect or extreme
+ * fan-in (e.g. fast assistant streams generating many events).
+ */
+export const RX_REPORT_BUFFER_CAP = 500;
+
+/**
+ * How often a peer drains its rx-latency buffer and posts to
+ * `protocol-traces.rx-report`. Short enough that the protocol monitor's
+ * reverse-direction chart updates close to live; long enough that the report
+ * RPC itself doesn't dominate operator→gateway traffic.
+ */
+export const RX_REPORT_INTERVAL_MS = 5_000;
+
+/** Single peer-measured gateway → peer rx-latency sample. */
+export type RxLatencySample = {
+  /** Peer's receive time, shifted into the gateway's clock frame. */
+  ts: number;
+  /** One-way latency in milliseconds. */
+  latencyMs: number;
+  kind?: string;
+  method?: string;
+  event?: string;
+};

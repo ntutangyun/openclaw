@@ -151,6 +151,11 @@ import {
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
 } from "./plugin-approvals.js";
+import {
+  ProtocolRxSamplesEventSchema,
+  ProtocolTracesRxReportParamsSchema,
+  ProtocolTracesRxReportResultSchema,
+} from "./protocol-traces.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -369,6 +374,9 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
   TimeSyncParams: TimeSyncParamsSchema,
   TimeSyncResult: TimeSyncResultSchema,
+  ProtocolTracesRxReportParams: ProtocolTracesRxReportParamsSchema,
+  ProtocolTracesRxReportResult: ProtocolTracesRxReportResultSchema,
+  ProtocolRxSamplesEvent: ProtocolRxSamplesEventSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;

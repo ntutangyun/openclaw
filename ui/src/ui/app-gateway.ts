@@ -41,7 +41,10 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
-import { handleProtocolTraceEvent } from "./controllers/protocol-monitor.ts";
+import {
+  handleProtocolRxSamplesEvent,
+  handleProtocolTraceEvent,
+} from "./controllers/protocol-monitor.ts";
 import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -480,6 +483,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "protocol.trace") {
     handleProtocolTraceEvent(host, evt.payload);
+    return;
+  }
+  if (evt.event === "protocol.rx.samples") {
+    handleProtocolRxSamplesEvent(host, evt.payload);
     return;
   }
 

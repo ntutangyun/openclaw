@@ -134,6 +134,10 @@ const BASE_METHODS = [
   "chat.send",
   // 4-timestamp NTP-style clock sync between gateway and connected peers.
   "time.sync",
+  // Peer reports gateway→peer rx-latency samples so the protocol monitor can
+  // chart the reverse direction (the gateway can't measure it from its own
+  // clock alone).
+  "protocol-traces.rx-report",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -166,4 +170,7 @@ export const GATEWAY_EVENTS = [
   "plugin.approval.requested",
   "plugin.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  // Protocol monitor live streams
+  "protocol.trace",
+  "protocol.rx.samples",
 ];

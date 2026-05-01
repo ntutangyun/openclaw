@@ -21,6 +21,7 @@ import { modelsAuthStatusHandlers } from "./server-methods/models-auth-status.js
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { protocolTracesHandlers } from "./server-methods/protocol-traces.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
@@ -50,6 +51,11 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   // and node roles must be able to call. It carries no privileged data and
   // returns only the gateway's wall-clock at request receive/send.
   if (method === "time.sync") {
+    return null;
+  }
+  // protocol-traces.rx-report: pure telemetry from the peer side; both
+  // operator and node need to be able to fire it without any scope.
+  if (method === "protocol-traces.rx-report") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -107,6 +113,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...timeHandlers,
+  ...protocolTracesHandlers,
 };
 
 export async function handleGatewayRequest(

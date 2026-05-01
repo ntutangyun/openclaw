@@ -2514,14 +2514,14 @@ function selectDirectionLatency(
         latencyKey: "lat-op-gw",
       };
     case "gw-to-op":
-      // We can't directly observe gw→op one-way at the gateway (no peer recv
-      // timestamp). Show the reverse direction's series under a symmetry
-      // assumption — the explainer makes this clear.
+      // Peer-measured: the operator client measures rx latency for each frame
+      // it receives from the gateway and reports samples back via
+      // `protocol-traces.rx-report`. Requires `time.sync` to have converged
+      // for the offset correction to be meaningful.
       return {
-        stats: net.operatorGatewayOneWayLatency,
-        label: "Gateway → Operator · one-way (symmetric estimate)",
+        stats: net.gatewayOperatorOneWayLatency,
+        label: "Gateway → Operator · one-way (peer-measured)",
         latencyKey: "lat-gw-op",
-        estimated: true,
       };
     case "node-to-gw":
       return {
@@ -2530,11 +2530,11 @@ function selectDirectionLatency(
         latencyKey: "lat-node-gw",
       };
     case "gw-to-node":
+      // Peer-measured: same mechanism as gateway → operator above.
       return {
-        stats: net.nodeGatewayOneWayLatency,
-        label: "Gateway → Node · one-way (symmetric estimate)",
+        stats: net.gatewayNodeOneWayLatency,
+        label: "Gateway → Node · one-way (peer-measured)",
         latencyKey: "lat-gw-node",
-        estimated: true,
       };
     case "agent-to-model":
       return {
