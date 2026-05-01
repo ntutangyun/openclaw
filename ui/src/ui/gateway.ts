@@ -643,13 +643,15 @@ export class GatewayBrowserClient {
     const id = generateUUID();
     // Shift sentAt into the gateway's clock frame using the cached offset so
     // the gateway-side `oneWayLatencyMs = capturedAt - sentAt` stays accurate.
-    // Before the first time.sync completes this is a no-op (offset = 0).
+    // Before the first time.sync completes this is a no-op (offset = 0). The
+    // offset can be a `.5` value from `((t1-t0)+(t2-t3))/2`; round so the
+    // wire-level `sentAt` stays integer (`Type.Integer` rejects fractions).
     const frame = {
       type: "req",
       id,
       method,
       params,
-      sentAt: Date.now() + this.clockOffsetMs,
+      sentAt: Math.round(Date.now() + this.clockOffsetMs),
     };
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
