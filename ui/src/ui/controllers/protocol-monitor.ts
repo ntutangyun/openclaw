@@ -416,6 +416,10 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   // The protocol monitor's own RPCs
   "protocol-traces.list",
   "protocol-traces.clear",
+  // Peer → gateway batch of measured rx-latency samples for the gateway→peer
+  // direction (the trip itself shouldn't show up as gateway→peer or
+  // peer→gateway throughput/latency in the chart).
+  "protocol-traces.rx-report",
   // Clock-sync mechanism — high-frequency, mechanism-only, would dominate
   // operator->gateway aggregates if left in.
   "time.sync",
@@ -433,6 +437,8 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   "open",
   "hello-ok",
   "protocol.trace",
+  // Gateway → UIs broadcast of a peer-reported rx-latency batch.
+  "protocol.rx.samples",
 ]);
 
 /** Returns true if a trace record should be dropped before ingestion. */

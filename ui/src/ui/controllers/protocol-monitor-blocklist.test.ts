@@ -7,6 +7,11 @@ describe("DEFAULT_INGEST_BLOCKLIST", () => {
     expect(isIngestBlocklisted({ method: "time.sync" })).toBe(true);
   });
 
+  it("excludes the rx-report mechanism so the latency reports themselves don't pollute aggregates", () => {
+    expect(isIngestBlocklisted({ method: "protocol-traces.rx-report" })).toBe(true);
+    expect(isIngestBlocklisted({ event: "protocol.rx.samples" })).toBe(true);
+  });
+
   it("excludes UI bootstrap fetches that aren't part of the active task", () => {
     for (const method of [
       "chat.history",
