@@ -1,3 +1,12 @@
+import {
+  type ClockSyncMetrics,
+  type ClockSyncSample,
+  computeClockSyncSample,
+  pickBestSample,
+  TIME_SYNC_BURST_INTERVAL_MS,
+  TIME_SYNC_BURST_SAMPLES,
+  TIME_SYNC_PERIODIC_INTERVAL_MS,
+} from "../../../src/gateway/clock-sync.js";
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -285,6 +294,8 @@ export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): bo
   );
 }
 
+type TimeSyncResponse = { peerT0: number; gatewayT1: number; gatewayT2: number };
+
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
@@ -297,6 +308,13 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  // Clock-sync state. `clockOffsetMs` is applied to outbound `sentAt` so the
+  // gateway's `oneWayLatencyMs = capturedAt - sentAt` formula stays correct
+  // regardless of OS clock skew between this browser and the gateway host.
+  private clockOffsetMs = 0;
+  private clockSyncTimer: number | null = null;
+  private clockSyncInFlight = false;
+  private lastClockSyncMetrics: ClockSyncMetrics | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -308,6 +326,7 @@ export class GatewayBrowserClient {
   stop() {
     this.closed = true;
     this.clearConnectTimer();
+    this.stopClockSyncSchedule();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -332,6 +351,11 @@ export class GatewayBrowserClient {
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
+      // The next gateway process may be a fresh restart with a slightly
+      // different clock; reset offset rather than carrying a stale value.
+      this.stopClockSyncSchedule();
+      this.clockOffsetMs = 0;
+      this.lastClockSyncMetrics = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
@@ -457,6 +481,7 @@ export class GatewayBrowserClient {
     }
     this.backoffMs = 800;
     this.opts.onHello?.(hello);
+    this.startClockSyncSchedule();
   }
 
   private handleConnectFailure(err: unknown, plan: ConnectPlan) {
@@ -616,12 +641,114 @@ export class GatewayBrowserClient {
       return Promise.reject(new Error("gateway not connected"));
     }
     const id = generateUUID();
-    const frame = { type: "req", id, method, params, sentAt: Date.now() };
+    // Shift sentAt into the gateway's clock frame using the cached offset so
+    // the gateway-side `oneWayLatencyMs = capturedAt - sentAt` stays accurate.
+    // Before the first time.sync completes this is a no-op (offset = 0).
+    const frame = {
+      type: "req",
+      id,
+      method,
+      params,
+      sentAt: Date.now() + this.clockOffsetMs,
+    };
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  private startClockSyncSchedule() {
+    this.stopClockSyncSchedule();
+    void this.runClockSyncBurst();
+    this.clockSyncTimer = window.setInterval(() => {
+      if (this.closed) {
+        return;
+      }
+      void this.runClockSyncBurst();
+    }, TIME_SYNC_PERIODIC_INTERVAL_MS);
+  }
+
+  private stopClockSyncSchedule() {
+    if (this.clockSyncTimer !== null) {
+      window.clearInterval(this.clockSyncTimer);
+      this.clockSyncTimer = null;
+    }
+  }
+
+  private async runClockSyncBurst(): Promise<void> {
+    if (this.clockSyncInFlight || this.closed) {
+      return;
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.clockSyncInFlight = true;
+    try {
+      const samples: ClockSyncSample[] = [];
+      let bestSoFar: ClockSyncSample | null = null;
+      for (let i = 0; i < TIME_SYNC_BURST_SAMPLES; i++) {
+        if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          break;
+        }
+        try {
+          const peerT0 = Date.now();
+          const result = await this.request<TimeSyncResponse>("time.sync", {
+            peerT0,
+            prevSync: this.lastClockSyncMetrics ?? undefined,
+          });
+          const peerT3 = Date.now();
+          if (
+            result &&
+            typeof result.gatewayT1 === "number" &&
+            typeof result.gatewayT2 === "number"
+          ) {
+            const sample = computeClockSyncSample(
+              peerT0,
+              result.gatewayT1,
+              result.gatewayT2,
+              peerT3,
+            );
+            // Discard implausible samples (negative or absurdly long RTTs that
+            // can only mean we caught a system suspend or wall-clock jump).
+            if (sample.rttMs < 60_000) {
+              samples.push(sample);
+              // Update incrementally so the offset improves before the burst
+              // finishes — early outbound frames get a usable offset within
+              // ~one RTT instead of waiting ~one second for the full burst.
+              if (!bestSoFar || sample.rttMs < bestSoFar.rttMs) {
+                bestSoFar = sample;
+                this.clockOffsetMs = sample.offsetMs;
+                this.lastClockSyncMetrics = {
+                  offsetMs: sample.offsetMs,
+                  networkRttMs: sample.networkRttMs,
+                  gatewayProcessingMs: sample.gatewayProcessingMs,
+                };
+              }
+            }
+          }
+        } catch {
+          // Expected during reconnect/race conditions; the next burst will
+          // retry. Do not log to avoid console spam in the browser.
+        }
+        if (i < TIME_SYNC_BURST_SAMPLES - 1) {
+          await new Promise<void>((resolve) =>
+            window.setTimeout(resolve, TIME_SYNC_BURST_INTERVAL_MS),
+          );
+        }
+      }
+      const final = pickBestSample(samples);
+      if (final) {
+        this.clockOffsetMs = final.offsetMs;
+        this.lastClockSyncMetrics = {
+          offsetMs: final.offsetMs,
+          networkRttMs: final.networkRttMs,
+          gatewayProcessingMs: final.gatewayProcessingMs,
+        };
+      }
+    } finally {
+      this.clockSyncInFlight = false;
+    }
   }
 
   private queueConnect() {

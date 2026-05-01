@@ -27,6 +27,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { timeHandlers } from "./server-methods/time.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { ttsHandlers } from "./server-methods/tts.js";
@@ -43,6 +44,12 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     return null;
   }
   if (method === "health") {
+    return null;
+  }
+  // time.sync is a low-level clock-synchronization primitive that both operator
+  // and node roles must be able to call. It carries no privileged data and
+  // returns only the gateway's wall-clock at request receive/send.
+  if (method === "time.sync") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -99,6 +106,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,
+  ...timeHandlers,
 };
 
 export async function handleGatewayRequest(

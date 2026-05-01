@@ -145,7 +145,9 @@ export const RequestFrameSchema = Type.Object(
     /**
      * Sender wall-clock at frame send time (ms since epoch). Optional, additive.
      * Older clients omit it; the Protocol Monitor uses it to derive one-way
-     * latency on the receiver. Assumes clocks are synced across peers.
+     * latency on the receiver. Peers that ran a `time.sync` exchange shift this
+     * value into the gateway's clock frame so the receiver can compute latency
+     * without trusting OS clock alignment between hosts.
      */
     sentAt: Type.Optional(Type.Integer({ minimum: 0 })),
   },

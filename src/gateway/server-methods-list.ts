@@ -132,6 +132,8 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // 4-timestamp NTP-style clock sync between gateway and connected peers.
+  "time.sync",
 ];
 
 export function listGatewayMethods(): string[] {

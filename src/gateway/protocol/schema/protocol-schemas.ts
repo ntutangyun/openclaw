@@ -185,6 +185,7 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { TimeSyncParamsSchema, TimeSyncResultSchema } from "./time.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -366,6 +367,8 @@ export const ProtocolSchemas = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
+  TimeSyncParams: TimeSyncParamsSchema,
+  TimeSyncResult: TimeSyncResultSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
