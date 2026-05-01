@@ -358,6 +358,7 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   // Periodic polls
   "node.list",
   "nodes.list",
+  "node.describe",
   "device.pair.list",
   "device.pair.status",
   "session.usage",
@@ -375,13 +376,23 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   "channels.status",
   "cron.list",
   "cron.status",
+  "cron.runs",
   "config.get",
   "models.list",
+  "models.authStatus",
   "tools.catalog",
   "tools.effective",
   "usage.status",
   "usage.cost",
   "debug.snapshot",
+  // UI bootstrap / catalog (one-shot, not part of the running task)
+  "gateway.identity.get",
+  "talk.config",
+  "voicewake.get",
+  "skills.status",
+  "skills.search",
+  "skills.detail",
+  "commands.list",
   // Health / liveness
   "health",
   "last-heartbeat",
@@ -393,6 +404,16 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   // The protocol monitor's own RPCs
   "protocol-traces.list",
   "protocol-traces.clear",
+  // Clock-sync mechanism — high-frequency, mechanism-only, would dominate
+  // operator->gateway aggregates if left in.
+  "time.sync",
+  // Read-only history fetched on UI mount; not part of the active task flow.
+  "chat.history",
+  // Node control-plane queue plumbing — not part of the agentic task itself.
+  "node.pending.pull",
+  "node.pending.ack",
+  "node.pending.drain",
+  "node.canvas.capability.refresh",
   // Periodic broadcast events
   "tick",
   "heartbeat",

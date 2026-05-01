@@ -3199,7 +3199,6 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
   const minTs = samples[0].ts;
   const maxTs = samples.length > 1 ? samples[samples.length - 1].ts : minTs + 1000;
   const tsRange = maxTs - minTs || 1;
-  const avgVal = stats.avgMs ?? 0;
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
 
@@ -3213,7 +3212,22 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
     const ts = minTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
-  const avgY = toY(avgVal);
+
+  // Time-series polyline + area fill — gives the chart a shape even when
+  // samples are sparse, instead of looking like "just an average line".
+  const linePoints = samples.map((s) => `${toX(s.ts)},${toY(s.latencyMs)}`).join(" ");
+  const areaPoints = `${PAD_L},${PAD_T + plotH} ${linePoints} ${toX(maxTs)},${PAD_T + plotH}`;
+
+  // Reference lines for the distribution. Drawn back-to-front so the headline
+  // (avg) renders on top. Skip lines whose value is 0 — happens before any
+  // samples, or when the metric truly is zero everywhere.
+  const refLines = [
+    { val: stats.peakMs ?? 0, label: "peak", dash: "2,4", opacity: 0.35, weight: 0.7 },
+    { val: stats.p95Ms ?? 0, label: "p95", dash: "5,3", opacity: 0.55, weight: 1 },
+    { val: stats.p50Ms ?? 0, label: "p50", dash: "4,4", opacity: 0.55, weight: 1 },
+    { val: stats.avgMs ?? 0, label: "avg", dash: "6,4", opacity: 0.85, weight: 1.5 },
+  ].filter((r) => r.val > 0);
+
   const chartId = `lat-${label.replace(/\W/g, "")}`;
 
   return html`
@@ -3237,25 +3251,11 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
     >
       <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
         ${yGridLines.map(
-          (g) => html`
-            <line
-              x1="${PAD_L}"
-              y1="${g.y}"
-              x2="${W - PAD_R}"
-              y2="${g.y}"
-              stroke="#d4d8e8"
-              stroke-width="0.6"
-              stroke-dasharray="3,3"
-            />
-            <text
-              x="${PAD_L - 6}"
-              y="${g.y + 4}"
-              text-anchor="end"
-              fill="#6b7280"
-              font-size="11"
-              font-family="monospace"
-              >${g.label}</text
-            >
+          (g) => svg`
+            <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+              stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+            <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+              fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
           `,
         )}
         <line
@@ -3267,50 +3267,34 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
           stroke-width="0.6"
         />
         ${xTicks.map(
-          (t) => html`
-            <text
-              x="${t.x}"
-              y="${H - 8}"
-              text-anchor="middle"
-              fill="#6b7280"
-              font-size="11"
-              font-family="monospace"
-              >${t.label}</text
-            >
+          (t) => svg`
+            <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+              fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
           `,
         )}
-        <line
-          x1="${PAD_L}"
-          y1="${avgY}"
-          x2="${W - PAD_R}"
-          y2="${avgY}"
+        ${refLines.map(
+          (r) => svg`
+            <line x1="${PAD_L}" y1="${toY(r.val)}" x2="${W - PAD_R}" y2="${toY(r.val)}"
+              stroke="${color}" stroke-width="${r.weight}"
+              stroke-dasharray="${r.dash}" opacity="${r.opacity}" />
+            <text x="${W - PAD_R + 2}" y="${toY(r.val) + 4}"
+              fill="${color}" font-size="10" font-family="monospace"
+              font-weight="600" opacity="${Math.min(1, r.opacity + 0.1)}">${r.label}</text>
+          `,
+        )}
+        <polygon points="${areaPoints}" fill="${color}" opacity="0.15" />
+        <polyline
+          points="${linePoints}"
+          fill="none"
           stroke="${color}"
           stroke-width="1.5"
-          stroke-dasharray="6,4"
-          opacity="0.8"
+          stroke-linejoin="round"
+          vector-effect="non-scaling-stroke"
         />
-        <text
-          x="${W - PAD_R + 2}"
-          y="${avgY + 4}"
-          fill="${color}"
-          font-size="10"
-          font-family="monospace"
-          font-weight="600"
-          opacity="0.9"
-        >
-          avg
-        </text>
         ${samples.map(
-          (s) => html`
-            <circle
-              cx="${toX(s.ts)}"
-              cy="${toY(s.latencyMs)}"
-              r="5"
-              fill="${color}"
-              opacity="1"
-              stroke="#ffffff"
-              stroke-width="1.5"
-            />
+          (s) => svg`
+            <circle cx="${toX(s.ts)}" cy="${toY(s.latencyMs)}" r="3.5"
+              fill="${color}" stroke="#ffffff" stroke-width="1" opacity="0.95" />
           `,
         )}
       </svg>
