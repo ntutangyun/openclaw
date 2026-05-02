@@ -6,7 +6,14 @@ import type {
   CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+// Local fork: import BASE_THINKING_LEVELS from the browser-safe shared module
+// instead of `listThinkingLevels` (which transitively pulls
+// plugins/provider-thinking → provider-public-artifacts → bundled-dir, and
+// bundled-dir uses Node-only `process.argv`/`process.env`, breaking the
+// Control UI bundle with `ReferenceError: process is not defined`). The /think
+// menu loses provider-aware filtering as a result; server-side validation
+// still rejects unsupported levels.
+import { BASE_THINKING_LEVELS } from "./thinking.shared.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -727,7 +734,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
+          choices: () => BASE_THINKING_LEVELS,
         },
       ],
       argsMenu: "auto",
