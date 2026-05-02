@@ -1175,6 +1175,51 @@ APPROVALS
   echo "  tools.exec: $exec_override"
   echo "  exec-approvals.json: defaults.ask=off, defaults.security=full"
 
+  # Bump approved scopes on every paired operator/CLI device to the full
+  # CLI_DEFAULT_OPERATOR_SCOPES set. Without this, the agent's `openclaw …`
+  # subprocess connects with the 6-scope CLI default and the gateway emits
+  # "scope upgrade pending approval (requestId: …)" because the original
+  # pairing was only approved for a subset (typically operator.pairing +
+  # operator.read). This is upstream's new scope-gate behavior added during
+  # the v2026.4.30 merge.
+  echo "==> Bumping CLI device approvedScopes to the full operator set..."
+  docker exec "$container" node -e '
+    (() => {
+      const fs = require("fs");
+      const path = "/home/node/.openclaw/devices/paired.json";
+      const FULL = [
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.talk.secrets",
+      ];
+      let paired;
+      try {
+        paired = JSON.parse(fs.readFileSync(path, "utf8"));
+      } catch {
+        console.log("  (no paired.json — nothing to bump)");
+        return;
+      }
+      let changed = 0;
+      for (const dev of Object.values(paired)) {
+        const isCli =
+          dev && dev.role === "operator" && (dev.clientId === "cli" || dev.clientMode === "cli");
+        if (!isCli) continue;
+        const before = JSON.stringify(dev.approvedScopes || []);
+        dev.approvedScopes = [...FULL];
+        dev.scopes = [...FULL];
+        if (dev.tokens && dev.tokens.operator) {
+          dev.tokens.operator.scopes = [...FULL];
+        }
+        if (before !== JSON.stringify(dev.approvedScopes)) changed++;
+      }
+      fs.writeFileSync(path, JSON.stringify(paired, null, 2) + "\n");
+      console.log(`  approvedScopes bumped on ${changed} CLI device(s)`);
+    })();
+  '
+
   # Write agent tools.md with host-selection instructions when a node is configured
   if [[ -n "$node_name" ]]; then
     echo "==> Writing agent tools.md (exec host-selection instructions)..."
