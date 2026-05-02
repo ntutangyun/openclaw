@@ -24,6 +24,7 @@ import { modelsHandlers } from "./server-methods/models.js";
 import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { pingHandlers } from "./server-methods/ping.js";
 import { pluginHostHookHandlers } from "./server-methods/plugin-host-hooks.js";
 import { protocolTracesHandlers } from "./server-methods/protocol-traces.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -62,6 +63,14 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   // protocol-traces.rx-report: pure telemetry from the peer side; both
   // operator and node need to be able to fire it without any scope.
   if (method === "protocol-traces.rx-report") {
+    return null;
+  }
+  // Ping protocol: low-level mechanism, both roles, no scope.
+  if (
+    method === "ping.peer-to-gw" ||
+    method === "ping.gw-to-peer.ack" ||
+    method === "ping.metrics-report"
+  ) {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -125,6 +134,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentsHandlers,
   ...timeHandlers,
   ...protocolTracesHandlers,
+  ...pingHandlers,
   ...artifactsHandlers,
 };
 

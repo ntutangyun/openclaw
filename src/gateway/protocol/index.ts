@@ -328,6 +328,23 @@ import {
   TalkModeParamsSchema,
   type TickEvent,
   TickEventSchema,
+  type PingGwToPeerAckParams,
+  PingGwToPeerAckParamsSchema,
+  type PingGwToPeerAckResult,
+  PingGwToPeerAckResultSchema,
+  type PingGwToPeerEvent,
+  PingGwToPeerEventSchema,
+  type PingMetricsEvent,
+  PingMetricsEventSchema,
+  type PingMetricsReportParams,
+  PingMetricsReportParamsSchema,
+  type PingMetricsReportResult,
+  PingMetricsReportResultSchema,
+  type PingPeerToGwParams,
+  PingPeerToGwParamsSchema,
+  type PingPeerToGwResult,
+  PingPeerToGwResultSchema,
+  type PingSample,
   type ProtocolRxSamplesEvent,
   ProtocolRxSamplesEventSchema,
   type ProtocolTracesRxReportParams,
@@ -631,6 +648,13 @@ export const validateTimeSyncResult = ajv.compile<TimeSyncResult>(TimeSyncResult
 export const validateProtocolTracesRxReportParams = ajv.compile<ProtocolTracesRxReportParams>(
   ProtocolTracesRxReportParamsSchema,
 );
+export const validatePingPeerToGwParams = ajv.compile<PingPeerToGwParams>(PingPeerToGwParamsSchema);
+export const validatePingGwToPeerAckParams = ajv.compile<PingGwToPeerAckParams>(
+  PingGwToPeerAckParamsSchema,
+);
+export const validatePingMetricsReportParams = ajv.compile<PingMetricsReportParams>(
+  PingMetricsReportParamsSchema,
+);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
@@ -768,6 +792,14 @@ export {
   ProtocolRxSamplesEventSchema,
   ProtocolTracesRxReportParamsSchema,
   ProtocolTracesRxReportResultSchema,
+  PingGwToPeerAckParamsSchema,
+  PingGwToPeerAckResultSchema,
+  PingGwToPeerEventSchema,
+  PingMetricsEventSchema,
+  PingMetricsReportParamsSchema,
+  PingMetricsReportResultSchema,
+  PingPeerToGwParamsSchema,
+  PingPeerToGwResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
@@ -888,6 +920,15 @@ export type {
   ProtocolRxSamplesEvent,
   ProtocolTracesRxReportParams,
   ProtocolTracesRxReportResult,
+  PingGwToPeerAckParams,
+  PingGwToPeerAckResult,
+  PingGwToPeerEvent,
+  PingMetricsEvent,
+  PingMetricsReportParams,
+  PingMetricsReportResult,
+  PingPeerToGwParams,
+  PingPeerToGwResult,
+  PingSample,
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsStartParams,

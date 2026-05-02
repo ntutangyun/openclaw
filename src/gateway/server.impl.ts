@@ -58,6 +58,7 @@ import {
 } from "../tasks/task-registry.maintenance.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { PingSampleStore, setPingSampleStore } from "./ping-store.js";
 import { ProtocolTraceStore, setProtocolTraceStore } from "./protocol-trace-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
@@ -976,6 +977,37 @@ export async function startGatewayServer(
       registerWsTraceListener((direction, kind, meta) => {
         protocolTraceStore.captureTrace(direction, kind, meta);
       });
+    }
+
+    // Dedicated ping sample store + scheduler for protocol-monitor latency.
+    // Independent of protocol-trace-store so the ping mechanism doesn't
+    // pollute the trace ring or the throughput/messages aggregates.
+    const pingSampleStore = minimalTestGateway ? null : new PingSampleStore();
+    let pingSchedulerTimer: NodeJS.Timeout | null = null;
+    if (pingSampleStore) {
+      setPingSampleStore(pingSampleStore);
+      pingSampleStore.setBroadcast((info) => {
+        const allConnIds = new Set<string>();
+        for (const c of clients) {
+          allConnIds.add(c.connId);
+        }
+        if (allConnIds.size > 0) {
+          broadcastToConnIds("ping.metrics", info, allConnIds, { dropIfSlow: true });
+        }
+      });
+      // Every 5s, ping each connected peer (gateway → peer direction). The
+      // peer ACKs via `ping.gw-to-peer.ack`; the handler computes RTT and
+      // records a reverse sample in the ping store, which broadcasts to UIs.
+      pingSchedulerTimer = setInterval(() => {
+        for (const c of clients) {
+          const gatewayT0 = Date.now();
+          const pingId = `${gatewayT0}-${c.connId}`;
+          broadcastToConnIds("ping.gw-to-peer", { pingId, gatewayT0 }, new Set([c.connId]), {
+            dropIfSlow: true,
+          });
+        }
+      }, 5_000);
+      pingSchedulerTimer.unref?.();
     }
 
     Object.assign(

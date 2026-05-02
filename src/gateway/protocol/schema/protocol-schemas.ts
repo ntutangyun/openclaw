@@ -174,6 +174,16 @@ import {
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
+  PingGwToPeerAckParamsSchema,
+  PingGwToPeerAckResultSchema,
+  PingGwToPeerEventSchema,
+  PingMetricsEventSchema,
+  PingMetricsReportParamsSchema,
+  PingMetricsReportResultSchema,
+  PingPeerToGwParamsSchema,
+  PingPeerToGwResultSchema,
+} from "./ping.js";
+import {
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
 } from "./plugin-approvals.js";
@@ -439,6 +449,14 @@ export const ProtocolSchemas = {
   ProtocolTracesRxReportParams: ProtocolTracesRxReportParamsSchema,
   ProtocolTracesRxReportResult: ProtocolTracesRxReportResultSchema,
   ProtocolRxSamplesEvent: ProtocolRxSamplesEventSchema,
+  PingPeerToGwParams: PingPeerToGwParamsSchema,
+  PingPeerToGwResult: PingPeerToGwResultSchema,
+  PingGwToPeerEvent: PingGwToPeerEventSchema,
+  PingGwToPeerAckParams: PingGwToPeerAckParamsSchema,
+  PingGwToPeerAckResult: PingGwToPeerAckResultSchema,
+  PingMetricsReportParams: PingMetricsReportParamsSchema,
+  PingMetricsReportResult: PingMetricsReportResultSchema,
+  PingMetricsEvent: PingMetricsEventSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;

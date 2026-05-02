@@ -46,7 +46,14 @@ const NODE_ROLE_METHODS = new Set([
 // short-circuits authorization for these methods, so `isRoleAuthorizedForMethod`
 // and the scope checks below are only consulted for classification/test-drift
 // purposes.
-const SHARED_METHODS = new Set(["time.sync", "protocol-traces.rx-report"]);
+const SHARED_METHODS = new Set([
+  "time.sync",
+  "protocol-traces.rx-report",
+  // Dedicated ping protocol — both operator and node call these.
+  "ping.peer-to-gw",
+  "ping.gw-to-peer.ack",
+  "ping.metrics-report",
+]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [

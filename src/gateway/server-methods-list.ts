@@ -159,6 +159,11 @@ const BASE_METHODS = [
   // chart the reverse direction (the gateway can't measure it from its own
   // clock alone).
   "protocol-traces.rx-report",
+  // Dedicated ping protocol for protocol-monitor latency measurement.
+  // See src/gateway/protocol/schema/ping.ts.
+  "ping.peer-to-gw",
+  "ping.gw-to-peer.ack",
+  "ping.metrics-report",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -195,4 +200,7 @@ export const GATEWAY_EVENTS = [
   // Protocol monitor live streams
   "protocol.trace",
   "protocol.rx.samples",
+  // Dedicated ping events (gateway → peer pings + gateway → all-UIs sample broadcasts).
+  "ping.gw-to-peer",
+  "ping.metrics",
 ];

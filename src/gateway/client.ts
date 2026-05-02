@@ -34,6 +34,8 @@ import {
   type ClockSyncSample,
   computeClockSyncSample,
   pickBestSample,
+  PING_INTERVAL_MS,
+  type PingOneWaySample,
   type RxLatencySample,
   RX_REPORT_BUFFER_CAP,
   RX_REPORT_INTERVAL_MS,
@@ -261,6 +263,10 @@ export class GatewayClient {
   private rxSamples: RxLatencySample[] = [];
   private rxReportTimer: NodeJS.Timeout | null = null;
   private rxReportInFlight = false;
+  // Dedicated ping-protocol state for protocol-monitor latency. Independent
+  // of time.sync / rx-samples; uses single-clock RTT measurements.
+  private pingTimer: NodeJS.Timeout | null = null;
+  private pingInFlight = false;
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
@@ -382,6 +388,7 @@ export class GatewayClient {
       // different clock; reset offset rather than carrying a stale value.
       this.stopClockSyncSchedule();
       this.stopRxReportSchedule();
+      this.stopPingSchedule();
       this.rxSamples = [];
       this.clockOffsetMs = 0;
       this.lastClockSyncMetrics = null;
@@ -478,6 +485,7 @@ export class GatewayClient {
     }
     this.stopClockSyncSchedule();
     this.stopRxReportSchedule();
+    this.stopPingSchedule();
     this.clearConnectChallengeTimeout();
     if (this.pendingStop) {
       this.flushPendingErrors(new Error("gateway client stopped"));
@@ -639,6 +647,7 @@ export class GatewayClient {
         this.startTickWatch();
         this.startClockSyncSchedule();
         this.startRxReportSchedule();
+        this.startPingSchedule();
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
@@ -869,6 +878,9 @@ export class GatewayClient {
           return;
         }
         this.captureRxSample(evt.sentAt, "event", undefined, evt.event);
+        if (evt.event === "ping.gw-to-peer") {
+          this.handlePingGwToPeerEvent(evt.payload);
+        }
         const seq = typeof evt.seq === "number" ? evt.seq : null;
         if (seq !== null) {
           if (this.lastSeq !== null && seq > this.lastSeq + 1) {
@@ -1134,6 +1146,77 @@ export class GatewayClient {
       clearInterval(this.rxReportTimer);
       this.rxReportTimer = null;
     }
+  }
+
+  private startPingSchedule() {
+    this.stopPingSchedule();
+    this.pingTimer = setInterval(() => {
+      if (this.closed) {
+        return;
+      }
+      void this.runPingCycle();
+    }, PING_INTERVAL_MS);
+    this.pingTimer.unref?.();
+  }
+
+  private stopPingSchedule() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  private async runPingCycle(): Promise<void> {
+    if (this.pingInFlight || this.closed) {
+      return;
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.pingInFlight = true;
+    try {
+      const peerT0 = Date.now();
+      const result = await this.request<{
+        peerT0: number;
+        gatewayProcessingMs: number;
+      }>("ping.peer-to-gw", { peerT0 });
+      const peerT3 = Date.now();
+      if (result && typeof result.gatewayProcessingMs === "number") {
+        const wireRttMs = Math.max(0, peerT3 - peerT0 - result.gatewayProcessingMs);
+        // Forward (peer → gateway) one-way is half the round trip in this
+        // direction. RTT was measured with a single peer clock so the value
+        // is mechanically honest within this ping (no clock-sync state).
+        const sample: PingOneWaySample = { ts: peerT3, oneWayMs: wireRttMs / 2 };
+        await this.request("ping.metrics-report", { samples: [sample] }).catch(() => {
+          // best-effort
+        });
+      }
+    } catch (err) {
+      logDebug(`ping.peer-to-gw failed: ${String(err)}`);
+    } finally {
+      this.pingInFlight = false;
+    }
+  }
+
+  private handlePingGwToPeerEvent(payload: unknown): void {
+    const peerT1 = Date.now();
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const data = payload as { pingId?: unknown; gatewayT0?: unknown };
+    if (typeof data.pingId !== "string" || typeof data.gatewayT0 !== "number") {
+      return;
+    }
+    const pingId = data.pingId;
+    const gatewayT0 = data.gatewayT0;
+    const peerT2 = Date.now();
+    void this.request("ping.gw-to-peer.ack", {
+      pingId,
+      gatewayT0,
+      peerProcessingMs: Math.max(0, peerT2 - peerT1),
+    }).catch(() => {
+      // best-effort; gateway will retry on next 5s tick
+    });
   }
 
   private async flushRxSamples(): Promise<void> {

@@ -45,6 +45,7 @@ import {
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import {
+  handlePingMetricsEvent,
   handleProtocolRxSamplesEvent,
   handleProtocolTraceEvent,
 } from "./controllers/protocol-monitor.ts";
@@ -692,6 +693,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
   if (evt.event === "protocol.rx.samples") {
     handleProtocolRxSamplesEvent(host, evt.payload);
+    return;
+  }
+  if (evt.event === "ping.metrics") {
+    handlePingMetricsEvent(host, evt.payload);
     return;
   }
 

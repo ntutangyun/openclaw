@@ -103,9 +103,12 @@ export type LatencySample = {
 
 export type LatencyStats = {
   samples: LatencySample[];
+  /** Minimum sample value (ms). Null when no samples. */
+  minMs: number | null;
   p50Ms: number | null;
   p95Ms: number | null;
   avgMs: number | null;
+  /** Max sample value (ms). Alias retained for chart-helper backwards compat. */
   peakMs: number | null;
   count: number;
 };
@@ -423,6 +426,12 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   // Clock-sync mechanism — high-frequency, mechanism-only, would dominate
   // operator->gateway aggregates if left in.
   "time.sync",
+  // Dedicated ping protocol for protocol-monitor latency. Excluded from
+  // throughput / messages / timeline so it doesn't pollute the metrics it's
+  // supposed to measure.
+  "ping.peer-to-gw",
+  "ping.gw-to-peer.ack",
+  "ping.metrics-report",
   // Read-only history fetched on UI mount; not part of the active task flow.
   "chat.history",
   // Node control-plane queue plumbing — not part of the agentic task itself.
@@ -439,6 +448,9 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   "protocol.trace",
   // Gateway → UIs broadcast of a peer-reported rx-latency batch.
   "protocol.rx.samples",
+  // Gateway → peer ping event + gateway → all-UIs sample broadcast.
+  "ping.gw-to-peer",
+  "ping.metrics",
 ]);
 
 /** Returns true if a trace record should be dropped before ingestion. */
@@ -883,42 +895,15 @@ export function computeNetworkStats(
       computeAgentLlmGeneration(traces, runModelMap),
       modelFilter,
     ),
-    operatorGatewayOneWayLatency: computeWsOneWayLatency(traces, "operator"),
-    nodeGatewayOneWayLatency: computeWsOneWayLatency(traces, "node"),
-    gatewayOperatorOneWayLatency: computeRxLatencyStats("operator"),
-    gatewayNodeOneWayLatency: computeRxLatencyStats("node"),
+    // Latency now sources from dedicated 5s pings (RTT/2 in each direction)
+    // instead of mining functional-message sentAt. See ping.ts for design.
+    operatorGatewayOneWayLatency: computePingLatencyStats("operator", "forward"),
+    gatewayOperatorOneWayLatency: computePingLatencyStats("operator", "reverse"),
+    nodeGatewayOneWayLatency: computePingLatencyStats("node", "forward"),
+    gatewayNodeOneWayLatency: computePingLatencyStats("node", "reverse"),
     requestStats: buildRequestStats(),
     responseStats: buildResponseStats(),
   };
-}
-
-/**
- * One-way WS latency from a specific source entity to the gateway, derived
- * from the `oneWayLatencyMs` field that the gateway populates at trace
- * capture time using `Date.now() - frame.sentAt`. Assumes peer clocks are
- * synchronized (NTP).
- */
-function computeWsOneWayLatency(traces: ProtocolTraceRecord[], source: TraceEntity): LatencyStats {
-  const samples: LatencySample[] = [];
-  for (const t of traces) {
-    if (t.source !== source) {
-      continue;
-    }
-    if (t.target !== "gateway") {
-      continue;
-    }
-    if (typeof t.oneWayLatencyMs !== "number") {
-      continue;
-    }
-    const label =
-      t.kind === "event" && t.event
-        ? `event.${t.event}`
-        : t.method
-          ? `${t.kind}.${t.method}`
-          : t.kind;
-    samples.push({ ts: t.ts, latencyMs: t.oneWayLatencyMs, label });
-  }
-  return buildLatencyStats(samples);
 }
 
 // ---------------------------------------------------------------------------
@@ -934,35 +919,37 @@ function filterLatencyByModel(stats: LatencyStats, modelFilter?: string | null):
 }
 
 /**
- * Build LatencyStats for the gateway → peer direction from peer-reported rx
- * samples. Same task-relevance filter as the rest of the protocol monitor —
- * mechanism / control-plane methods (time.sync, chat.history, etc.) and
- * lifecycle events are dropped so the chart reflects only agentic-task
- * traffic.
+ * Build LatencyStats from dedicated ping samples. Each ping sample is
+ * RTT/2 of a single-clock round-trip in that direction (no clock-sync state,
+ * no symmetry assumption between forward and reverse — each is its own
+ * independent measurement). See `src/gateway/protocol/schema/ping.ts`.
  */
-function computeRxLatencyStats(source: "operator" | "node"): LatencyStats {
-  const arr = source === "operator" ? rxSamplesOperator : rxSamplesNode;
-  const filtered: LatencySample[] = [];
-  for (const s of arr) {
-    if (s.method && DEFAULT_INGEST_BLOCKLIST.has(s.method)) {
-      continue;
-    }
-    if (s.event && DEFAULT_INGEST_BLOCKLIST.has(s.event)) {
-      continue;
-    }
-    filtered.push({ ts: s.ts, latencyMs: s.latencyMs, label: s.method ?? s.event });
-  }
-  return buildLatencyStats(filtered);
+function computePingLatencyStats(
+  source: "operator" | "node",
+  direction: "forward" | "reverse",
+): LatencyStats {
+  const arr = pingSamples[source][direction];
+  const samples: LatencySample[] = arr.map((s) => ({ ts: s.ts, latencyMs: s.oneWayMs }));
+  return buildLatencyStats(samples);
 }
 
 function buildLatencyStats(samples: LatencySample[]): LatencyStats {
   if (samples.length === 0) {
-    return { samples, p50Ms: null, p95Ms: null, avgMs: null, peakMs: null, count: 0 };
+    return {
+      samples,
+      minMs: null,
+      p50Ms: null,
+      p95Ms: null,
+      avgMs: null,
+      peakMs: null,
+      count: 0,
+    };
   }
   const sorted = samples.map((s) => s.latencyMs).toSorted((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
   return {
     samples,
+    minMs: sorted[0] ?? null,
     p50Ms: sorted[Math.floor(sorted.length * 0.5)],
     p95Ms: sorted[Math.floor(sorted.length * 0.95)],
     avgMs: Math.round(sum / sorted.length),
@@ -1039,6 +1026,16 @@ type RxLatencySampleEntry = { ts: number; latencyMs: number; method?: string; ev
 const rxSamplesOperator: RxLatencySampleEntry[] = [];
 const rxSamplesNode: RxLatencySampleEntry[] = [];
 const RX_SAMPLE_CAP = 1000;
+
+// Dedicated ping-protocol samples, fed by `handlePingMetricsEvent`. These are
+// the source of truth for the protocol monitor's latency charts now (replaces
+// the old sentAt-based computation that mixed mechanism + functional traffic).
+type PingSampleEntry = { ts: number; oneWayMs: number };
+const pingSamples = {
+  operator: { forward: [] as PingSampleEntry[], reverse: [] as PingSampleEntry[] },
+  node: { forward: [] as PingSampleEntry[], reverse: [] as PingSampleEntry[] },
+};
+const PING_SAMPLE_CAP = 1000;
 
 /** Max cached samples / processed-id set size. */
 const MAX_LATENCY_CACHE = 2000;
@@ -1503,6 +1500,47 @@ export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unk
 }
 
 /**
+ * Append a batch of dedicated-ping samples to the per-source per-direction
+ * sliding window. Fed by the gateway's `ping.metrics` broadcast event.
+ */
+export function handlePingMetricsEvent(host: ProtocolMonitorHost, payload: unknown) {
+  if (host.protocolMonitoringPaused) {
+    return;
+  }
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const data = payload as {
+    source?: unknown;
+    direction?: unknown;
+    samples?: unknown;
+  };
+  if (data.source !== "operator" && data.source !== "node") {
+    return;
+  }
+  if (data.direction !== "forward" && data.direction !== "reverse") {
+    return;
+  }
+  if (!Array.isArray(data.samples)) {
+    return;
+  }
+  const target = pingSamples[data.source][data.direction];
+  for (const raw of data.samples) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const s = raw as { ts?: unknown; oneWayMs?: unknown };
+    if (typeof s.ts !== "number" || typeof s.oneWayMs !== "number") {
+      continue;
+    }
+    target.push({ ts: s.ts, oneWayMs: s.oneWayMs });
+  }
+  if (target.length > PING_SAMPLE_CAP) {
+    target.splice(0, target.length - PING_SAMPLE_CAP);
+  }
+}
+
+/**
  * Append a peer-reported rx-latency batch to the per-source sliding window.
  * Called from the WS event dispatcher when `protocol.rx.samples` arrives.
  * Filtering by task-relevance happens at compute time (`computeRxLatencyStats`)
@@ -1561,6 +1599,10 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
     host.protocolTraces = [];
     rxSamplesOperator.length = 0;
     rxSamplesNode.length = 0;
+    pingSamples.operator.forward.length = 0;
+    pingSamples.operator.reverse.length = 0;
+    pingSamples.node.forward.length = 0;
+    pingSamples.node.reverse.length = 0;
     host.protocolSelectedTrace = null;
     clearLatencyCaches();
   } catch {

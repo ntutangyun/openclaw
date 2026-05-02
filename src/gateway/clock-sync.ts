@@ -89,3 +89,18 @@ export type RxLatencySample = {
   method?: string;
   event?: string;
 };
+
+/**
+ * Dedicated protocol-monitor ping cadence. Both peer-side (forward direction)
+ * and gateway-side (reverse direction) schedulers fire every 5 s. See
+ * `src/gateway/protocol/schema/ping.ts` for the full design.
+ */
+export const PING_INTERVAL_MS = 5_000;
+
+/** Single ping-derived one-way latency sample. */
+export type PingOneWaySample = {
+  /** Wall-clock at the moment the sample was recorded (peer's clock). */
+  ts: number;
+  /** One-way latency estimate (RTT/2 of the dedicated ping) in ms. */
+  oneWayMs: number;
+};
