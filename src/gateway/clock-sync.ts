@@ -92,10 +92,10 @@ export type RxLatencySample = {
 
 /**
  * Dedicated protocol-monitor ping cadence. Both peer-side (forward direction)
- * and gateway-side (reverse direction) schedulers fire every 5 s. See
+ * and gateway-side (reverse direction) schedulers fire on this interval. See
  * `src/gateway/protocol/schema/ping.ts` for the full design.
  */
-export const PING_INTERVAL_MS = 5_000;
+export const PING_INTERVAL_MS = 10_000;
 
 /** Single ping-derived one-way latency sample. */
 export type PingOneWaySample = {

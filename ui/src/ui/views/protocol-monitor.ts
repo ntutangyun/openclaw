@@ -2602,6 +2602,108 @@ function selectDirectionMessages(
   }
 }
 
+/**
+ * Stable color palette for message-type bars. Index assigned by the type's
+ * position in the cards list (sorted by count, so the most common type gets
+ * the first color — consistent across renders for a given snapshot).
+ */
+const MESSAGE_TYPE_COLORS = [
+  "#3b82f6",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+  "#6366f1",
+  "#84cc16",
+  "#06b6d4",
+  "#d946ef",
+] as const;
+
+function buildMessageTypeColorMap(types: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  types.forEach((t, i) => {
+    map.set(t, MESSAGE_TYPE_COLORS[i % MESSAGE_TYPE_COLORS.length] ?? "#64748b");
+  });
+  return map;
+}
+
+function renderMessagesBarChartSvg(
+  data: MessagesDirection,
+  colorMap: Map<string, string>,
+): TemplateResult {
+  if (data.bars.length === 0) {
+    return html`<div class="pm-chart-empty" style="height:200px;line-height:200px;">
+      Waiting for first message...
+    </div>`;
+  }
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 220;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const bars = data.bars;
+  const minTs = bars[0]?.ts ?? 0;
+  const maxTs = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? minTs + 1) : minTs + 1;
+  const tsRange = Math.max(1, maxTs - minTs);
+  const maxSize = Math.max(...bars.map((b) => b.size), 1);
+  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
+  const toY = (s: number) => PAD_T + plotH - (s / maxSize) * plotH;
+  const yGridCount = 4;
+  const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxSize / yGridCount) * (i + 1);
+    return { y: toY(val), label: formatBytes(val) };
+  });
+  const xTickCount = 5;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
+    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
+    return { x: toX(ts), label: chartTimeLabel(ts) };
+  });
+  // Each bar is a 2 px-wide vertical rect from baseline up to the size value.
+  const barWidth = 2;
+  return html`
+    <div class="pm-chart-block">
+      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg">
+        ${yGridLines.map(
+          (g) => svg`
+            <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+              stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+            <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+              fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
+          `,
+        )}
+        <line
+          x1="${PAD_L}"
+          y1="${PAD_T + plotH}"
+          x2="${W - PAD_R}"
+          y2="${PAD_T + plotH}"
+          stroke="#c4c9d6"
+          stroke-width="0.6"
+        />
+        ${xTicks.map(
+          (t) => svg`
+            <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+              fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+          `,
+        )}
+        ${bars.map((b) => {
+          const x = toX(b.ts) - barWidth / 2;
+          const y = toY(b.size);
+          const h = PAD_T + plotH - y;
+          const fill = colorMap.get(b.type) ?? "#64748b";
+          return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
+            fill="${fill}" opacity="0.85"><title>${b.type} · ${formatBytes(b.size)} · ${chartTimeLabel(b.ts)}</title></rect>`;
+        })}
+      </svg>
+    </div>
+  `;
+}
+
 function renderMessagesSection(
   net: NetworkStats,
   direction: NetworkDirection,
@@ -2613,31 +2715,51 @@ function renderMessagesSection(
     return nothing;
   }
   const totalCount = data.cards.reduce((a, c) => a + c.count, 0);
+  if (data.cards.length === 0) {
+    return html`
+      <div class="pm-net-section-title" style="margin-top:14px;">
+        Messages · ${totalCount} total
+      </div>
+      <div class="pm-chart-empty" style="height:80px;line-height:80px;">
+        No agentic-task messages observed yet on this direction.
+      </div>
+    `;
+  }
+  // Stable color per type so bars and legend (and cards' left border) align.
+  const colorMap = buildMessageTypeColorMap(data.cards.map((c) => c.type));
   return html`
     <div class="pm-net-section-title" style="margin-top:14px;">Messages · ${totalCount} total</div>
-    ${data.cards.length === 0
-      ? html`<div class="pm-chart-empty" style="height:80px;line-height:80px;">
-          No agentic-task messages observed yet on this direction.
-        </div>`
-      : html`
-          <div class="pm-message-cards">
-            ${data.cards.map(
-              (c) => html`
-                <button
-                  class="pm-message-card"
-                  style="border-left-color:${color};"
-                  @click=${openExp(`messages-${c.type}`)}
-                >
-                  <div class="pm-message-card-type" title=${c.type}>${c.type}</div>
-                  <div class="pm-message-card-count">${c.count}</div>
-                  <div class="pm-message-card-sub">
-                    ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
-                  </div>
-                </button>
-              `,
-            )}
-          </div>
-        `}
+    <div class="pm-message-cards">
+      ${data.cards.map(
+        (c) => html`
+          <button
+            class="pm-message-card"
+            style="border-left-color:${colorMap.get(c.type) ?? color};"
+            @click=${openExp(`messages-${c.type}`)}
+          >
+            <div class="pm-message-card-type" title=${c.type}>${c.type}</div>
+            <div class="pm-message-card-count">${c.count}</div>
+            <div class="pm-message-card-sub">
+              ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+            </div>
+          </button>
+        `,
+      )}
+    </div>
+    ${renderMessagesBarChartSvg(data, colorMap)}
+    <div class="pm-message-legend">
+      ${data.cards.map(
+        (c) => html`
+          <span class="pm-message-legend-item">
+            <span
+              class="pm-message-legend-swatch"
+              style="background:${colorMap.get(c.type) ?? color};"
+            ></span>
+            <span class="pm-message-legend-label">${c.type}</span>
+          </span>
+        `,
+      )}
+    </div>
   `;
 }
 
@@ -4111,6 +4233,32 @@ const STYLES = /* css */ `
     color: #6b7280;
     margin-top: 2px;
     font-variant-numeric: tabular-nums;
+  }
+  .pm-message-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: #4b5563;
+    font-family: monospace;
+  }
+  .pm-message-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .pm-message-legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+  .pm-message-legend-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 220px;
   }
   .pm-net-no-latency {
     margin-top: 14px;
