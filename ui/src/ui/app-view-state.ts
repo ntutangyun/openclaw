@@ -405,6 +405,7 @@ export type AppViewState = {
     protocolModelFilter: string | null;
     protocolUsageExplainer: string | null;
     protocolMonitoringPaused: boolean;
+    protocolControllerStateVersion: number;
     protocolNetworkDirection:
       | "op-to-gw"
       | "gw-to-op"

@@ -121,6 +121,7 @@ type GatewayHost = {
   protocolDisabledTypes: Set<string>;
   protocolSubTab: "usage" | "protocol";
   protocolMonitoringPaused: boolean;
+  protocolControllerStateVersion: number;
   reconcileWebPushState?: () => Promise<void> | void;
 };
 

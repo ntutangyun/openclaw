@@ -1653,6 +1653,14 @@ export type ProtocolMonitorHost = {
   protocolAutoScroll: boolean;
   protocolDisabledTypes: Set<string>;
   protocolMonitoringPaused: boolean;
+  /**
+   * Reactive counter bumped by handlers that update module-level controller
+   * state (ping samples, rx samples) so Lit re-renders the protocol monitor
+   * even when no functional trace traffic is flowing. Without this the chart
+   * sticks at "Waiting for data..." indefinitely on an idle gateway because
+   * the only state update comes from non-reactive module variables.
+   */
+  protocolControllerStateVersion: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -1751,6 +1759,9 @@ export function handlePingMetricsEvent(host: ProtocolMonitorHost, payload: unkno
   if (target.length > PING_SAMPLE_CAP) {
     target.splice(0, target.length - PING_SAMPLE_CAP);
   }
+  // Bump reactive version so Lit re-renders the protocol monitor view; the
+  // ping samples themselves live in module state that Lit can't observe.
+  host.protocolControllerStateVersion = (host.protocolControllerStateVersion ?? 0) + 1;
 }
 
 /**

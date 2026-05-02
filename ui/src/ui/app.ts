@@ -571,6 +571,11 @@ export class OpenClawApp extends LitElement {
   @state() protocolModelFilter: string | null = null;
   @state() protocolUsageExplainer: string | null = null;
   @state() protocolMonitoringPaused = false;
+  // Bumped by handlers that update module-level controller state (ping
+  // samples, rx samples) which Lit can't observe directly. Each bump triggers
+  // a re-render so the protocol monitor charts pick up the new data even when
+  // no functional trace traffic is flowing.
+  @state() protocolControllerStateVersion = 0;
   @state() protocolNetworkDirection:
     | "op-to-gw"
     | "gw-to-op"
