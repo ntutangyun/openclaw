@@ -26,7 +26,7 @@ describe("PingSampleStore", () => {
       store
         .snapshot("operator", "forward")
         .map((s) => s.oneWayMs)
-        .toSorted(),
+        .toSorted((a, b) => a - b),
     ).toEqual([1, 2]);
   });
 
