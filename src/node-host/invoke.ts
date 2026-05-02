@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "../gateway/client.js";
@@ -19,6 +19,10 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
@@ -36,16 +40,6 @@ const FS_LIST_SKIP_DIRS = new Set(["node_modules", ".git", "__pycache__", ".DS_S
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
-  65001: "utf-8",
-  54936: "gb18030",
-  936: "gbk",
-  950: "big5",
-  932: "shift_jis",
-  949: "euc-kr",
-  1252: "windows-1252",
-};
-let cachedWindowsConsoleEncoding: string | null | undefined;
 
 const execHostEnforced =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
@@ -140,7 +134,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeInvokeRequestPayload = {
+type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
   command: string;
@@ -179,107 +173,12 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
 }
 
-export function parseWindowsCodePage(raw: string): number | null {
-  if (!raw) {
-    return null;
-  }
-  const match = raw.match(/\b(\d{3,5})\b/);
-  if (!match?.[1]) {
-    return null;
-  }
-  const codePage = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(codePage) || codePage <= 0) {
-    return null;
-  }
-  return codePage;
-}
-
-/**
- * Resolve a Windows shell executable (cmd.exe, powershell.exe, etc.) to its
- * full path using %SystemRoot%.  Node.js `spawn` without `shell: true` does
- * not always search PATH on Windows, causing ENOENT for bare names like
- * "cmd.exe" when the node host was started with a stripped-down PATH.
- */
-function resolveWindowsShellPath(executable: string): string {
-  const lower = executable.toLowerCase();
-  const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
-  const system32 = path.join(systemRoot, "System32");
-
-  if (lower === "cmd.exe" || lower === "cmd") {
-    const full = path.join(system32, "cmd.exe");
-    if (fs.existsSync(full)) {
-      return full;
-    }
-  }
-  if (lower === "powershell.exe" || lower === "powershell" || lower === "windowspowershell") {
-    const full = path.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe");
-    if (fs.existsSync(full)) {
-      return full;
-    }
-  }
-  if (lower === "pwsh.exe" || lower === "pwsh") {
-    // pwsh (PowerShell Core) is typically on PATH; try to find it but fall back
-    try {
-      const result = spawnSync("where", ["pwsh.exe"], {
-        windowsHide: true,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 3000,
-      });
-      const found = result.stdout?.trim().split(/\r?\n/)[0];
-      if (found && fs.existsSync(found)) {
-        return found;
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return executable;
-}
-
-function resolveWindowsConsoleEncoding(): string | null {
-  if (process.platform !== "win32") {
-    return null;
-  }
-  if (cachedWindowsConsoleEncoding !== undefined) {
-    return cachedWindowsConsoleEncoding;
-  }
-  try {
-    const cmdPath = resolveWindowsShellPath("cmd.exe");
-    const result = spawnSync(cmdPath, ["/d", "/s", "/c", "chcp"], {
-      windowsHide: true,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
-    cachedWindowsConsoleEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  } catch {
-    cachedWindowsConsoleEncoding = null;
-  }
-  return cachedWindowsConsoleEncoding;
-}
-
 export function decodeCapturedOutputBuffer(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
 }): string {
-  const utf8 = params.buffer.toString("utf8");
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
-    return utf8;
-  }
-  const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
-  if (!encoding || normalizeLowercaseStringOrEmpty(encoding) === "utf-8") {
-    return utf8;
-  }
-  try {
-    return new TextDecoder(encoding).decode(params.buffer);
-  } catch {
-    return utf8;
-  }
+  return decodeWindowsOutputBuffer(params);
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -343,9 +242,8 @@ async function runCommand(
     // custom shell such as Git Bash.  When set, we spawn the shell directly with
     // -c instead of relying on Node.js shell:true (which always uses cmd.exe
     // flags /d /s /c that are incompatible with bash-like shells).
-    const customShell = process.platform === "win32"
-      ? (process.env.OPENCLAW_NODE_SHELL?.trim() || null)
-      : null;
+    const customShell =
+      process.platform === "win32" ? process.env.OPENCLAW_NODE_SHELL?.trim() || null : null;
 
     if (customShell && (isWindowsCmdWrap || argv.length === 1)) {
       // Extract the raw command string and route it through the custom shell.
@@ -824,6 +722,7 @@ export async function handleInvoke(
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");

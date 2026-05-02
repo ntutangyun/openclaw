@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 
 /**
  * Peer → gateway batch report of inbound (gateway → peer) one-way latency

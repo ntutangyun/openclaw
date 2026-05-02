@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  VoiceCallConfigSchema,
+  resolveTwilioAuthToken,
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
@@ -9,6 +11,10 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
 }
 
 function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
@@ -25,6 +31,7 @@ describe("validateProviderConfig", () => {
   const clearProviderEnv = () => {
     delete process.env.TWILIO_ACCOUNT_SID;
     delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_FROM_NUMBER;
     delete process.env.TELNYX_API_KEY;
     delete process.env.TELNYX_CONNECTION_ID;
     delete process.env.TELNYX_PUBLIC_KEY;
@@ -63,6 +70,7 @@ describe("validateProviderConfig", () => {
         if (provider === "twilio") {
           process.env.TWILIO_ACCOUNT_SID = "AC123";
           process.env.TWILIO_AUTH_TOKEN = "secret";
+          process.env.TWILIO_FROM_NUMBER = "+15550001234";
         } else if (provider === "telnyx") {
           process.env.TELNYX_API_KEY = "KEY123";
           process.env.TELNYX_CONNECTION_ID = "CONN456";
@@ -78,6 +86,24 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
+    it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
+      const config = VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: envRef("TWILIO_AUTH_TOKEN"),
+        },
+      });
+
+      expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(() => resolveTwilioAuthToken(config)).toThrow(
+        'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
+      );
+    });
+
     it("passes validation with mixed config and env vars", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
       let config = createBaseConfig("twilio");
@@ -88,6 +114,20 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
+    });
+
+    it("resolves the Twilio from number from environment", () => {
+      process.env.TWILIO_ACCOUNT_SID = "AC123";
+      process.env.TWILIO_AUTH_TOKEN = "secret";
+      process.env.TWILIO_FROM_NUMBER = "+15550001234";
+
+      const config = resolveVoiceCallConfig({
+        ...createBaseConfig("twilio"),
+        fromNumber: undefined,
+      });
+
+      expect(config.fromNumber).toBe("+15550001234");
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("fails validation when required twilio credentials are missing", () => {
@@ -210,6 +250,14 @@ describe("validateProviderConfig", () => {
   });
 });
 
+describe("resolveVoiceCallConfig", () => {
+  it("enables the pre-answer stale call reaper by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.staleCallReaperSeconds).toBe(120);
+  });
+});
+
 describe("normalizeVoiceCallConfig", () => {
   it("fills nested runtime defaults from a partial config boundary", () => {
     const normalized = normalizeVoiceCallConfig({
@@ -226,6 +274,15 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.streaming.provider).toBeUndefined();
     expect(normalized.streaming.providers).toEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
+    expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.fastContext).toEqual({
+      enabled: false,
+      timeoutMs: 800,
+      maxResults: 3,
+      sources: ["memory", "sessions"],
+      fallbackToConsult: false,
+    });
+    expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
   });
@@ -284,6 +341,7 @@ describe("resolveVoiceCallConfig", () => {
     });
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
+    expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
     expect(resolved.realtime.provider).toBeUndefined();
   });
 
@@ -294,5 +352,15 @@ describe("resolveVoiceCallConfig", () => {
     });
 
     expect(resolved.responseModel).toBeUndefined();
+  });
+
+  it("preserves the configured voice response agent id", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "voice",
+    });
+
+    expect(resolved.agentId).toBe("voice");
   });
 });

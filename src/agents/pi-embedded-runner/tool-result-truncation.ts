@@ -7,9 +7,17 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
-import { formatContextLimitTruncationNotice } from "./tool-result-context-guard.js";
-import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
+import {
+  persistTranscriptStateMutation,
+  readTranscriptFileState,
+  type TranscriptFileState,
+} from "./transcript-file-state.js";
+import {
+  rewriteTranscriptEntriesInSessionManager,
+  rewriteTranscriptEntriesInState,
+} from "./transcript-rewrite.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -288,13 +296,12 @@ export function truncateToolResultMessage(
       1,
       Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
     );
-    return {
-      ...textBlock,
+    return Object.assign({}, textBlock, {
       text: truncateToolResultText(textBlock.text, blockBudget, {
         suffix: suffixFactory,
         minKeepChars,
       }),
-    };
+    });
   });
 
   return { ...msg, content: newContent } as AgentMessage;
@@ -665,6 +672,69 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   };
 }
 
+async function truncateOversizedToolResultsInTranscriptState(params: {
+  state: TranscriptFileState;
+  sessionFile: string;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  sessionId?: string;
+  sessionKey?: string;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  const { state, contextWindowTokens } = params;
+  const maxChars = Math.max(
+    1,
+    params.maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
+  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
+    contextWindowTokens,
+    maxChars,
+  );
+  const branch = state.getBranch() as ToolResultBranchEntry[];
+
+  if (branch.length === 0) {
+    return { truncated: false, truncatedCount: 0, reason: "empty session" };
+  }
+
+  const plan = buildToolResultReplacementPlan({
+    branch,
+    maxChars,
+    aggregateBudgetChars,
+    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+  });
+  if (plan.replacements.length === 0) {
+    return {
+      truncated: false,
+      truncatedCount: 0,
+      reason: "no oversized or aggregate tool results",
+    };
+  }
+  const rewriteResult = rewriteTranscriptEntriesInState({
+    state,
+    replacements: plan.replacements,
+  });
+  if (rewriteResult.changed) {
+    await persistTranscriptStateMutation({
+      sessionFile: params.sessionFile,
+      state,
+      appendedEntries: rewriteResult.appendedEntries,
+    });
+    emitSessionTranscriptUpdate(params.sessionFile);
+  }
+
+  log.info(
+    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars} ` +
+      `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
+      `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+  );
+
+  return {
+    truncated: rewriteResult.changed,
+    truncatedCount: rewriteResult.rewrittenEntries,
+    reason: rewriteResult.reason,
+  };
+}
+
 export function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
@@ -694,9 +764,9 @@ export async function truncateOversizedToolResultsInSession(params: {
 
   try {
     sessionLock = await acquireSessionWriteLock({ sessionFile });
-    const sessionManager = SessionManager.open(sessionFile);
-    return truncateOversizedToolResultsInExistingSessionManager({
-      sessionManager,
+    const state = await readTranscriptFileState(sessionFile);
+    return await truncateOversizedToolResultsInTranscriptState({
+      state,
       contextWindowTokens,
       maxCharsOverride: params.maxCharsOverride,
       sessionFile,

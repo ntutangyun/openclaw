@@ -1,5 +1,13 @@
 {
   "id": "voice-call",
+  "commandAliases": [{ "name": "voicecall" }],
+  "activation": {
+    "onStartup": true,
+    "onCommands": ["voicecall"]
+  },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",
@@ -7,6 +15,7 @@
       "TELNYX_PUBLIC_KEY",
       "TWILIO_ACCOUNT_SID",
       "TWILIO_AUTH_TOKEN",
+      "TWILIO_FROM_NUMBER",
       "PLIVO_AUTH_ID",
       "PLIVO_AUTH_TOKEN",
       "NGROK_AUTHTOKEN",
@@ -129,6 +138,32 @@
       "label": "Realtime Instructions",
       "advanced": true
     },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Controls the shared openclaw_agent_consult tool.",
+      "advanced": true
+    },
+    "realtime.fastContext.enabled": {
+      "label": "Enable Fast Realtime Context",
+      "help": "Searches memory/session context before the full consult agent.",
+      "advanced": true
+    },
+    "realtime.fastContext.timeoutMs": {
+      "label": "Fast Context Timeout",
+      "advanced": true
+    },
+    "realtime.fastContext.maxResults": {
+      "label": "Fast Context Result Limit",
+      "advanced": true
+    },
+    "realtime.fastContext.sources": {
+      "label": "Fast Context Sources",
+      "advanced": true
+    },
+    "realtime.fastContext.fallbackToConsult": {
+      "label": "Fallback To Full Consult",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
@@ -202,7 +237,7 @@
             "type": "string"
           },
           "authToken": {
-            "type": "string"
+            "type": ["string", "object"]
           }
         }
       },
@@ -401,6 +436,10 @@
           "instructions": {
             "type": "string"
           },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
+          },
           "tools": {
             "type": "array",
             "items": {
@@ -440,6 +479,34 @@
                 }
               },
               "required": ["type", "name", "description", "parameters"]
+            }
+          },
+          "fastContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1
+              },
+              "maxResults": {
+                "type": "number",
+                "minimum": 1
+              },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["memory", "sessions"]
+                }
+              },
+              "fallbackToConsult": {
+                "type": "boolean"
+              }
             }
           },
           "providers": {
@@ -516,7 +583,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
@@ -542,7 +609,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
@@ -677,7 +744,7 @@
               "type": "object",
               "properties": {
                 "apiKey": {
-                  "type": "string"
+                  "type": ["string", "object"]
                 }
               },
               "additionalProperties": true
@@ -713,6 +780,14 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"]
+    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
+    "secretInputs": {
+      "paths": [
+        { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "streaming.providers.*.apiKey", "expected": "string" },
+        { "path": "tts.providers.*.apiKey", "expected": "string" }
+      ]
+    }
   }
 }

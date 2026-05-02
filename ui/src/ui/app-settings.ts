@@ -46,6 +46,7 @@ import { loadProtocolTraces } from "./controllers/protocol-monitor.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
   inferBasePathFromPathname,
@@ -55,17 +56,25 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
-import { saveSettings, type UiSettings } from "./storage.ts";
+import {
+  saveLocalUserIdentity,
+  saveSettings,
+  type LocalUserIdentity,
+  type UiSettings,
+} from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
+import { normalizeLocalUserIdentity } from "./user-identity.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
 export { setLastActiveSessionKey } from "./app-last-active-session.ts";
 
 type SettingsHost = {
   settings: UiSettings;
+  userName?: string | null;
+  userAvatar?: string | null;
   password?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
@@ -93,6 +102,11 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+};
+
+type LocalUserIdentityHost = {
+  userName?: string | null;
+  userAvatar?: string | null;
 };
 
 type SettingsAppHost = SettingsHost &
@@ -130,6 +144,7 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   };
   host.settings = normalized;
   saveSettings(normalized);
+  syncCustomThemeStyleTag(normalized.customTheme);
   if (next.theme !== host.theme || next.themeMode !== host.themeMode) {
     host.theme = next.theme;
     host.themeMode = next.themeMode;
@@ -137,6 +152,20 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   }
   applyBorderRadius(next.borderRadius);
   host.applySessionKey = host.settings.lastActiveSessionKey;
+}
+
+export function applyLocalUserIdentity(
+  host: LocalUserIdentityHost,
+  next: Partial<LocalUserIdentity>,
+) {
+  const normalized = normalizeLocalUserIdentity({
+    name: host.userName,
+    avatar: host.userAvatar,
+    ...next,
+  });
+  host.userName = normalized.name;
+  host.userAvatar = normalized.avatar;
+  saveLocalUserIdentity(normalized);
 }
 
 function applySessionSelection(host: SettingsHost, session: string) {
@@ -298,6 +327,10 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
     case "cron":
       void loadCron(host);
       return;
+    case "overview":
+    case "tools":
+    case undefined:
+      return;
   }
 }
 
@@ -368,16 +401,17 @@ export async function refreshActiveTab(host: SettingsHost) {
       await loadLogs(app, { reset: true });
       scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
       return;
-  }
-  if (host.tab === "protocolMonitor") {
-    const app = host as unknown as OpenClawApp;
-    // Honor the pause toggle: when paused, skip the auto-fetch on tab re-entry
-    // so the buffer stays exactly as it was when the user paused.
-    if (!app.protocolMonitoringPaused) {
-      await loadProtocolTraces(app);
+    case "protocolMonitor": {
+      const protocolApp = host as unknown as OpenClawApp;
+      // Honor the pause toggle: when paused, skip the auto-fetch on tab re-entry
+      // so the buffer stays exactly as it was when the user paused.
+      if (!protocolApp.protocolMonitoringPaused) {
+        await loadProtocolTraces(protocolApp);
+      }
+      // Always refresh usage overview — it's a separate, non-streaming dataset.
+      await loadUsage(protocolApp);
+      return;
     }
-    // Always refresh usage overview — it's a separate, non-streaming dataset.
-    await loadUsage(app);
   }
 }
 
@@ -394,8 +428,17 @@ export function inferBasePath() {
 }
 
 export function syncThemeWithSettings(host: SettingsHost) {
-  host.theme = host.settings.theme ?? "claw";
+  syncCustomThemeStyleTag(host.settings.customTheme);
+  const normalizedTheme =
+    host.settings.theme === "custom" && !host.settings.customTheme
+      ? "claw"
+      : (host.settings.theme ?? "claw");
+  host.theme = normalizedTheme;
   host.themeMode = host.settings.themeMode ?? "system";
+  if (normalizedTheme !== host.settings.theme) {
+    host.settings = { ...host.settings, theme: normalizedTheme };
+    saveSettings(host.settings);
+  }
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
   syncSystemThemeListener(host);
@@ -561,10 +604,11 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
 }
 
 export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  if (!href) {
     return;
   }
-  const url = new URL(window.location.href);
+  const url = new URL(href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
 }
@@ -714,7 +758,7 @@ function buildAttentionItems(host: SettingsAppHost) {
     // Use the same predicate as the Overview card so the two stay in sync.
     // Without this, a `missing` provider shows up on the card but never
     // produces the re-auth attention callout.
-    const monitored = modelAuth.providers.filter(isMonitoredAuthProvider);
+    const monitored = (modelAuth.providers ?? []).filter(isMonitoredAuthProvider);
     const expiredProviders = monitored.filter(
       (p) => p.status === "expired" || p.status === "missing",
     );

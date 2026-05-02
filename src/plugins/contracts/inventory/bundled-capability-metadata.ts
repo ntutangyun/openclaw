@@ -5,7 +5,13 @@ import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
 } from "../../bundled-plugin-scan.js";
-import { PLUGIN_MANIFEST_FILENAME, type PluginManifest } from "../../manifest.js";
+import {
+  getPackageManifestMetadata,
+  isPackageIncludedInCoreBundle,
+  PLUGIN_MANIFEST_FILENAME,
+  type PackageManifest,
+  type PluginManifest,
+} from "../../manifest.js";
 import { resolveLoaderPackageRoot } from "../../sdk-alias.js";
 import { uniqueStrings } from "../shared.js";
 
@@ -16,15 +22,19 @@ export type BundledPluginContractSnapshot = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
+  providerAuthEnvVars: Record<string, string[]>;
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  documentExtractorIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
   musicGenerationProviderIds: string[];
+  webContentExtractorIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  migrationProviderIds: string[];
   toolNames: string[];
 };
 
@@ -45,6 +55,7 @@ export type BundledCapabilityManifest = Pick<
   | "cliBackends"
   | "contracts"
   | "legacyPluginIds"
+  | "providerAuthEnvVars"
   | "providers"
 >;
 
@@ -59,8 +70,15 @@ function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
   }
 }
 
+function isExplicitlyDownloadablePlugin(packageJson: Record<string, unknown> | undefined): boolean {
+  return !isPackageIncludedInCoreBundle(getPackageManifestMetadata(packageJson as PackageManifest));
+}
+
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
   const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
+  if (isExplicitlyDownloadablePlugin(packageJson)) {
+    return undefined;
+  }
   const extensions = normalizeBundledPluginStringList(
     packageJson?.openclaw && typeof packageJson.openclaw === "object"
       ? (packageJson.openclaw as { extensions?: unknown }).extensions
@@ -96,6 +114,26 @@ function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] 
 
 const BUNDLED_CAPABILITY_MANIFESTS = listBundledCapabilityManifests();
 
+function normalizeStringListRecord(record: unknown): Record<string, string[]> {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(record)
+      .map(
+        ([key, values]) =>
+          [
+            key.trim(),
+            uniqueStrings(Array.isArray(values) ? values : [], (value) =>
+              typeof value === "string" ? value.trim() : "",
+            ),
+          ] as const,
+      )
+      .filter(([key, values]) => key && values.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
 export function buildBundledPluginContractSnapshot(
   manifest: BundledCapabilityManifest,
 ): BundledPluginContractSnapshot {
@@ -103,6 +141,7 @@ export function buildBundledPluginContractSnapshot(
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
+    providerAuthEnvVars: normalizeStringListRecord(manifest.providerAuthEnvVars),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) => value.trim()),
     realtimeTranscriptionProviderIds: uniqueStrings(
       manifest.contracts?.realtimeTranscriptionProviders,
@@ -114,6 +153,9 @@ export function buildBundledPluginContractSnapshot(
     mediaUnderstandingProviderIds: uniqueStrings(
       manifest.contracts?.mediaUnderstandingProviders,
       (value) => value.trim(),
+    ),
+    documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
+      value.trim(),
     ),
     imageGenerationProviderIds: uniqueStrings(
       manifest.contracts?.imageGenerationProviders,
@@ -127,10 +169,16 @@ export function buildBundledPluginContractSnapshot(
       manifest.contracts?.musicGenerationProviders,
       (value) => value.trim(),
     ),
+    webContentExtractorIds: uniqueStrings(manifest.contracts?.webContentExtractors, (value) =>
+      value.trim(),
+    ),
     webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders, (value) =>
       value.trim(),
     ),
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
+      value.trim(),
+    ),
+    migrationProviderIds: uniqueStrings(manifest.contracts?.migrationProviders, (value) =>
       value.trim(),
     ),
     toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
@@ -147,11 +195,14 @@ export function hasBundledPluginContractSnapshotCapabilities(
     entry.realtimeTranscriptionProviderIds.length > 0 ||
     entry.realtimeVoiceProviderIds.length > 0 ||
     entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.documentExtractorIds.length > 0 ||
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||
     entry.musicGenerationProviderIds.length > 0 ||
+    entry.webContentExtractorIds.length > 0 ||
     entry.webFetchProviderIds.length > 0 ||
     entry.webSearchProviderIds.length > 0 ||
+    entry.migrationProviderIds.length > 0 ||
     entry.toolNames.length > 0
   );
 }
@@ -178,8 +229,13 @@ export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
   ).toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;
 
+type BundledContractIdSnapshotKey = Exclude<
+  keyof Omit<BundledPluginContractSnapshot, "pluginId">,
+  "providerAuthEnvVars"
+>;
+
 export function resolveBundledContractSnapshotPluginIds(
-  key: keyof Omit<BundledPluginContractSnapshot, "pluginId">,
+  key: BundledContractIdSnapshotKey,
 ): string[] {
   return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry[key].length > 0)
     .map((entry) => entry.pluginId)

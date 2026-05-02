@@ -24,8 +24,11 @@ function readManifestRecords(): PluginManifest[] {
         return false;
       }
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as {
-        openclaw?: { extensions?: unknown };
+        openclaw?: { bundle?: { includeInCore?: unknown }; extensions?: unknown };
       };
+      if (packageJson.openclaw?.bundle?.includeInCore === false) {
+        return false;
+      }
       return normalizeBundledPluginStringList(packageJson.openclaw?.extensions).length > 0;
     })
     .map(
@@ -45,6 +48,14 @@ describe("bundled capability metadata", () => {
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
     expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(expected);
+    expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "migrate-hermes",
+          migrationProviderIds: ["hermes"],
+        }),
+      ]),
+    );
   });
 
   it("keeps lightweight alias maps aligned with bundled plugin manifests", () => {

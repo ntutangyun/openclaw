@@ -851,8 +851,6 @@ cmd_start() {
 
   # Start background auto-approve watcher for node pairing requests
   _start_auto_approve_bg "$username"
-
-  cmd_info "$username"
 }
 
 # Background auto-approve loop: watches for pending node pairing requests
@@ -1352,6 +1350,7 @@ cmd_info() {
   echo "Config volume:  openclaw-${username}-config"
   echo "Workspace vol:  openclaw-${username}-workspace"
   echo "Gateway URL:    http://localhost:${gw_port}"
+  echo "Control UI URL: http://localhost:${gw_port}/#token=${token}"
   echo ""
   echo "CLI usage:"
   echo "  $(basename "$0") cli ${username} config get gateway.auth.token"
@@ -1908,26 +1907,26 @@ case "$command" in
   setup)     cmd_setup ;;
   rebuild)   cmd_rebuild ;;
   cache-warm) cmd_cache_warm ;;
-  add)       cmd_add "$@" ;;
+  add)       cmd_add "$@"; echo ""; cmd_info "${1:-}" ;;
   remove)    cmd_remove "${1:?Username required}" ;;
-  start)     cmd_start "${1:?Username required}" ;;
-  stop)      cmd_stop "${1:?Username required}" ;;
-  restart)   cmd_restart "${1:?Username required}" ;;
+  start)     cmd_start "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
+  stop)      cmd_stop "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
+  restart)   cmd_restart "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
   start-all) cmd_start_all ;;
   stop-all)  cmd_stop_all ;;
-  pair-device) cmd_pair_device "${1:?Username required}" "${2:-120}" ;;
-  ask-off)   cmd_ask_off "${1:?Username required}" "${2:-}" ;;
+  pair-device) cmd_pair_device "${1:?Username required}" "${2:-120}"; echo ""; cmd_info "${1}" ;;
+  ask-off)   cmd_ask_off "${1:?Username required}" "${2:-}"; echo ""; cmd_info "${1}" ;;
   status)    cmd_status "${1:-}" ;;
   list)      cmd_list ;;
   logs)      cmd_logs "${1:?Username required}" "${@:2}" ;;
-  export-logs) cmd_export_logs "${1:?Username required}" ;;
+  export-logs) cmd_export_logs "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
   cli)       cmd_cli "${1:?Username required}" "${@:2}" ;;
-  token)     cmd_token "${1:?Username required}" ;;
+  token)     cmd_token "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
   info)      cmd_info "${1:?Username required}" ;;
-  sync-ollama)     cmd_sync_ollama "${1:?Username required}" "${2:-}" ;;
+  sync-ollama)     cmd_sync_ollama "${1:?Username required}" "${2:-}"; echo ""; cmd_info "${1}" ;;
   list-ollama)     cmd_list_ollama "${1:-}" ;;
   restart-ollama)  cmd_restart_ollama "${1:-}" ;;
-  sync-vllm)    cmd_sync_vllm "${1:?Username required}" "${2:-}" ;;
+  sync-vllm)    cmd_sync_vllm "${1:?Username required}" "${2:-}"; echo ""; cmd_info "${1}" ;;
   list-vllm)    cmd_list_vllm "${1:-}" ;;
   help|-h|--help) usage ;;
   *)         fail "Unknown command: $command. Run '$(basename "$0") help' for usage." ;;

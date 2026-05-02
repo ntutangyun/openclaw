@@ -9,6 +9,8 @@ export type RunMediaUnderstandingFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -24,6 +26,8 @@ export type DescribeImageFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type DescribeImageFileWithModelParams = {
@@ -38,7 +42,7 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
-export type DescribeImageFileWithModelResult = Awaited<
+type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
 

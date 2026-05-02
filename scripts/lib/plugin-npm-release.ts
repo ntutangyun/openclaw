@@ -10,6 +10,12 @@ export type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
+  repository?:
+    | string
+    | {
+        type?: string;
+        url?: string;
+      };
   openclaw?: {
     extensions?: string[];
     install?: {
@@ -64,6 +70,9 @@ export type PublishablePluginPackageCandidate<
   packageJson: TPackageJson;
 };
 
+export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
 function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
   path: string,
 ): TPackageJson {
@@ -209,6 +218,10 @@ export function collectPublishablePluginPackageErrors(
   const errors: string[] = [];
   const packageName = packageJson.name?.trim() ?? "";
   const packageVersion = packageJson.version?.trim() ?? "";
+  const repositoryUrl =
+    typeof packageJson.repository === "string"
+      ? packageJson.repository.trim()
+      : (packageJson.repository?.url?.trim() ?? "");
   const extensions = packageJson.openclaw?.extensions ?? [];
 
   if (!packageName.startsWith("@openclaw/")) {
@@ -218,6 +231,11 @@ export function collectPublishablePluginPackageErrors(
   }
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
+  }
+  if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
+    errors.push(
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "${repositoryUrl || "<missing>"}".`,
+    );
   }
   if (!packageVersion) {
     errors.push("package.json version must be non-empty.");
@@ -236,14 +254,31 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
+export type PublishablePluginPackageFilters = {
+  extensionIds?: readonly string[];
+  packageNames?: readonly string[];
+};
+
 export function collectPublishablePluginPackages(
   rootDir = resolve("."),
+  filters: PublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
+  const selectedExtensionIds = new Set(filters.extensionIds ?? []);
+  const selectedPackageNames = new Set(filters.packageNames ?? []);
+  const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
+  const hasSelectedPackageNames = Array.isArray(filters.packageNames);
 
   for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
     const { extensionId, packageDir, packageJson } = candidate;
+    if (hasSelectedExtensionIds && !selectedExtensionIds.has(extensionId)) {
+      continue;
+    }
+    const packageName = packageJson.name?.trim() ?? "";
+    if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
     if (packageJson.openclaw?.release?.publishToNpm !== true) {
       continue;
     }
@@ -267,7 +302,7 @@ export function collectPublishablePluginPackages(
     publishable.push({
       extensionId,
       packageDir,
-      packageName: packageJson.name!.trim(),
+      packageName,
       version,
       channel: parsedVersion.channel,
       publishTag: resolveNpmPublishPlan(version).publishTag,
@@ -442,7 +477,19 @@ export function collectPluginReleasePlan(params?: {
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
 }): PluginReleasePlan {
-  const allPublishable = collectPublishablePluginPackages(params?.rootDir);
+  const changedExtensionIds = params?.gitRange
+    ? collectChangedExtensionIdsFromGitRange({
+        rootDir: params.rootDir,
+        gitRange: params.gitRange,
+      })
+    : [];
+  const allPublishable = collectPublishablePluginPackages(params?.rootDir, {
+    extensionIds:
+      params?.selectionMode === "all-publishable" || !params?.gitRange
+        ? undefined
+        : changedExtensionIds,
+    packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
+  });
   const selectedPublishable =
     params?.selectionMode === "all-publishable"
       ? allPublishable
@@ -454,17 +501,15 @@ export function collectPluginReleasePlan(params?: {
         : params?.gitRange
           ? resolveChangedPublishablePluginPackages({
               plugins: allPublishable,
-              changedExtensionIds: collectChangedExtensionIdsFromGitRange({
-                rootDir: params.rootDir,
-                gitRange: params.gitRange,
-              }),
+              changedExtensionIds,
             })
           : allPublishable;
 
-  const all = selectedPublishable.map((plugin) => ({
-    ...plugin,
-    alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
-  }));
+  const all = selectedPublishable.map((plugin) =>
+    Object.assign({}, plugin, {
+      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+    }),
+  );
 
   return {
     all,

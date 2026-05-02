@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -14,6 +13,27 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
+>;
+
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withSelfHostedWebToolsEndpoint;
+}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -66,14 +86,38 @@ export async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    signal?: AbortSignal;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function withSelfHostedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
     },
     async ({ response }) => run(response),
   );
@@ -88,13 +132,16 @@ export async function postTrustedWebToolsJson<T>(
     errorLabel: string;
     maxErrorBytes?: number;
     extraHeaders?: Record<string, string>;
+    signal?: AbortSignal;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -147,7 +194,7 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-export const RECENCY_TO_FRESHNESS: Record<string, string> = {
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
   day: "pd",
   week: "pw",
   month: "pm",
@@ -178,7 +225,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
     return undefined;
   }
   const [, year, month, day] = match;
-  return `${parseInt(month, 10)}/${parseInt(day, 10)}/${year}`;
+  return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
 export function normalizeToIsoDate(value: string): string | undefined {

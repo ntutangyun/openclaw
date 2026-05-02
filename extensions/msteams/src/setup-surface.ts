@@ -17,8 +17,8 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { createMSTeamsSetupWizardBase } from "./setup-core.js";
+import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
 
 const channel = "msteams" as const;
 const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
@@ -244,8 +244,6 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
 
-export { msteamsSetupAdapter } from "./setup-core.js";
-
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
@@ -279,7 +277,6 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         };
         try {
           const { loginMSTeamsDelegated } = await import("./oauth.js");
-          const { saveDelegatedTokens } = await import("./token.js");
           const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
           const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
           const progress = params.prompter.progress("MSTeams Delegated OAuth");

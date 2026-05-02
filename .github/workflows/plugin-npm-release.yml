@@ -8,6 +8,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-npm-release-check.ts"
@@ -46,7 +47,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref_sha: ${{ steps.ref.outputs.sha }}
+      ref_revision: ${{ steps.ref.outputs.sha }}
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -54,6 +55,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
 
@@ -63,7 +65,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Resolve checked-out ref
         id: ref
@@ -152,7 +153,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -161,15 +163,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
 
       - name: Preview publish command
         run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
-        working-directory: ${{ matrix.plugin.packageDir }}
-        run: npm pack --dry-run --json --ignore-scripts
+        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
   publish_plugins_npm:
     needs: [preview_plugins_npm, preview_plugin_pack]
@@ -187,7 +186,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_sha }}
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -196,8 +196,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
 
       - name: Ensure version is not already published
         env:
@@ -214,4 +212,5 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"

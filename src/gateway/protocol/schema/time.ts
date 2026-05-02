@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 
 /**
  * Peer → gateway clock synchronization (4-timestamp NTP-style exchange).

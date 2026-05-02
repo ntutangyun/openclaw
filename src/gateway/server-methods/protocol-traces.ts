@@ -30,7 +30,8 @@ export const protocolTracesHandlers: GatewayRequestHandlers = {
       return;
     }
     const role = client?.connect?.role === "node" ? "node" : "operator";
-    store.recordRxSamples(role, params.samples, { connId: client?.connId });
-    respond(true, { accepted: params.samples.length });
+    const samples = params.samples;
+    store.recordRxSamples(role, samples, { connId: client?.connId });
+    respond(true, { accepted: samples.length });
   },
 };

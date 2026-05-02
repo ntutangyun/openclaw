@@ -11,6 +11,7 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
+import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +70,35 @@ describe("collectClawHubPublishablePluginPackages", () => {
       "Demo Plugin: extension directory name must match",
     );
   });
+
+  it("validates only selected package names when filters are provided", () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      collectClawHubPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }).map((plugin) => plugin.packageName),
+    ).toEqual(["@openclaw/demo-plugin"]);
+  });
 });
 
 describe("collectClawHubVersionGateErrors", () => {
@@ -115,6 +145,10 @@ describe("collectClawHubVersionGateErrors", () => {
         {
           name: "@openclaw/demo-plugin",
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             compat: {
@@ -155,21 +189,7 @@ describe("collectClawHubVersionGateErrors", () => {
 
   it("does not require a version bump for shared release-tooling changes", () => {
     const repoDir = createTempPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const errors = collectClawHubVersionGateErrors({
       rootDir: repoDir,
@@ -186,21 +206,7 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two"],
     });
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -262,6 +268,38 @@ describe("collectPluginClawHubReleasePlan", () => {
       version: "2026.4.1",
     });
   });
+
+  it("plans selected packages without validating unrelated publishable packages", async () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl: async () => new Response("{}", { status: 404 }),
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
 });
 
 describe("collectPluginClawHubReleasePathsFromGitRange", () => {
@@ -306,6 +344,10 @@ function createTempPluginRepo(
         {
           name: `@openclaw/${currentExtensionId}`,
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             ...(options.includeClawHubContract === false
@@ -346,6 +388,26 @@ function createTempPluginRepo(
   ]);
 
   return repoDir;
+}
+
+function commitSharedReleaseToolingChange(repoDir: string) {
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  mkdirSync(join(repoDir, "scripts"), { recursive: true });
+  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-m",
+    "shared tooling",
+  ]);
+  const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  return { baseRef, headRef };
 }
 
 function git(cwd: string, args: string[]) {

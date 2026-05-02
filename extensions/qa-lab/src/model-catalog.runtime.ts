@@ -4,12 +4,16 @@ import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import {
+  isPreferredQaLiveFrontierCatalogModel,
+  QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
+  QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+  QA_FRONTIER_PROVIDER_IDS,
+} from "./providers/live-frontier/catalog.js";
+import {
   createQaChannelGatewayConfig,
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
-
-const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
 type ModelRow = {
   key: string;
@@ -48,7 +52,7 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
         name: row.name,
         provider: parsed?.provider ?? "unknown",
         input: row.input,
-        preferred: row.key === "openai/gpt-5.4",
+        preferred: isPreferredQaLiveFrontierCatalogModel(row.key),
       } satisfies QaRunnerModelOption;
     });
 
@@ -110,8 +114,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       gatewayToken: "qa-model-catalog",
       workspaceDir,
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "anthropic/claude-sonnet-4-6",
+      primaryModel: QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+      alternateModel: QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
       enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
       imageGenerationModel: null,
       controlUiEnabled: false,

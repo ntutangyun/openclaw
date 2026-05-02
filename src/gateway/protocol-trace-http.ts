@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
@@ -37,7 +37,7 @@ async function authorize(
   res: ServerResponse,
   opts: ProtocolTraceHttpOpts,
 ): Promise<boolean> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const result = await authorizeGatewayHttpRequestOrReply({
     req,
     res,

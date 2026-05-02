@@ -74,6 +74,9 @@ Put under `plugins.entries.voice-call.config`:
     defaultMode: "notify", // or "conversation"
   },
 
+  // Optional response agent workspace. Defaults to "main".
+  agentId: "main",
+
   streaming: {
     enabled: true,
     // optional; if omitted, Voice Call picks the first registered
@@ -120,6 +123,7 @@ openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
+openclaw voicecall status --json
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
 openclaw voicecall expose --mode funnel

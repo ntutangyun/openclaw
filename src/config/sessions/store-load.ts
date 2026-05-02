@@ -1,18 +1,32 @@
 import fs from "node:fs";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
+  cloneSessionStoreRecord,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  shouldRunSessionEntryMaintenance,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  runMaintenance?: boolean;
+  clone?: boolean;
 };
+
+const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -51,7 +65,8 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
-export function normalizeSessionStore(store: Record<string, SessionEntry>): void {
+export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
+  let changed = false;
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
@@ -59,8 +74,10 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): void
     const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
     if (normalized !== entry) {
       store[key] = normalized;
+      changed = true;
     }
   }
+  return changed;
 }
 
 export function loadSessionStore(
@@ -110,14 +127,39 @@ export function loadSessionStore(
     }
   }
 
-  if (serializedFromDisk !== undefined) {
-    setSerializedSessionStore(storePath, serializedFromDisk);
-  } else {
-    setSerializedSessionStore(storePath, undefined);
+  const migrated = applySessionStoreMigrations(store);
+  const normalized = normalizeSessionStore(store);
+  if (migrated || normalized) {
+    serializedFromDisk = undefined;
+  }
+  if (opts.runMaintenance) {
+    const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+    const beforeCount = Object.keys(store).length;
+    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const countAfterPrune = Object.keys(store).length;
+      const capped = shouldRunSessionEntryMaintenance({
+        entryCount: countAfterPrune,
+        maxEntries: maintenance.maxEntries,
+      })
+        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        : 0;
+      const afterCount = Object.keys(store).length;
+      if (pruned > 0 || capped > 0) {
+        serializedFromDisk = undefined;
+        log.info("applied load-time maintenance to oversized session store", {
+          storePath,
+          before: beforeCount,
+          after: afterCount,
+          pruned,
+          capped,
+          maxEntries: maintenance.maxEntries,
+        });
+      }
+    }
   }
 
-  applySessionStoreMigrations(store);
-  normalizeSessionStore(store);
+  setSerializedSessionStore(storePath, serializedFromDisk);
 
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
@@ -129,5 +171,5 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }
