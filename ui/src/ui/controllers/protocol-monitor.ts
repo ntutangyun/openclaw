@@ -179,6 +179,50 @@ export type DirectionalThroughputSamples = {
   reverse: ThroughputSample[];
 };
 
+/** Distribution stats for a single direction's per-message throughput series. */
+export type ThroughputDirectionStats = {
+  samples: ThroughputSample[];
+  minBytesPerSec: number | null;
+  p50BytesPerSec: number | null;
+  p95BytesPerSec: number | null;
+  avgBytesPerSec: number | null;
+  peakBytesPerSec: number | null;
+  count: number;
+};
+
+export type DirectionalThroughputStats = {
+  forward: ThroughputDirectionStats;
+  reverse: ThroughputDirectionStats;
+};
+
+/**
+ * Aggregate stats per message type for the "messages" section. One card per
+ * distinct method/event observed on a wire pair.
+ */
+export type MessageTypeCard = {
+  type: string; // e.g. "req.chat.send", "event.session.message"
+  count: number;
+  minBytes: number;
+  maxBytes: number;
+};
+
+/** Single message data point for the per-direction bar chart. */
+export type MessageBar = {
+  ts: number;
+  size: number;
+  type: string;
+};
+
+export type MessagesDirection = {
+  cards: MessageTypeCard[];
+  bars: MessageBar[];
+};
+
+export type DirectionalMessages = {
+  forward: MessagesDirection;
+  reverse: MessagesDirection;
+};
+
 export type RequestStats = {
   /** Total number of Agent → Model LLM requests observed. */
   total: number;
@@ -209,6 +253,23 @@ export type NetworkStats = {
   operatorGateway: DirectionalThroughputSamples;
   agentLlm: DirectionalThroughputSamples;
   gatewayNode: DirectionalThroughputSamples;
+  /**
+   * Per-message throughput stats for the wire pairs. Each sample is
+   * `payloadBytes / contemporaneous_ping_oneWayMs * 1000` — uses the
+   * dedicated ping protocol's most-recent latency reading for that
+   * direction so throughput is independent of the message's own timing.
+   * agent-llm is in-process and doesn't get per-message throughput stats.
+   */
+  operatorGatewayThroughputStats: DirectionalThroughputStats;
+  gatewayNodeThroughputStats: DirectionalThroughputStats;
+  /**
+   * Per-message-type aggregates + per-message bars for the "messages"
+   * section. One per wire pair, broken down by direction. Only traces that
+   * survived `DEFAULT_INGEST_BLOCKLIST` (i.e. agentic-task-relevant frames)
+   * appear here.
+   */
+  operatorGatewayMessages: DirectionalMessages;
+  gatewayNodeMessages: DirectionalMessages;
   /** Agent-LLM TTFT latency samples (one per LLM call). */
   agentLlmTtft: LatencyStats;
   /** Agent-LLM full generation latency samples (one per LLM call). */
@@ -901,6 +962,32 @@ export function computeNetworkStats(
     gatewayOperatorOneWayLatency: computePingLatencyStats("operator", "reverse"),
     nodeGatewayOneWayLatency: computePingLatencyStats("node", "forward"),
     gatewayNodeOneWayLatency: computePingLatencyStats("node", "reverse"),
+    // Per-message throughput stats (replaces 2s-bucket aggregation) for the
+    // wire pairs. Each sample = payloadBytes / contemporaneous-ping-oneWayMs.
+    operatorGatewayThroughputStats: {
+      forward: buildThroughputStats(
+        computePerMessageThroughput(traces, "operator", "forward", "operator", "gateway"),
+      ),
+      reverse: buildThroughputStats(
+        computePerMessageThroughput(traces, "operator", "reverse", "gateway", "operator"),
+      ),
+    },
+    gatewayNodeThroughputStats: {
+      forward: buildThroughputStats(
+        computePerMessageThroughput(traces, "node", "forward", "node", "gateway"),
+      ),
+      reverse: buildThroughputStats(
+        computePerMessageThroughput(traces, "node", "reverse", "gateway", "node"),
+      ),
+    },
+    operatorGatewayMessages: {
+      forward: computePerDirectionMessages(traces, "operator", "gateway"),
+      reverse: computePerDirectionMessages(traces, "gateway", "operator"),
+    },
+    gatewayNodeMessages: {
+      forward: computePerDirectionMessages(traces, "node", "gateway"),
+      reverse: computePerDirectionMessages(traces, "gateway", "node"),
+    },
     requestStats: buildRequestStats(),
     responseStats: buildResponseStats(),
   };
@@ -916,6 +1003,132 @@ function filterLatencyByModel(stats: LatencyStats, modelFilter?: string | null):
   }
   const filtered = stats.samples.filter((s) => !s.model || s.model === modelFilter);
   return buildLatencyStats(filtered);
+}
+
+/**
+ * Most recent ping-derived one-way latency (ms) for a given source/direction,
+ * or null if no pings have arrived yet. Used by per-message throughput to
+ * estimate transmission time without instrumenting the message itself.
+ */
+function getLatestPingOneWayMs(
+  source: "operator" | "node",
+  direction: "forward" | "reverse",
+): number | null {
+  const arr = pingSamples[source][direction];
+  if (arr.length === 0) {
+    return null;
+  }
+  const last = arr[arr.length - 1];
+  return last ? last.oneWayMs : null;
+}
+
+/**
+ * Per-message throughput: for each non-blocklisted trace in the given
+ * (source, target) direction, build a sample with
+ * `bytesPerSec = payloadSize / pingOneWayMs * 1000`. Uses the most recent
+ * ping latency for the matching direction at compute time. Skips traces
+ * that landed before the first ping completed (no latency available yet)
+ * and traces with zero payload.
+ */
+function computePerMessageThroughput(
+  traces: ProtocolTraceRecord[],
+  pingSource: "operator" | "node",
+  pingDirection: "forward" | "reverse",
+  matchSource: TraceEntity,
+  matchTarget: TraceEntity,
+): ThroughputSample[] {
+  const oneWayMs = getLatestPingOneWayMs(pingSource, pingDirection);
+  if (oneWayMs === null || oneWayMs <= 0) {
+    return [];
+  }
+  const samples: ThroughputSample[] = [];
+  for (const t of traces) {
+    if (t.source !== matchSource || t.target !== matchTarget) {
+      continue;
+    }
+    const bytes = t.payloadSize ?? 0;
+    if (bytes <= 0) {
+      continue;
+    }
+    samples.push({ ts: t.ts, bytesPerSec: (bytes / oneWayMs) * 1000, rawBytes: bytes });
+  }
+  return samples;
+}
+
+/**
+ * Stable display label per message: `event.<name>` for events, `<kind>.<method>`
+ * for req/res frames. Returns null for frames that have neither an event name
+ * nor a method (rare; e.g. malformed frames).
+ */
+function resolveMessageType(t: ProtocolTraceRecord): string | null {
+  if (t.kind === "event") {
+    return t.event ? `event.${t.event}` : null;
+  }
+  if (t.method) {
+    return `${t.kind}.${t.method}`;
+  }
+  return null;
+}
+
+function computePerDirectionMessages(
+  traces: ProtocolTraceRecord[],
+  matchSource: TraceEntity,
+  matchTarget: TraceEntity,
+): MessagesDirection {
+  const cardMap = new Map<string, MessageTypeCard>();
+  const bars: MessageBar[] = [];
+  for (const t of traces) {
+    if (t.source !== matchSource || t.target !== matchTarget) {
+      continue;
+    }
+    const type = resolveMessageType(t);
+    if (!type) {
+      continue;
+    }
+    const size = t.payloadSize ?? 0;
+    bars.push({ ts: t.ts, size, type });
+    const existing = cardMap.get(type);
+    if (existing) {
+      existing.count += 1;
+      if (size < existing.minBytes) {
+        existing.minBytes = size;
+      }
+      if (size > existing.maxBytes) {
+        existing.maxBytes = size;
+      }
+    } else {
+      cardMap.set(type, { type, count: 1, minBytes: size, maxBytes: size });
+    }
+  }
+  return {
+    cards: Array.from(cardMap.values()).toSorted((a, b) => b.count - a.count),
+    bars,
+  };
+}
+
+function buildThroughputStats(samples: ThroughputSample[]): ThroughputDirectionStats {
+  if (samples.length === 0) {
+    return {
+      samples,
+      minBytesPerSec: null,
+      p50BytesPerSec: null,
+      p95BytesPerSec: null,
+      avgBytesPerSec: null,
+      peakBytesPerSec: null,
+      count: 0,
+    };
+  }
+  const sorted = samples.map((s) => s.bytesPerSec).toSorted((a, b) => a - b);
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  return {
+    samples,
+    minBytesPerSec: sorted[0] ?? null,
+    p50BytesPerSec: sorted[Math.floor(sorted.length * 0.5)] ?? null,
+    p95BytesPerSec: sorted[Math.floor(sorted.length * 0.95)] ?? null,
+    avgBytesPerSec: sum / sorted.length,
+    peakBytesPerSec: sorted[sorted.length - 1] ?? null,
+    count: sorted.length,
+  };
 }
 
 /**
