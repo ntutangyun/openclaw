@@ -44,12 +44,29 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.message": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   "protocol.trace": [READ_SCOPE],
+  // Protocol monitor — peer-reported reverse-direction rx samples.
+  "protocol.rx.samples": [READ_SCOPE],
+  // Dedicated ping protocol for protocol-monitor latency.
+  // - ping.gw-to-peer is a targeted ping the gateway sends to a single peer
+  //   (operator OR node) and must reach BOTH role types because nodes also
+  //   ACK pings. Uses an empty scope-required list so any role is allowed,
+  //   and the role check below treats node-role specially via NODE_ALLOWED_EVENTS.
+  // - ping.metrics is the gateway's broadcast of new ping samples to UIs;
+  //   operator clients with read scope get it (parallel to protocol.trace).
+  "ping.gw-to-peer": [],
+  "ping.metrics": [READ_SCOPE],
 };
 
 // Events that node-role sessions must receive even when the event's operator
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+const NODE_ALLOWED_EVENTS = new Set<string>([
+  "voicewake.changed",
+  "voicewake.routing.changed",
+  // Nodes need to ACK gateway-initiated pings so the gateway can measure
+  // gw→node reverse-direction latency.
+  "ping.gw-to-peer",
+]);
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
