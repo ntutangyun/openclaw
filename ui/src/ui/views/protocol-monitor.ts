@@ -6,6 +6,7 @@ import type {
   CoalescedGroup,
   CoalescedEntry,
   MessageTypeStats,
+  MessagesDirection,
   NetworkStats,
   ThroughputSample,
   LatencyStats,
@@ -2578,6 +2579,68 @@ function renderDirectionalNetworkPane(
   `;
 }
 
+/**
+ * Pick the matching `MessagesDirection` for a given chart direction tab. Only
+ * wire pairs (op-gw, gw-op, node-gw, gw-node) have message data; agent-llm
+ * directions return null because they're internal flows, not wire traffic.
+ */
+function selectDirectionMessages(
+  net: NetworkStats,
+  id: NetworkDirection,
+): MessagesDirection | null {
+  switch (id) {
+    case "op-to-gw":
+      return net.operatorGatewayMessages.forward;
+    case "gw-to-op":
+      return net.operatorGatewayMessages.reverse;
+    case "node-to-gw":
+      return net.gatewayNodeMessages.forward;
+    case "gw-to-node":
+      return net.gatewayNodeMessages.reverse;
+    default:
+      return null;
+  }
+}
+
+function renderMessagesSection(
+  net: NetworkStats,
+  direction: NetworkDirection,
+  color: string,
+  openExp: (key: string) => () => void,
+): TemplateResult | typeof nothing {
+  const data = selectDirectionMessages(net, direction);
+  if (!data) {
+    return nothing;
+  }
+  const totalCount = data.cards.reduce((a, c) => a + c.count, 0);
+  return html`
+    <div class="pm-net-section-title" style="margin-top:14px;">Messages · ${totalCount} total</div>
+    ${data.cards.length === 0
+      ? html`<div class="pm-chart-empty" style="height:80px;line-height:80px;">
+          No agentic-task messages observed yet on this direction.
+        </div>`
+      : html`
+          <div class="pm-message-cards">
+            ${data.cards.map(
+              (c) => html`
+                <button
+                  class="pm-message-card"
+                  style="border-left-color:${color};"
+                  @click=${openExp(`messages-${c.type}`)}
+                >
+                  <div class="pm-message-card-type" title=${c.type}>${c.type}</div>
+                  <div class="pm-message-card-count">${c.count}</div>
+                  <div class="pm-message-card-sub">
+                    ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+                  </div>
+                </button>
+              `,
+            )}
+          </div>
+        `}
+  `;
+}
+
 function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
@@ -2641,6 +2704,12 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
           </div>
           <div class="pm-net-stat-grid">
             ${renderNetStatCard(
+              "Min",
+              formatMs(latency.stats.minMs),
+              "best sample",
+              openExp(`${latency.latencyKey}-min`),
+            )}
+            ${renderNetStatCard(
               "Avg",
               formatMs(latency.stats.avgMs),
               `${latency.stats.count} samples`,
@@ -2666,6 +2735,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
             )}
           </div>
           ${renderLatencyChartSvg(latency.label, latency.stats, meta.color)}
+          ${renderMessagesSection(net, props.networkDirection, meta.color, openExp)}
         `
       : html`
           <div class="pm-net-no-latency">
@@ -3226,6 +3296,7 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
     { val: stats.p95Ms ?? 0, label: "p95", dash: "5,3", opacity: 0.55, weight: 1 },
     { val: stats.p50Ms ?? 0, label: "p50", dash: "4,4", opacity: 0.55, weight: 1 },
     { val: stats.avgMs ?? 0, label: "avg", dash: "6,4", opacity: 0.85, weight: 1.5 },
+    { val: stats.minMs ?? 0, label: "min", dash: "2,4", opacity: 0.45, weight: 0.7 },
   ].filter((r) => r.val > 0);
 
   const chartId = `lat-${label.replace(/\W/g, "")}`;
@@ -3999,6 +4070,47 @@ const STYLES = /* css */ `
     font-size: 10px;
     color: #6b7280;
     margin-top: 2px;
+  }
+  .pm-message-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .pm-message-card {
+    background: #fff;
+    border: 1px solid #e0e4ee;
+    border-left: 3px solid currentColor;
+    border-radius: 6px;
+    padding: 8px 10px;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .pm-message-card:hover {
+    background: #f5f7fb;
+  }
+  .pm-message-card-type {
+    font-size: 11px;
+    color: #4b5563;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pm-message-card-count {
+    font-size: 18px;
+    font-weight: 600;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    margin-top: 2px;
+  }
+  .pm-message-card-sub {
+    font-size: 10px;
+    color: #6b7280;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
   }
   .pm-net-no-latency {
     margin-top: 14px;
