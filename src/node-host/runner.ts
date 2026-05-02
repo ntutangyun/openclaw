@@ -223,6 +223,22 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
 
+  // GatewayClient pauses reconnect for "operator action needed" close reasons
+  // (PAIRING_REQUIRED, etc.). Without anything keeping the event loop alive,
+  // the node-host process would exit silently with Node 22+'s
+  // "unsettled top-level await" warning at openclaw.mjs's `await tryImport(...)`.
+  // We schedule a slow retry timer for the recoverable cases so the node
+  // automatically picks up once the operator approves (and the timer alone
+  // keeps the event loop alive). `onHelloOk` cancels the timer once we connect.
+  let pendingPairingRetryTimer: NodeJS.Timeout | null = null;
+  const stopPendingPairingRetry = () => {
+    if (pendingPairingRetryTimer) {
+      clearTimeout(pendingPairingRetryTimer);
+      pendingPairingRetryTimer = null;
+    }
+  };
+  const PAIRING_RETRY_INTERVAL_MS = 10_000;
+
   const client = new GatewayClient({
     url,
     token: token || undefined,
@@ -261,8 +277,22 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
+    onHelloOk: () => {
+      stopPendingPairingRetry();
+    },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info);
+      if (!shouldExitNodeHostOnReconnectPaused(info.detailCode) && info.detailCode !== null) {
+        // Recoverable pause (PAIRING_REQUIRED, AUTH_DEVICE_TOKEN_MISMATCH,
+        // CONTROL_UI_DEVICE_IDENTITY_REQUIRED, DEVICE_IDENTITY_REQUIRED,
+        // AUTH_RATE_LIMITED). Re-run start() periodically so the node
+        // reconnects without manual intervention once the operator acts.
+        stopPendingPairingRetry();
+        pendingPairingRetryTimer = setTimeout(() => {
+          pendingPairingRetryTimer = null;
+          client.start();
+        }, PAIRING_RETRY_INTERVAL_MS);
+      }
     },
     onClose: (code, reason) => {
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
