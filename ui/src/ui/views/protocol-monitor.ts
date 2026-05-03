@@ -6,6 +6,7 @@ import type {
   CoalescedGroup,
   CoalescedEntry,
   MessageTypeStats,
+  MessageBar,
   MessagesDirection,
   NetworkStats,
   ThroughputSample,
@@ -2787,42 +2788,133 @@ function renderMessagesBarChartSvg(
   });
   // Each bar is a 2 px-wide vertical rect from baseline up to the size value.
   const barWidth = 2;
+  const chartId = `bars-${(bars[0]?.ts ?? 0).toString(36)}`;
   return html`
     <div class="pm-chart-block">
-      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
-        ${yGridLines.map(
-          (g) => svg`
-            <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
-              stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
-            <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
-              fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
-          `,
-        )}
-        <line
-          x1="${PAD_L}"
-          y1="${PAD_T + plotH}"
-          x2="${W - PAD_R}"
-          y2="${PAD_T + plotH}"
-          stroke="#c4c9d6"
-          stroke-width="0.6"
-        />
-        ${xTicks.map(
-          (t) => svg`
-            <text x="${t.x}" y="${H - 8}" text-anchor="middle"
-              fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
-          `,
-        )}
-        ${bars.map((b) => {
-          const x = toX(b.ts) - barWidth / 2;
-          const y = toY(b.size);
-          const h = PAD_T + plotH - y;
-          const fill = colorMap.get(b.type) ?? "#64748b";
-          return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
-            fill="${fill}" opacity="0.85"><title>${b.type} · ${formatBytes(b.size)} · ${chartTimeLabel(b.ts)}</title></rect>`;
-        })}
-      </svg>
+      <div
+        class="pm-chart-wrap"
+        @mousemove=${(e: MouseEvent) =>
+          handleBarChartHover(
+            e,
+            bars,
+            colorMap,
+            minTs,
+            tsRange,
+            maxSize,
+            PAD_L,
+            plotW,
+            plotH,
+            PAD_T,
+            H,
+            W,
+          )}
+        @mouseleave=${handleChartLeave}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${yGridLines.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+            `,
+          )}
+          ${bars.map((b) => {
+            const x = toX(b.ts) - barWidth / 2;
+            const y = toY(b.size);
+            const h = PAD_T + plotH - y;
+            const fill = colorMap.get(b.type) ?? "#64748b";
+            return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
+              fill="${fill}" opacity="0.85" />`;
+          })}
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
     </div>
   `;
+}
+
+function handleBarChartHover(
+  e: MouseEvent,
+  bars: MessageBar[],
+  colorMap: Map<string, string>,
+  minTs: number,
+  tsRange: number,
+  maxSize: number,
+  padL: number,
+  plotW: number,
+  plotH: number,
+  padT: number,
+  chartH: number,
+  chartW: number,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  if (xRatio < 0 || xRatio > 1) {
+    handleChartLeave(e);
+    return;
+  }
+  const hoverTs = minTs + xRatio * tsRange;
+
+  let nearest = bars[0];
+  let nearestDist = Infinity;
+  for (const b of bars) {
+    const d = Math.abs(b.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = b;
+    }
+  }
+
+  const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
+  const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
+  if (!tip || !cross || !nearest) {
+    return;
+  }
+
+  const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
+  const padLPct = (padL / chartW) * 100;
+  const plotWPct = (plotW / chartW) * 100;
+  const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
+
+  cross.style.display = "block";
+  cross.style.left = `${crossLeftPct}%`;
+
+  tip.style.display = "block";
+  const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    fractionalSecondDigits: 1,
+  });
+  const swatch = colorMap.get(nearest.type) ?? "#64748b";
+  tip.innerHTML =
+    `<b>${formatBytes(nearest.size)}</b><br/>` +
+    `<span style="display:inline-block;width:8px;height:8px;background:${swatch};border-radius:2px;margin-right:4px;vertical-align:middle;"></span>` +
+    `${nearest.type}<br/>` +
+    `<span style="color:#9ca3af;">${time}</span>`;
+
+  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
+  tip.style.left = `${tipLeft}%`;
+  const nearestYPct = padT + plotH - (nearest.size / maxSize) * plotH;
+  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
 }
 
 function renderMessagesSection(
@@ -4962,7 +5054,6 @@ const STYLES = /* css */ `
   .pm-chart-svg--tall {
     height: auto;
     aspect-ratio: 460 / 260;
-    max-height: 320px;
   }
   .pm-chart-empty {
     height: 120px;
