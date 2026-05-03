@@ -88,6 +88,13 @@ export type RxLatencySample = {
   kind?: string;
   method?: string;
   event?: string;
+  /**
+   * Serialized payload byte count, captured by the receiver at recv time
+   * (`JSON.stringify(frame.payload).length`). The UI uses this to compute
+   * per-message throughput directly from the rx-sample, no trace lookup
+   * needed. Undefined for pre-upgrade peers.
+   */
+  payloadSize?: number;
 };
 
 /**

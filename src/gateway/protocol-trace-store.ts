@@ -78,6 +78,8 @@ export type RxLatencySample = {
 export type RxSamplesBroadcastFn = (info: {
   source: "operator" | "node";
   connId?: string;
+  /** Client id of the reporting peer (e.g. `openclaw-control-ui`, `cli`). */
+  client?: string;
   samples: RxLatencySample[];
 }) => void;
 
@@ -268,7 +270,7 @@ export class ProtocolTraceStore {
   recordRxSamples(
     source: "operator" | "node",
     samples: RxLatencySample[],
-    opts: { connId?: string } = {},
+    opts: { connId?: string; client?: string } = {},
   ) {
     if (!samples.length) {
       return;
@@ -281,7 +283,7 @@ export class ProtocolTraceStore {
       buf.splice(0, buf.length - RX_SAMPLE_CAP_PER_SOURCE);
     }
     if (this.rxBroadcastFn) {
-      this.rxBroadcastFn({ source, connId: opts.connId, samples });
+      this.rxBroadcastFn({ source, connId: opts.connId, client: opts.client, samples });
     }
   }
 

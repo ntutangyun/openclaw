@@ -877,7 +877,7 @@ export class GatewayClient {
           }
           return;
         }
-        this.captureRxSample(evt.sentAt, "event", undefined, evt.event);
+        this.captureRxSample(evt.sentAt, "event", undefined, evt.event, evt.payload);
         if (evt.event === "ping.gw-to-peer") {
           this.handlePingGwToPeerEvent(evt.payload);
         }
@@ -900,7 +900,7 @@ export class GatewayClient {
         if (!pending) {
           return;
         }
-        this.captureRxSample(parsed.sentAt, "res", pending.method, undefined);
+        this.captureRxSample(parsed.sentAt, "res", pending.method, undefined, parsed.payload);
         // If the payload is an ack with status accepted, keep waiting for final.
         const payload = parsed.payload as { status?: unknown } | undefined;
         const status = payload?.status;
@@ -1114,7 +1114,13 @@ export class GatewayClient {
     return p;
   }
 
-  private captureRxSample(sentAt: unknown, kind: string, method?: string, event?: string) {
+  private captureRxSample(
+    sentAt: unknown,
+    kind: string,
+    method: string | undefined,
+    event: string | undefined,
+    payload: unknown,
+  ) {
     if (typeof sentAt !== "number") {
       return;
     }
@@ -1124,7 +1130,17 @@ export class GatewayClient {
     if (latencyMs < 0 || latencyMs >= 60_000) {
       return;
     }
-    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event });
+    let payloadSize: number | undefined;
+    if (payload !== undefined && payload !== null) {
+      try {
+        payloadSize = JSON.stringify(payload).length;
+      } catch {
+        payloadSize = undefined;
+      }
+    } else {
+      payloadSize = 0;
+    }
+    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event, payloadSize });
     if (this.rxSamples.length > RX_REPORT_BUFFER_CAP) {
       this.rxSamples.splice(0, this.rxSamples.length - RX_REPORT_BUFFER_CAP);
     }

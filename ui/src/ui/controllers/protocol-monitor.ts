@@ -1001,23 +1001,21 @@ export function computeNetworkStats(
     gatewayOperatorOneWayLatency: computePingLatencyStats("operator", "reverse"),
     nodeGatewayOneWayLatency: computePingLatencyStats("node", "forward"),
     gatewayNodeOneWayLatency: computePingLatencyStats("node", "reverse"),
-    // Per-message throughput stats (replaces 2s-bucket aggregation) for the
-    // wire pairs. Each sample = payloadBytes / contemporaneous-ping-oneWayMs.
+    // Per-message throughput stats. peer→gw uses trace.oneWayLatencyMs
+    // (gateway-stamped at recv); gw→peer reads payloadSize+latencyMs from
+    // peer-reported rx-samples directly. Either way, per-message — no
+    // per-window ping smearing — and no trace↔rx-sample join needed.
     operatorGatewayThroughputStats: {
       forward: buildThroughputStats(
-        computePerMessageThroughput(traces, "operator", "forward", "operator", "gateway"),
+        computePeerToGwThroughput(traces, "operator", getLatestPingOneWayMs("operator", "forward")),
       ),
-      reverse: buildThroughputStats(
-        computePerMessageThroughput(traces, "operator", "reverse", "gateway", "operator"),
-      ),
+      reverse: buildThroughputStats(computeGwToPeerThroughput(rxSamplesOperator)),
     },
     gatewayNodeThroughputStats: {
       forward: buildThroughputStats(
-        computePerMessageThroughput(traces, "node", "forward", "node", "gateway"),
+        computePeerToGwThroughput(traces, "node", getLatestPingOneWayMs("node", "forward")),
       ),
-      reverse: buildThroughputStats(
-        computePerMessageThroughput(traces, "node", "reverse", "gateway", "node"),
-      ),
+      reverse: buildThroughputStats(computeGwToPeerThroughput(rxSamplesNode)),
     },
     operatorGatewayMessages: {
       forward: buildMessagesDirection(messageStore.opGw.forward),
@@ -1062,88 +1060,26 @@ function getLatestPingOneWayMs(
 }
 
 /**
- * Find the rx-sample whose original sentAt (= s.ts - s.latencyMs, both in
- * gateway-clock) matches the trace's ts and whose kind/method/event matches
- * the trace. Used for gw→peer throughput where the gateway can't directly
- * observe per-frame recv time on its own clock.
+ * Per-message throughput, peer→gw direction (op→gw, node→gw). Each trace
+ * carries `oneWayLatencyMs` stamped by the gateway at ingest time as
+ * `recvTs − frame.sentAt`, where `frame.sentAt` was already adjusted into
+ * gateway clock by the peer using the cached `time.sync` offset. We just
+ * divide payload bytes by that per-message latency — no joining anything.
  *
- * Match window is intentionally small (200ms): rx-sample.ts - latencyMs
- * should equal trace.ts exactly (both are the same gateway-side sentAt
- * value), modulo sub-ms clock-sync residual error and any rounding.
+ * Falls back to the most recent ping one-way latency only if a trace lacks
+ * `oneWayLatencyMs` (pre-upgrade peer that didn't stamp `sentAt`, or a
+ * frame the gateway clamped on capture). Skips traces that fail the
+ * operator-pair filter so non-Control-UI operator clients (agent CLI etc.)
+ * don't pollute the chart.
  */
-function findRxLatencyForTrace(
-  samples: RxLatencySampleEntry[],
-  t: ProtocolTraceRecord,
-): number | null {
-  const targetMethod = t.method;
-  const targetEvent = t.event;
-  if (!targetMethod && !targetEvent) {
-    return null;
-  }
-  let bestLatency: number | null = null;
-  let bestDist = Infinity;
-  for (const s of samples) {
-    if (targetEvent) {
-      if (s.event !== targetEvent) {
-        continue;
-      }
-    } else if (targetMethod) {
-      if (s.method !== targetMethod) {
-        continue;
-      }
-    }
-    const sentMatch = s.ts - s.latencyMs;
-    const dist = Math.abs(sentMatch - t.ts);
-    if (dist > 200) {
-      continue;
-    }
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestLatency = s.latencyMs;
-    }
-  }
-  return bestLatency;
-}
-
-/**
- * Per-message throughput: for each non-blocklisted trace in the given
- * (source, target) direction, build a sample with
- * `bytesPerSec = payloadSize / oneWayMs * 1000` where `oneWayMs` is the
- * actual per-message one-way latency:
- *
- *   - peer→gw (op→gw, node→gw): `trace.oneWayLatencyMs`, stamped at gateway
- *     ingest as `recvTs - frame.sentAt` (peer's sentAt is offset-adjusted to
- *     gateway clock by the same time-sync mechanism the latency chart uses).
- *   - gw→peer (gw→op, gw→node): join the trace to the rx-sample reported by
- *     the peer (`protocol-traces.rx-report` → `protocol.rx.samples`) by
- *     (kind/method/event, sentAt match within 200ms). Peers stamp recvTs in
- *     their adjusted clock and the gateway broadcasts the per-sample latency.
- *
- * Falls back to the most recent ping latency when neither per-message source
- * is available — typically only during the startup grace before the first
- * rx-report or for traces whose method/event isn't carried on rx-samples.
- *
- * This eliminates the variance of the old "use the last ping value as the
- * divisor for every message" approach: each message gets its own contemporaneous
- * latency, so a slow burst (Wi-Fi retransmit, GC pause) shows up as low
- * throughput on those specific messages, not as a uniform smear over all
- * messages within a ping interval.
- */
-function computePerMessageThroughput(
+function computePeerToGwThroughput(
   traces: ProtocolTraceRecord[],
-  pingSource: "operator" | "node",
-  pingDirection: "forward" | "reverse",
   matchSource: TraceEntity,
-  matchTarget: TraceEntity,
+  fallbackPingMs: number | null,
 ): ThroughputSample[] {
-  const isPeerToGw = matchTarget === "gateway";
-  const peer: "operator" | "node" =
-    matchSource === "operator" || matchTarget === "operator" ? "operator" : "node";
-  const rxBuf = peer === "operator" ? rxSamplesOperator : rxSamplesNode;
-  const fallbackPingMs = getLatestPingOneWayMs(pingSource, pingDirection);
   const samples: ThroughputSample[] = [];
   for (const t of traces) {
-    if (t.source !== matchSource || t.target !== matchTarget) {
+    if (t.source !== matchSource || t.target !== "gateway") {
       continue;
     }
     if (isOperatorPairTrace(t) && !isShownInOperatorPair(t)) {
@@ -1153,12 +1089,7 @@ function computePerMessageThroughput(
     if (bytes <= 0) {
       continue;
     }
-    let oneWayMs: number | null;
-    if (isPeerToGw) {
-      oneWayMs = typeof t.oneWayLatencyMs === "number" ? t.oneWayLatencyMs : null;
-    } else {
-      oneWayMs = findRxLatencyForTrace(rxBuf, t);
-    }
+    let oneWayMs: number | null = typeof t.oneWayLatencyMs === "number" ? t.oneWayLatencyMs : null;
     if (oneWayMs === null || oneWayMs <= 0) {
       oneWayMs = fallbackPingMs;
     }
@@ -1166,6 +1097,37 @@ function computePerMessageThroughput(
       continue;
     }
     samples.push({ ts: t.ts, bytesPerSec: (bytes / oneWayMs) * 1000, rawBytes: bytes });
+  }
+  return samples;
+}
+
+/**
+ * Per-message throughput, gw→peer direction (gw→op, gw→node). Read directly
+ * from rx-samples — the peer captured each frame's `payloadSize` and
+ * `latencyMs` at recv time (`recvTs + clockOffsetMs − frame.sentAt`) and
+ * batch-reported them via `protocol-traces.rx-report`. No trace join needed.
+ *
+ * Operator-pair filtering happens at ingest (`handleProtocolRxSamplesEvent`
+ * drops batches from non-Control-UI operator clients), so iterating the
+ * buffer here doesn't need a per-sample filter. Pre-upgrade peers that
+ * didn't stamp `payloadSize` get skipped — there's no fallback because
+ * fallback would require a trace lookup, which is what we're trying to
+ * avoid.
+ */
+function computeGwToPeerThroughput(rxSamples: RxLatencySampleEntry[]): ThroughputSample[] {
+  const samples: ThroughputSample[] = [];
+  for (const s of rxSamples) {
+    if (s.payloadSize === undefined || s.payloadSize <= 0) {
+      continue;
+    }
+    if (s.latencyMs <= 0) {
+      continue;
+    }
+    samples.push({
+      ts: s.ts,
+      bytesPerSec: (s.payloadSize / s.latencyMs) * 1000,
+      rawBytes: s.payloadSize,
+    });
   }
   return samples;
 }
@@ -1347,7 +1309,19 @@ const genProcessed = new Set<string>();
 // Reverse-direction (gateway → peer) rx-latency samples, fed by
 // `handleProtocolRxSamplesEvent`. Per-source so we can chart the operator and
 // node legs separately. Capped to bound memory under long uptime.
-type RxLatencySampleEntry = { ts: number; latencyMs: number; method?: string; event?: string };
+type RxLatencySampleEntry = {
+  ts: number;
+  latencyMs: number;
+  method?: string;
+  event?: string;
+  /**
+   * Serialized payload size of the received frame, computed by the receiver
+   * at recv time. Lets the UI compute per-message gw→peer throughput as
+   * `payloadSize / latencyMs * 1000` directly from the rx-sample, with no
+   * trace lookup. Undefined for pre-upgrade peers.
+   */
+  payloadSize?: number;
+};
 const rxSamplesOperator: RxLatencySampleEntry[] = [];
 const rxSamplesNode: RxLatencySampleEntry[] = [];
 const RX_SAMPLE_CAP = 1000;
@@ -1971,12 +1945,23 @@ export function handleProtocolRxSamplesEvent(host: ProtocolMonitorHost, payload:
   }
   const data = payload as {
     source?: unknown;
+    client?: unknown;
     samples?: unknown;
   };
   if (data.source !== "operator" && data.source !== "node") {
     return;
   }
   if (!Array.isArray(data.samples)) {
+    return;
+  }
+  // Operator-pair monitor is scoped to actual Control UI traffic. Drop
+  // batches reported by other operator-role connections (agent CLI, TUI,
+  // etc.). Pre-upgrade gateways don't stamp `client` — let those through.
+  if (
+    data.source === "operator" &&
+    typeof data.client === "string" &&
+    data.client !== GATEWAY_CLIENT_IDS.CONTROL_UI
+  ) {
     return;
   }
   const target = data.source === "operator" ? rxSamplesOperator : rxSamplesNode;
@@ -1989,6 +1974,7 @@ export function handleProtocolRxSamplesEvent(host: ProtocolMonitorHost, payload:
       latencyMs?: unknown;
       method?: unknown;
       event?: unknown;
+      payloadSize?: unknown;
     };
     if (typeof s.ts !== "number" || typeof s.latencyMs !== "number") {
       continue;
@@ -1998,6 +1984,7 @@ export function handleProtocolRxSamplesEvent(host: ProtocolMonitorHost, payload:
       latencyMs: s.latencyMs,
       method: typeof s.method === "string" ? s.method : undefined,
       event: typeof s.event === "string" ? s.event : undefined,
+      payloadSize: typeof s.payloadSize === "number" ? s.payloadSize : undefined,
     });
   }
   if (target.length > RX_SAMPLE_CAP) {

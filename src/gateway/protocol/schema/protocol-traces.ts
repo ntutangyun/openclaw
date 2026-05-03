@@ -31,6 +31,14 @@ export const ProtocolTracesRxSampleSchema = Type.Object(
     kind: Type.Optional(Type.String()),
     method: Type.Optional(Type.String()),
     event: Type.Optional(Type.String()),
+    /**
+     * Serialized payload byte count for this frame, computed by the receiver
+     * (`JSON.stringify(frame.payload).length`) at recv time. Lets the UI
+     * compute per-message throughput as `payloadSize / latencyMs * 1000`
+     * without joining back to the corresponding trace record. Optional for
+     * back-compat with pre-upgrade peers that don't stamp it.
+     */
+    payloadSize: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -54,6 +62,13 @@ export const ProtocolRxSamplesEventSchema = Type.Object(
   {
     source: Type.String({ enum: ["operator", "node"] }),
     connId: Type.Optional(Type.String()),
+    /**
+     * Client id (`openclaw-control-ui`, `cli`, `openclaw-tui`, …) of the
+     * peer that produced this batch. Lets the UI scope the operator-pair
+     * monitor to actual Control UI traffic without resorting to per-trace
+     * joins. Optional for back-compat with pre-upgrade gateways.
+     */
+    client: Type.Optional(Type.String()),
     samples: Type.Array(ProtocolTracesRxSampleSchema),
   },
   { additionalProperties: false },

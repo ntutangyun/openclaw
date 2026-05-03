@@ -654,7 +654,7 @@ export class GatewayBrowserClient {
         }
         return;
       }
-      this.captureRxSample(frame.sentAt, "event", undefined, evt.event);
+      this.captureRxSample(frame.sentAt, "event", undefined, evt.event, evt.payload);
       if (evt.event === "ping.gw-to-peer") {
         this.handlePingGwToPeerEvent(evt.payload);
       }
@@ -682,7 +682,7 @@ export class GatewayBrowserClient {
       if (!pending) {
         return;
       }
-      this.captureRxSample(frame.sentAt, "res", pending.method, undefined);
+      this.captureRxSample(frame.sentAt, "res", pending.method, undefined, res.payload);
       this.pending.delete(res.id);
       if (res.ok) {
         pending.resolve(res.payload);
@@ -769,7 +769,13 @@ export class GatewayBrowserClient {
     return p;
   }
 
-  private captureRxSample(sentAt: unknown, kind: string, method?: string, event?: string) {
+  private captureRxSample(
+    sentAt: unknown,
+    kind: string,
+    method: string | undefined,
+    event: string | undefined,
+    payload: unknown,
+  ) {
     if (typeof sentAt !== "number") {
       return;
     }
@@ -779,7 +785,17 @@ export class GatewayBrowserClient {
     if (latencyMs < 0 || latencyMs >= 60_000) {
       return;
     }
-    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event });
+    let payloadSize: number | undefined;
+    if (payload !== undefined && payload !== null) {
+      try {
+        payloadSize = JSON.stringify(payload).length;
+      } catch {
+        payloadSize = undefined;
+      }
+    } else {
+      payloadSize = 0;
+    }
+    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event, payloadSize });
     if (this.rxSamples.length > RX_REPORT_BUFFER_CAP) {
       this.rxSamples.splice(0, this.rxSamples.length - RX_REPORT_BUFFER_CAP);
     }

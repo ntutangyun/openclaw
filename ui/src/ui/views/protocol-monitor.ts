@@ -1300,30 +1300,34 @@ function buildNetworkExplainerContent(
           {
             title: "oneWayMs 是怎么测的",
             body: html`<p>
-                两个方向各自有不同的 per-message latency 来源,都依赖
-                <code>time.sync</code> 4-timestamp NTP 校正过的时钟偏移:
+                两个方向各自直接测,都用同一套
+                <code>time.sync</code> 4-timestamp NTP 时钟偏移把 peer 时钟投影到 gateway 时钟,
+                所以两端报出来的时间戳是可比的:
               </p>
               <ul>
                 <li>
                   <strong>peer → gateway</strong>(op→gw / node→gw):peer 在每个 WS 帧上 stamp
-                  <code>sentAt</code>(已加 clockOffset 转换到 gateway 时钟), gateway 收到帧时记
-                  <code>recvTs = Date.now()</code>,
-                  <code>oneWayLatencyMs = recvTs − sentAt</code> 直接写在 trace record 上。
-                  Per-message,精确到这一帧。
+                  <code>sentAt</code>(本地 wall-clock + clockOffset → gateway 时钟), gateway
+                  收到帧时记 <code>recvTs = Date.now()</code>,
+                  <code>oneWayLatencyMs = recvTs − sentAt</code> 直接写在 trace record 上, UI
+                  拿来用。
                 </li>
                 <li>
-                  <strong>gateway → peer</strong>(gw→op / gw→node):gateway 端拿不到 peer 的 recv
-                  时间,所以由 peer 在收到每帧后调用 <code>captureRxSample</code>
-                  记录(同样把本地 recvTs 加 offset 投影到 gateway 时钟),每
-                  <code>${5}s</code> 通过 <code>protocol-traces.rx-report</code> 批量回传给
-                  gateway,再由 gateway 广播 <code>protocol.rx.samples</code> 到所有 UI。UI 端按
-                  <code>(s.ts − s.latencyMs) ≈ trace.ts</code> + <code>kind/method/event</code> 把
-                  rx-sample 精确 join 到 trace 上(误差 ≤ 200ms)。
+                  <strong>gateway → peer</strong>(gw→op / gw→node):peer 收到每一帧时 自己算
+                  <code>latencyMs = (recvTs + clockOffset) − frame.sentAt</code> 和
+                  <code>payloadSize = JSON.stringify(payload).length</code>,把这两个数字 连同
+                  ts/kind/method/event 一起塞进 rx-sample 里。 每 <code>5s</code> 通过
+                  <code>protocol-traces.rx-report</code> 批量回传给 gateway,gateway 广播
+                  <code>protocol.rx.samples</code> 到所有 UI。UI 拿到 rx-sample 之后直接
+                  <code>bytesPerSec = payloadSize / latencyMs × 1000</code> —— <em>不需要</em>
+                  和 trace join,也不需要 ts 匹配,因为 payload 大小已经在 rx-sample 里了。
                 </li>
               </ul>
               <p>
-                只有 join 失败 / 还没收到第一份 rx-report 时,才回退到 "最近一次 ping latency"
-                作为兜底。所以图表里几乎所有 sample 都是真实 per-message,而不是 ping 估算。
+                兜底:peer→gw 方向上若某条 trace 的 <code>oneWayLatencyMs</code> 缺失 (旧版 peer 没
+                stamp <code>sentAt</code>),回退到最近一次 ping latency。 gw→peer 方向上若 rx-sample
+                缺 <code>payloadSize</code>(旧版 peer),那条 sample 就跳过 —— 一旦 peer 升级,所有
+                sample 都是真实 per-message。
               </p>`,
           },
           {
