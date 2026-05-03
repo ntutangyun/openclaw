@@ -2815,7 +2815,7 @@ function renderMessagesBarChartSvg(
   timeWindow?: TimeWindow,
 ): TemplateResult {
   if (data.bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:130px;line-height:130px;">
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
       Waiting for first message...
     </div>`;
   }
@@ -3452,7 +3452,7 @@ function renderSingleLineThroughputChart(
   const H = 260;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  const PIXEL_HEIGHT = 130;
+  const PIXEL_HEIGHT = 260;
 
   if (samples.length < 2) {
     return html`
@@ -3661,7 +3661,7 @@ function renderLatencyChartSvg(
 ): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:130px;line-height:130px;">
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
       Waiting for data...
     </div>`;
   }
@@ -5071,6 +5071,11 @@ const STYLES = /* css */ `
     border-radius: 6px;
     padding: 8px 10px;
     background: #ffffff;
+    /* Cap at 3/4 of the parent (direction content) so on ultra-wide
+       monitors the chart doesn't span the entire panel; aspect-ratio
+       on the inner svg makes the height shrink proportionally. Cards
+       and legend siblings are unaffected, they keep their full width. */
+    max-width: 75%;
   }
   .pm-chart-header {
     display: flex;
@@ -5100,7 +5105,7 @@ const STYLES = /* css */ `
   }
   .pm-chart-svg--tall {
     height: auto;
-    aspect-ratio: 460 / 130;
+    aspect-ratio: 460 / 260;
   }
   .pm-chart-empty {
     height: 120px;
