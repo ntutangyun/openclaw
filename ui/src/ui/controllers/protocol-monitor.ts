@@ -282,6 +282,57 @@ export type ResponseStats = {
   avgPayloadSize: number;
 };
 
+/**
+ * Per-LLM-call rollup. One entry per `runId` lifecycle (agent→model request +
+ * the entire llm→agent SSE stream that follows). Used by the agent|model
+ * monitor's "LLM Calls" section so the bar chart shows one bar per call —
+ * far more readable than one bar per SSE delta and immune to MAX_VISIBLE
+ * trace eviction.
+ */
+export type LlmCall = {
+  runId: string;
+  /** Lifecycle-resolved model name (`activeModel` / `selectedModel` / `model`). */
+  model: string | null;
+  /** Lifecycle start ts — when the request body left the agent. */
+  requestTs: number;
+  /** Serialized request body size (lifecycle event's `data.requestSize`). */
+  requestBytes: number;
+  /** First assistant SSE event ts; null until first chunk arrives. */
+  firstAssistantTs: number | null;
+  /** Most recent assistant SSE event ts; tracks last activity for the call. */
+  lastAssistantTs: number | null;
+  /** SSE event count for this call (one per parsed JSONL record). */
+  responseEventCount: number;
+  /** Sum of all SSE event payload sizes for this call. */
+  responseBytes: number;
+};
+
+/**
+ * Per-model card aggregates for the agent|model monitor's "LLM Calls"
+ * section. Mirrors `MessageTypeCard` for wire-pair Messages.
+ */
+export type LlmCallCard = {
+  /** Resolved model name, or `(unknown)` for calls whose lifecycle never
+   * carried a model identifier. */
+  model: string;
+  count: number;
+  minBytes: number;
+  maxBytes: number;
+  totalBytes: number;
+};
+
+/** Single LLM call data point for the per-direction bar chart. */
+export type LlmCallBar = {
+  ts: number;
+  size: number;
+  model: string;
+};
+
+export type LlmCallSection = {
+  cards: LlmCallCard[];
+  bars: LlmCallBar[];
+};
+
 export type NetworkStats = {
   totalBytesIn: number;
   totalBytesOut: number;
@@ -335,6 +386,19 @@ export type NetworkStats = {
   requestStats: RequestStats;
   /** Model → Agent SSE response rollup. */
   responseStats: ResponseStats;
+  /**
+   * Per-LLM-call breakdown for the agent|model monitor "LLM Calls" section.
+   * `request` view sizes bars by request bytes (agent→model tab),
+   * `response` view sizes bars by total response bytes (model→agent tab).
+   * Decoupled from the trace ring buffer — survives SSE eviction.
+   */
+  agentLlmCalls: { request: LlmCallSection; response: LlmCallSection };
+  /**
+   * Per-LLM-call throughput series. agent→model = `requestBytes / TTFT *
+   * 1000` (one sample per call). model→agent = `responseBytes /
+   * generationDuration * 1000` (one sample per call).
+   */
+  agentLlmCallThroughput: { request: ThroughputSample[]; response: ThroughputSample[] };
 };
 
 // ---------------------------------------------------------------------------
@@ -1027,6 +1091,14 @@ export function computeNetworkStats(
     },
     requestStats: buildRequestStats(),
     responseStats: buildResponseStats(),
+    agentLlmCalls: {
+      request: buildLlmCallSection("request"),
+      response: buildLlmCallSection("response"),
+    },
+    agentLlmCallThroughput: {
+      request: buildLlmCallThroughput("request"),
+      response: buildLlmCallThroughput("response"),
+    },
   };
 }
 
@@ -1405,6 +1477,231 @@ function recordMessageFromTrace(t: ProtocolTraceRecord): void {
     // both sides of the reset overlap with a re-load, which is rare.
     recordedMessageIds.clear();
   }
+}
+
+// ---------------------------------------------------------------------------
+// LLM call store — agent|model "Messages" section
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-runId LlmCall accumulator. Populated at trace ingest time so the
+ * agent|model monitor's bar chart and per-model cards survive SSE eviction
+ * from the shared trace ring buffer (the very buffer that gets dominated by
+ * assistant deltas in the first place). Capped LRU-style by oldest-requestTs.
+ */
+const llmCallStore = new Map<string, LlmCall>();
+const LLM_CALL_STORE_CAP = 500;
+/** Trace ids already folded into a call entry (dedupe across re-loads). */
+const recordedLlmCallTraceIds = new Set<string>();
+const RECORDED_LLM_CALL_IDS_CAP = 4000;
+const UNKNOWN_MODEL_LABEL = "(unknown)";
+
+function pickLlmCallModel(t: ProtocolTraceRecord): string | null {
+  if (t.kind !== "event" || t.stream !== "lifecycle") {
+    return null;
+  }
+  const p = t.payload as Record<string, unknown> | undefined;
+  const data = p?.data && typeof p.data === "object" ? (p.data as Record<string, unknown>) : p;
+  if (!data) {
+    return null;
+  }
+  const candidate = data.model ?? data.activeModel ?? data.selectedModel;
+  if (typeof candidate === "string" && candidate.trim()) {
+    return candidate.trim();
+  }
+  return null;
+}
+
+function trimLlmCallStoreIfNeeded() {
+  if (llmCallStore.size <= LLM_CALL_STORE_CAP) {
+    return;
+  }
+  // Drop the oldest by requestTs. Map iteration is insertion order, but
+  // that order isn't necessarily requestTs order, so sort.
+  const entries = Array.from(llmCallStore.values()).toSorted((a, b) => a.requestTs - b.requestTs);
+  const toDrop = entries.length - LLM_CALL_STORE_CAP;
+  for (let i = 0; i < toDrop; i++) {
+    const entry = entries[i];
+    if (entry) {
+      llmCallStore.delete(entry.runId);
+    }
+  }
+}
+
+/**
+ * Fold a single trace into the LlmCall store. Called once per trace at
+ * ingest time (dedupe via recordedLlmCallTraceIds). Handles three roles:
+ *
+ *   - agent→llm lifecycle start/request → seed call entry, capture model +
+ *     request bytes.
+ *   - llm→agent assistant stream event → grow firstAssistantTs / lastAssistantTs,
+ *     bump count, accumulate response bytes.
+ *   - llm→agent lifecycle end → finalize lastAssistantTs (rare: signals end
+ *     of stream when no further assistant deltas arrive).
+ *
+ * Skips traces missing a `runId` (can't key the call) or for runs we've
+ * never seen a lifecycle start for (incomplete data).
+ */
+function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
+  if (!t.id || recordedLlmCallTraceIds.has(t.id) || !t.runId) {
+    return;
+  }
+  const isAgentToLlm = t.source === "agent" && t.target === "llm";
+  const isLlmToAgent = t.source === "llm" && t.target === "agent";
+  if (!isAgentToLlm && !isLlmToAgent) {
+    return;
+  }
+
+  if (isAgentToLlm && t.kind === "event" && t.stream === "lifecycle") {
+    const phase = resolvePhase(t.payload);
+    if (phase !== "start" && phase !== "request") {
+      return;
+    }
+    const existing = llmCallStore.get(t.runId);
+    if (existing) {
+      // Multiple start/request events for the same runId — keep the first
+      // (it's the actual call boundary). Later starts likely indicate
+      // reused runIds across calls, which we treat as one logical call.
+      recordedLlmCallTraceIds.add(t.id);
+      return;
+    }
+    llmCallStore.set(t.runId, {
+      runId: t.runId,
+      model: pickLlmCallModel(t),
+      requestTs: t.ts,
+      requestBytes: t.payloadSize ?? 0,
+      firstAssistantTs: null,
+      lastAssistantTs: null,
+      responseEventCount: 0,
+      responseBytes: 0,
+    });
+    recordedLlmCallTraceIds.add(t.id);
+    trimLlmCallStoreIfNeeded();
+    return;
+  }
+
+  if (isLlmToAgent) {
+    const call = llmCallStore.get(t.runId);
+    if (!call) {
+      return;
+    }
+    if (t.kind === "event" && t.stream === "assistant") {
+      if (call.firstAssistantTs === null) {
+        call.firstAssistantTs = t.ts;
+      }
+      call.lastAssistantTs = t.ts;
+      call.responseEventCount += 1;
+      call.responseBytes += t.payloadSize ?? 0;
+      // Backfill model from a later lifecycle event if we missed it earlier.
+      if (!call.model) {
+        const m = pickLlmCallModel(t);
+        if (m) {
+          call.model = m;
+        }
+      }
+      recordedLlmCallTraceIds.add(t.id);
+      return;
+    }
+    if (t.kind === "event" && t.stream === "lifecycle") {
+      const phase = resolvePhase(t.payload);
+      if (phase === "end") {
+        call.lastAssistantTs = Math.max(call.lastAssistantTs ?? 0, t.ts);
+      }
+      if (!call.model) {
+        const m = pickLlmCallModel(t);
+        if (m) {
+          call.model = m;
+        }
+      }
+      recordedLlmCallTraceIds.add(t.id);
+      return;
+    }
+  }
+
+  if (recordedLlmCallTraceIds.size > RECORDED_LLM_CALL_IDS_CAP) {
+    recordedLlmCallTraceIds.clear();
+  }
+}
+
+function buildLlmCallSection(view: "request" | "response"): LlmCallSection {
+  const cardMap = new Map<string, LlmCallCard>();
+  const bars: LlmCallBar[] = [];
+  for (const call of llmCallStore.values()) {
+    const model = call.model ?? UNKNOWN_MODEL_LABEL;
+    const size = view === "request" ? call.requestBytes : call.responseBytes;
+    if (size <= 0) {
+      // For "response" view, calls that haven't streamed any tokens yet
+      // get skipped — no bar makes sense. They'll appear once SSE starts.
+      continue;
+    }
+    bars.push({ ts: call.requestTs, size, model });
+    const existing = cardMap.get(model);
+    if (existing) {
+      existing.count += 1;
+      existing.totalBytes += size;
+      if (size < existing.minBytes) {
+        existing.minBytes = size;
+      }
+      if (size > existing.maxBytes) {
+        existing.maxBytes = size;
+      }
+    } else {
+      cardMap.set(model, {
+        model,
+        count: 1,
+        minBytes: size,
+        maxBytes: size,
+        totalBytes: size,
+      });
+    }
+  }
+  return {
+    cards: Array.from(cardMap.values()).toSorted((a, b) => b.count - a.count),
+    bars: bars.toSorted((a, b) => a.ts - b.ts),
+  };
+}
+
+/**
+ * Per-call throughput: requestBytes / TTFT for agent→model, responseBytes /
+ * generationDuration for model→agent. Skips calls with missing latency
+ * data (e.g. SSE never arrived) or zero payload.
+ */
+function buildLlmCallThroughput(view: "request" | "response"): ThroughputSample[] {
+  const samples: ThroughputSample[] = [];
+  for (const call of llmCallStore.values()) {
+    if (view === "request") {
+      if (call.firstAssistantTs === null || call.requestBytes <= 0) {
+        continue;
+      }
+      const ttftMs = call.firstAssistantTs - call.requestTs;
+      if (ttftMs <= 0) {
+        continue;
+      }
+      samples.push({
+        ts: call.requestTs,
+        bytesPerSec: (call.requestBytes / ttftMs) * 1000,
+        rawBytes: call.requestBytes,
+      });
+    } else {
+      if (
+        call.firstAssistantTs === null ||
+        call.lastAssistantTs === null ||
+        call.responseBytes <= 0
+      ) {
+        continue;
+      }
+      const genMs = call.lastAssistantTs - call.firstAssistantTs;
+      if (genMs <= 0) {
+        continue;
+      }
+      samples.push({
+        ts: call.firstAssistantTs,
+        bytesPerSec: (call.responseBytes / genMs) * 1000,
+        rawBytes: call.responseBytes,
+      });
+    }
+  }
+  return samples.toSorted((a, b) => a.ts - b.ts);
 }
 
 /** Max cached samples / processed-id set size. */
@@ -1853,11 +2150,13 @@ export async function loadProtocolTraces(host: ProtocolMonitorHost) {
     const incoming = res.traces ?? [];
     const filtered = incoming.filter((t) => !isIngestBlocklisted(t));
     host.protocolTraces = filtered;
-    // Seed the per-direction Messages store from the bulk batch. The live
-    // event handler will continue to add new traces — recordedMessageIds
-    // dedupes by trace id so a reconnect-driven re-load doesn't double-count.
+    // Seed the per-direction Messages store and the agent|model LlmCall
+    // store from the bulk batch. The live event handler will continue to
+    // add new traces — both stores dedupe by trace id so a reconnect-driven
+    // re-load doesn't double-count.
     for (const t of filtered) {
       recordMessageFromTrace(t);
+      recordLlmCallFromTrace(t);
     }
   } catch {
     // ignore
@@ -1883,6 +2182,7 @@ export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unk
   const next = [...host.protocolTraces, record];
   host.protocolTraces = next.length > MAX_VISIBLE ? next.slice(next.length - MAX_VISIBLE) : next;
   recordMessageFromTrace(record);
+  recordLlmCallFromTrace(record);
 }
 
 /**
@@ -2010,6 +2310,8 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
     messageStore.nodeGw.forward.length = 0;
     messageStore.nodeGw.reverse.length = 0;
     recordedMessageIds.clear();
+    llmCallStore.clear();
+    recordedLlmCallTraceIds.clear();
     host.protocolSelectedTrace = null;
     clearLatencyCaches();
   } catch {

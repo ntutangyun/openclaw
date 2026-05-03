@@ -6,6 +6,8 @@ import type {
   CoalescedGroup,
   CoalescedEntry,
   MessageTypeStats,
+  LlmCallBar,
+  LlmCallSection,
   MessageBar,
   MessagesDirection,
   NetworkStats,
@@ -14,8 +16,6 @@ import type {
   LatencySample,
   ChatMessage,
   ToolCallMessage,
-  RequestStats,
-  ResponseStats,
 } from "../controllers/protocol-monitor.ts";
 import {
   coalesceTraces,
@@ -1520,16 +1520,9 @@ function buildNetworkExplainerContent(
     };
   }
 
-  // Requests (Agent → Model) explainers
-  if (key.startsWith("requests-")) {
-    const req = net.requestStats;
-    return buildRequestExplainer(key, req);
-  }
-
-  // Responses (Model → Agent) explainers
-  if (key.startsWith("responses-")) {
-    const res = net.responseStats;
-    return buildResponseExplainer(key, res);
+  // LLM Calls (per-model card click on agent|model tabs).
+  if (key.startsWith("llm-calls-")) {
+    return buildLlmCallsExplainer(key, net, props.networkDirection);
   }
 
   // Latency keys
@@ -2629,10 +2622,13 @@ function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): Thr
       return net.gatewayNode.forward;
     case "node-to-gw":
       return net.gatewayNode.reverse;
+    // Agent ↔ Model uses per-LLM-call throughput rather than bucket-aggregated
+    // bytes/sec so each bar represents one full call rather than smearing
+    // across SSE deltas. Matches the wire-pair design: per-message everything.
     case "agent-to-model":
-      return net.agentLlm.forward;
+      return net.agentLlmCallThroughput.request;
     case "model-to-agent":
-      return net.agentLlm.reverse;
+      return net.agentLlmCallThroughput.response;
     default:
       return [];
   }
@@ -2775,6 +2771,9 @@ function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
   pushSeries(net.operatorGatewayMessages.reverse.bars);
   pushSeries(net.gatewayNodeMessages.forward.bars);
   pushSeries(net.gatewayNodeMessages.reverse.bars);
+  // LLM call bars (only the 2 agent-llm directions have these).
+  pushSeries(net.agentLlmCalls.request.bars);
+  pushSeries(net.agentLlmCalls.response.bars);
   if (tsValues.length === 0) {
     return undefined;
   }
@@ -3037,6 +3036,253 @@ function renderMessagesSection(
   `;
 }
 
+/**
+ * Pick the LlmCallSection that drives the agent|model monitor for the given
+ * direction tab. Returns null for non-agent-llm directions.
+ */
+function selectDirectionLlmCalls(net: NetworkStats, id: NetworkDirection): LlmCallSection | null {
+  switch (id) {
+    case "agent-to-model":
+      return net.agentLlmCalls.request;
+    case "model-to-agent":
+      return net.agentLlmCalls.response;
+    default:
+      return null;
+  }
+}
+
+function renderLlmCallBarChartSvg(
+  bars: LlmCallBar[],
+  colorMap: Map<string, string>,
+  timeWindow?: TimeWindow,
+): TemplateResult {
+  if (bars.length === 0) {
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+      Waiting for first LLM call...
+    </div>`;
+  }
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 260;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const localMin = bars[0]?.ts ?? 0;
+  const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
+  const minTs = timeWindow?.minTs ?? localMin;
+  const maxTs = timeWindow?.maxTs ?? localMax;
+  const tsRange = Math.max(1, maxTs - minTs);
+  const maxSize = Math.max(...bars.map((b) => b.size), 1);
+  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
+  const toY = (s: number) => PAD_T + plotH - (s / maxSize) * plotH;
+  const yGridCount = 4;
+  const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxSize / yGridCount) * (i + 1);
+    return { y: toY(val), label: formatBytes(val) };
+  });
+  const xTickCount = 5;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
+    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
+    return { x: toX(ts), label: chartTimeLabel(ts) };
+  });
+  // LLM calls are sparser than wire-pair messages — widen each bar to 6px so
+  // a single call is visually obvious even with one or two on the chart.
+  const barWidth = 6;
+  const chartId = `llmbars-${(bars[0]?.ts ?? 0).toString(36)}`;
+  return html`
+    <div class="pm-chart-block">
+      <div
+        class="pm-chart-wrap"
+        @mousemove=${(e: MouseEvent) =>
+          handleLlmCallBarHover(
+            e,
+            bars,
+            colorMap,
+            minTs,
+            tsRange,
+            maxSize,
+            PAD_L,
+            plotW,
+            plotH,
+            PAD_T,
+            H,
+            W,
+          )}
+        @mouseleave=${handleChartLeave}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${yGridLines.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+            `,
+          )}
+          ${bars.map((b) => {
+            const x = toX(b.ts) - barWidth / 2;
+            const y = toY(b.size);
+            const h = PAD_T + plotH - y;
+            const fill = colorMap.get(b.model) ?? "#64748b";
+            return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
+              fill="${fill}" opacity="0.85" />`;
+          })}
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
+    </div>
+  `;
+}
+
+function handleLlmCallBarHover(
+  e: MouseEvent,
+  bars: LlmCallBar[],
+  colorMap: Map<string, string>,
+  minTs: number,
+  tsRange: number,
+  maxSize: number,
+  padL: number,
+  plotW: number,
+  plotH: number,
+  padT: number,
+  chartH: number,
+  chartW: number,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  if (xRatio < 0 || xRatio > 1) {
+    handleChartLeave(e);
+    return;
+  }
+  const hoverTs = minTs + xRatio * tsRange;
+
+  let nearest = bars[0];
+  let nearestDist = Infinity;
+  for (const b of bars) {
+    const d = Math.abs(b.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = b;
+    }
+  }
+
+  const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
+  const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
+  if (!tip || !cross || !nearest) {
+    return;
+  }
+
+  const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
+  const padLPct = (padL / chartW) * 100;
+  const plotWPct = (plotW / chartW) * 100;
+  const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
+
+  cross.style.display = "block";
+  cross.style.left = `${crossLeftPct}%`;
+
+  tip.style.display = "block";
+  const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    fractionalSecondDigits: 1,
+  });
+  const swatch = colorMap.get(nearest.model) ?? "#64748b";
+  tip.innerHTML =
+    `<b>${formatBytes(nearest.size)}</b><br/>` +
+    `<span style="display:inline-block;width:8px;height:8px;background:${swatch};border-radius:2px;margin-right:4px;vertical-align:middle;"></span>` +
+    `${nearest.model}<br/>` +
+    `<span style="color:#9ca3af;">${time}</span>`;
+
+  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
+  tip.style.left = `${tipLeft}%`;
+  const nearestYPct = padT + plotH - (nearest.size / maxSize) * plotH;
+  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
+}
+
+function renderLlmCallsSection(
+  net: NetworkStats,
+  direction: NetworkDirection,
+  color: string,
+  openExp: (key: string) => () => void,
+  timeWindow?: TimeWindow,
+): TemplateResult | typeof nothing {
+  const data = selectDirectionLlmCalls(net, direction);
+  if (!data) {
+    return nothing;
+  }
+  const totalCount = data.cards.reduce((a, c) => a + c.count, 0);
+  const sectionTitle =
+    direction === "agent-to-model" ? "LLM Calls (request)" : "LLM Calls (response)";
+  if (data.cards.length === 0) {
+    return html`
+      <div class="pm-net-section-title" style="margin-top:14px;">
+        ${sectionTitle} · ${totalCount} total
+      </div>
+      <div class="pm-chart-empty" style="height:80px;line-height:80px;">
+        Waiting for first LLM call to complete...
+      </div>
+    `;
+  }
+  // Stable color per model so bars and legend (and cards' left border) align.
+  const colorMap = buildMessageTypeColorMap(data.cards.map((c) => c.model));
+  return html`
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      ${sectionTitle} · ${totalCount} total
+    </div>
+    <div class="pm-message-cards">
+      ${data.cards.map(
+        (c) => html`
+          <button
+            class="pm-message-card"
+            style="border-left-color:${colorMap.get(c.model) ?? color};"
+            @click=${openExp(`llm-calls-${c.model}`)}
+          >
+            <div class="pm-message-card-type" title=${c.model}>${c.model}</div>
+            <div class="pm-message-card-count">${c.count}</div>
+            <div class="pm-message-card-sub">
+              ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+            </div>
+          </button>
+        `,
+      )}
+    </div>
+    ${renderLlmCallBarChartSvg(data.bars, colorMap, timeWindow)}
+    <div class="pm-message-legend">
+      ${data.cards.map(
+        (c) => html`
+          <span class="pm-message-legend-item">
+            <span
+              class="pm-message-legend-swatch"
+              style="background:${colorMap.get(c.model) ?? color};"
+            ></span>
+            <span class="pm-message-legend-label">${c.model}</span>
+          </span>
+        `,
+      )}
+    </div>
+  `;
+}
+
 function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
@@ -3051,11 +3297,6 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
 
   const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
 
-  const requestsBlock =
-    props.networkDirection === "agent-to-model" ? renderRequestsSection(net, openExp) : nothing;
-  const responsesBlock =
-    props.networkDirection === "model-to-agent" ? renderResponsesSection(net, openExp) : nothing;
-
   // Shared x-axis across ALL direction tabs (op-gw, gw-op, node-gw, gw-node,
   // agent-llm, llm-agent). Computed once per net snapshot from every chart's
   // samples — switching tabs preserves the same time window so events line
@@ -3069,7 +3310,6 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
       <strong>${meta.longLabel}</strong>
     </div>
 
-    ${requestsBlock} ${responsesBlock}
     ${latency
       ? html`
           <div class="pm-net-section-title">Latency · ${latency.label}</div>
@@ -3115,6 +3355,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
           </div>
         `}
     ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
+    ${renderLlmCallsSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
 
     <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
     <div class="pm-net-stat-grid">
@@ -3148,267 +3389,70 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   `;
 }
 
-function buildRequestExplainer(key: string, req: RequestStats): ExplainerContent | null {
-  switch (key) {
-    case "requests-total":
-      return {
-        title: "Agent → Model · Total Requests",
-        stats: [{ label: "Total", value: String(req.total) }],
-        intro: html`自 session 开始以来 Agent 向 Model 发出的 <em>request</em> 次数 —— 即 agent
-          每一次"把 prompt 交给 LLM 推理"。每个 request 对应一次 lifecycle
-          <code>start/request</code> 事件。`,
-        sections: [
-          {
-            title: "数据来源",
-            body: html`<p>
-              Protocol Monitor 在 controller 侧维护了一个持久累加器,每条
-              <code>stream=lifecycle</code> 且 <code>phase=start/request</code> 的事件会计数 +1, 与
-              ring buffer (<code>MAX_VISIBLE=1000</code>)的 eviction 解耦。即使任务很长,这里的 total
-              也不会随旧 trace 被挤出而回落。
-            </p>`,
-          },
-          {
-            title: "和 Throughput 的关系",
-            body: html`<p>
-              每次 request 的真实 payload 大小在事件的 <code>data.requestSize</code> 字段中,
-              会被写入 trace 的 <code>payloadSize</code>。所以
-              <strong>Total Requests × Avg Payload ≈ agent → model forward 方向的累计字节</strong
-              >(忽略少量非 lifecycle 事件)。
-            </p>`,
-          },
-        ],
-      };
-    case "requests-peak":
-      return {
-        title: "Agent → Model · Peak Payload",
-        stats: [{ label: "Peak", value: formatBytes(req.peakPayloadSize) }],
-        intro: html`所有 request 里最大那一次的 payload 大小。反映了 transcript + system prompt +
-        tool catalog 等加在一起的峰值。`,
-        sections: [
-          {
-            title: "常见的影响因素",
-            body: html`<ul>
-              <li>transcript 越长、tool result 越多,后续 request 的 input 越大。</li>
-              <li>tool catalog、system prompt 的大小也会累加。</li>
-              <li>若开启了 cache control,cache create 的那一条 request 通常是 peak。</li>
-            </ul>`,
-          },
-        ],
-      };
-    case "requests-avg":
-      return {
-        title: "Agent → Model · Average Payload",
-        stats: [
-          { label: "Avg", value: formatBytes(req.avgPayloadSize) },
-          { label: "Count", value: String(req.total) },
-        ],
-        intro: html`所有 request payload 大小的算术平均: <code>sum(requestSize) / total</code>。`,
-        sections: [
-          {
-            title: "解读",
-            body: html`<p>
-              avg 会被少数超大 request(长 transcript 的后几轮)拉高。要看"常态"的 request
-              规模,可以对比 <strong>Peak</strong> 与 <strong>Avg</strong>: peak ≫ avg
-              说明分布长尾明显;peak ≈ avg 说明 request 大小比较均匀。
-            </p>`,
-          },
-        ],
-      };
-    case "requests-latest":
-      return {
-        title: "Agent → Model · Latest Request",
-        stats: [
-          {
-            label: "When",
-            value: req.latestTs
-              ? new Date(req.latestTs).toLocaleTimeString("en-US", { hour12: false })
-              : "—",
-          },
-          { label: "Payload", value: formatBytes(req.latestPayloadSize) },
-        ],
-        intro: html`最近一次 Agent → Model request 的时间与 payload 大小。 用来快速判断 agent
-        是否还在调用 LLM。`,
-        sections: [
-          {
-            title: "和 sequence diagram 的对应",
-            body: html`<p>
-              Latest Request 的时间点应该与 Protocol 序列图上最后一条 agent → llm 箭头
-              吻合。如果长时间没有更新,说明 agent 处于 tool 执行或空闲阶段。
-            </p>`,
-          },
-        ],
-      };
-    default:
-      return null;
-  }
-}
-
-function buildResponseExplainer(key: string, res: ResponseStats): ExplainerContent | null {
-  switch (key) {
-    case "responses-total":
-      return {
-        title: "Model → Agent · Total SSE Events",
-        stats: [{ label: "Total", value: String(res.totalEvents) }],
-        intro: html`自 session 开始以来 Model → Agent 方向累计的 <em>assistant stream</em> 事件数 ——
-          对应 LLM provider 的 Server-Sent Events(每一帧是一个 delta token、 tool_use 增量、或 stop
-          标记)。`,
-        sections: [
-          {
-            title: "为什么单独看 SSE",
-            body: html`<p>
-              SSE 的事件频率能反映 provider 的流式吐字节奏 —— generation 稳定 vs.
-              有长时间间隔、是否被 rate-limit 节流都会先从这里看出来。
-            </p>`,
-          },
-          {
-            title: "数据来源",
-            body: html`<p>
-              controller 侧对每条 <code>source=llm, target=agent, stream=assistant</code>
-              的 trace 做持久累加,与 ring buffer eviction 解耦,所以在任务结束后看到的 total
-              反映的是整个 session 的真实帧数,不会因 trace buffer 被挤满而缩水。
-            </p>`,
-          },
-        ],
-      };
-    case "responses-rate":
-      return {
-        title: "Model → Agent · Avg Events / Sec",
-        stats: [
-          {
-            label: "Avg /s",
-            value: res.avgEventsPerSec === null ? "—" : res.avgEventsPerSec.toFixed(2),
-          },
-          { label: "Total", value: String(res.totalEvents) },
-        ],
-        intro: html`SSE 事件平均每秒多少帧。计算公式:
-          <code>total / ((lastTs - firstTs) / 1000)</code> —— 使用首末两帧时间差作为
-          时长。仅当观察到 ≥ 2 个 SSE 事件时才有值。`,
-        sections: [
-          {
-            title: "解读",
-            body: html`<p>
-              数字越大说明 provider 吐字越密。注意当 agent 有多次 LLM call 并且中间有 tool
-              执行空档时,这里的 "平均" 会把空档时间也算进去, 因此会比单次 generation burst 的瞬时
-              rate 低。
-            </p>`,
-          },
-        ],
-      };
-    case "responses-peak":
-      return {
-        title: "Model → Agent · Peak SSE Payload",
-        stats: [{ label: "Peak", value: formatBytes(res.peakPayloadSize) }],
-        intro: html`单个 SSE 事件的最大 payload 大小。通常 initial message_start / 完整 tool_use
-        block 这类 "聚合型" 事件会是 peak。`,
-        sections: [
-          {
-            title: "注意",
-            body: html`<p>
-              ring buffer 为了限制内存,会把 assistant stream 的 payload 截断到
-              <code>{ _slim: true, data: { text } }</code>;但 <code>payloadSize</code> 是在截断
-              <em>前</em> 估算的,所以 peak 反映的是 真实 wire 大小而不是截断后的尺寸。
-            </p>`,
-          },
-        ],
-      };
-    case "responses-avg":
-      return {
-        title: "Model → Agent · Avg SSE Payload",
-        stats: [
-          { label: "Avg", value: formatBytes(res.avgPayloadSize) },
-          { label: "Count", value: String(res.totalEvents) },
-        ],
-        intro: html`所有 SSE 事件 payload 大小的算术平均。`,
-        sections: [
-          {
-            title: "和 Throughput 的关系",
-            body: html`<p>
-              <strong>Avg SSE × Avg Events/Sec ≈ Model → Agent 的平均 bytes/s</strong>。 与
-              Throughput 卡片的 average 可以互相验证。
-            </p>`,
-          },
-        ],
-      };
-    default:
-      return null;
-  }
-}
-
-function renderRequestsSection(
+function buildLlmCallsExplainer(
+  key: string,
   net: NetworkStats,
-  openExp: (key: string) => () => void,
-): TemplateResult {
-  const s = net.requestStats;
-  const latest = s.latestTs
-    ? new Date(s.latestTs).toLocaleTimeString("en-US", { hour12: false })
-    : "—";
-  return html`
-    <div class="pm-net-section-title">Requests</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Total Requests",
-        String(s.total),
-        "since session start",
-        openExp("requests-total"),
-      )}
-      ${renderNetStatCard(
-        "Peak Payload",
-        formatBytes(s.peakPayloadSize),
-        "largest single request",
-        openExp("requests-peak"),
-      )}
-      ${renderNetStatCard(
-        "Avg Payload",
-        formatBytes(s.avgPayloadSize),
-        s.total > 0 ? `over ${s.total} requests` : "no requests yet",
-        openExp("requests-avg"),
-      )}
-      ${renderNetStatCard(
-        "Latest Request",
-        latest,
-        s.latestTs ? `payload ${formatBytes(s.latestPayloadSize)}` : "—",
-        openExp("requests-latest"),
-      )}
-    </div>
-  `;
-}
-
-function renderResponsesSection(
-  net: NetworkStats,
-  openExp: (key: string) => () => void,
-): TemplateResult {
-  const s = net.responseStats;
-  const eps = s.avgEventsPerSec;
-  const epsLabel = eps === null ? "—" : `${eps.toFixed(2)} /s`;
-  return html`
-    <div class="pm-net-section-title">Responses</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Total SSE Events",
-        String(s.totalEvents),
-        "assistant stream frames",
-        openExp("responses-total"),
-      )}
-      ${renderNetStatCard(
-        "Avg Events / Sec",
-        epsLabel,
-        eps === null ? "need ≥ 2 events" : "across stream span",
-        openExp("responses-rate"),
-      )}
-      ${renderNetStatCard(
-        "Peak Payload",
-        formatBytes(s.peakPayloadSize),
-        "largest single SSE frame",
-        openExp("responses-peak"),
-      )}
-      ${renderNetStatCard(
-        "Avg Payload",
-        formatBytes(s.avgPayloadSize),
-        s.totalEvents > 0 ? `over ${s.totalEvents} frames` : "no frames yet",
-        openExp("responses-avg"),
-      )}
-    </div>
-  `;
+  direction: NetworkDirection,
+): ExplainerContent | null {
+  const data = selectDirectionLlmCalls(net, direction);
+  if (!data) {
+    return null;
+  }
+  const model = key.slice("llm-calls-".length);
+  const card = data.cards.find((c) => c.model === model);
+  if (!card) {
+    return null;
+  }
+  const totalBars = data.bars.filter((b) => b.model === model).length;
+  const view = direction === "agent-to-model" ? "request" : "response";
+  const sizeLabel = view === "request" ? "request body" : "response stream";
+  return {
+    title: `${direction === "agent-to-model" ? "Agent → Model" : "Model → Agent"} · ${model}`,
+    stats: [
+      { label: "Calls", value: String(card.count) },
+      { label: "Min", value: formatBytes(card.minBytes) },
+      { label: "Max", value: formatBytes(card.maxBytes) },
+      { label: "Total", value: formatBytes(card.totalBytes) },
+    ],
+    intro: html`这条卡片显示模型 <code>${model}</code> 在当前 session 中累计的
+      <strong>${card.count}</strong> 次 LLM 调用。每次调用的
+      ${view === "request" ? "请求体" : "回流总字节"}范围是
+      <strong>${formatBytes(card.minBytes)}</strong> 到
+      <strong>${formatBytes(card.maxBytes)}</strong>,合计
+      <strong>${formatBytes(card.totalBytes)}</strong>。`,
+    sections: [
+      {
+        title: "怎么定义一次 LLM Call",
+        body: html`<p>
+          一次 LLM call = 同一个 <code>runId</code> 上的「lifecycle start/request 事件 + 后续所有
+          assistant SSE 事件 + lifecycle end」三段汇总。 controller 侧的
+          <code>llmCallStore</code> 在 trace 进入时按 runId 累加,所以 <em>不</em> 受 trace ring
+          buffer (MAX_VISIBLE=1000) eviction 影响 —— 即便 SSE delta 把 trace buffer 顶满,这里的 call
+          列表也不会缩水。
+        </p>`,
+      },
+      {
+        title: "Bar chart 的对应关系",
+        body: html`<p>
+          条形图里每根柱子 = 一次 LLM call。横轴是 call 发起时间,纵轴是
+          ${sizeLabel}的字节数,颜色按模型稳定分配(同一模型同色,与左边色条、 底部 legend
+          对齐)。这条卡片对应的模型在条形图上一共有
+          <strong>${totalBars}</strong> 根柱子。
+        </p>`,
+      },
+      {
+        title: "和 Throughput 的关系",
+        body: html`<p>
+          Throughput 用的是同一个 call 的
+          ${view === "request"
+            ? "<code>requestBytes / TTFT × 1000</code>"
+            : "<code>responseBytes / generationDuration × 1000</code>"}
+          —— 一次 call 一个 sample,而不是按 SSE delta 逐帧。 这意味着 throughput 也不会被 SSE
+          数量噪声拉飞。
+        </p>`,
+      },
+    ],
+  };
 }
 
 function renderNetStatCard(
