@@ -981,12 +981,12 @@ export function computeNetworkStats(
       ),
     },
     operatorGatewayMessages: {
-      forward: computePerDirectionMessages(traces, "operator", "gateway"),
-      reverse: computePerDirectionMessages(traces, "gateway", "operator"),
+      forward: buildMessagesDirection(messageStore.opGw.forward),
+      reverse: buildMessagesDirection(messageStore.opGw.reverse),
     },
     gatewayNodeMessages: {
-      forward: computePerDirectionMessages(traces, "node", "gateway"),
-      reverse: computePerDirectionMessages(traces, "gateway", "node"),
+      forward: buildMessagesDirection(messageStore.nodeGw.forward),
+      reverse: buildMessagesDirection(messageStore.nodeGw.reverse),
     },
     requestStats: buildRequestStats(),
     responseStats: buildResponseStats(),
@@ -1070,34 +1070,31 @@ function resolveMessageType(t: ProtocolTraceRecord): string | null {
   return null;
 }
 
-function computePerDirectionMessages(
-  traces: ProtocolTraceRecord[],
-  matchSource: TraceEntity,
-  matchTarget: TraceEntity,
-): MessagesDirection {
+/**
+ * Read the per-direction message buffer (populated at ingest time, decoupled
+ * from the shared MAX_VISIBLE trace buffer) and roll it up into cards + bars.
+ */
+function buildMessagesDirection(buf: MessageEntry[]): MessagesDirection {
   const cardMap = new Map<string, MessageTypeCard>();
   const bars: MessageBar[] = [];
-  for (const t of traces) {
-    if (t.source !== matchSource || t.target !== matchTarget) {
-      continue;
-    }
-    const type = resolveMessageType(t);
-    if (!type) {
-      continue;
-    }
-    const size = t.payloadSize ?? 0;
-    bars.push({ ts: t.ts, size, type });
-    const existing = cardMap.get(type);
+  for (const e of buf) {
+    bars.push({ ts: e.ts, size: e.size, type: e.type });
+    const existing = cardMap.get(e.type);
     if (existing) {
       existing.count += 1;
-      if (size < existing.minBytes) {
-        existing.minBytes = size;
+      if (e.size < existing.minBytes) {
+        existing.minBytes = e.size;
       }
-      if (size > existing.maxBytes) {
-        existing.maxBytes = size;
+      if (e.size > existing.maxBytes) {
+        existing.maxBytes = e.size;
       }
     } else {
-      cardMap.set(type, { type, count: 1, minBytes: size, maxBytes: size });
+      cardMap.set(e.type, {
+        type: e.type,
+        count: 1,
+        minBytes: e.size,
+        maxBytes: e.size,
+      });
     }
   }
   return {
@@ -1249,6 +1246,74 @@ const pingSamples = {
   node: { forward: [] as PingSampleEntry[], reverse: [] as PingSampleEntry[] },
 };
 const PING_SAMPLE_CAP = 1000;
+
+// Compact per-direction message store for the Protocol Monitor's "Messages"
+// section. Stores only {ts, size, type} per wire-pair message — far smaller
+// than a full ProtocolTraceRecord — so it can hold ~10-30× more history than
+// the shared 1000-entry trace buffer. Without this, assistant SSE deltas
+// (one trace per parsed JSONL record from the streaming output, typically
+// 70-95% of the buffer after even one moderate LLM turn) push out the
+// less-frequent wire-pair frames like `req.node.invoke` long before the
+// task completes, so card counts and bar history both decay over time.
+//
+// agent↔llm directions don't get a store here because they're not "wire"
+// traffic and would be dominated by SSE deltas anyway; their throughput /
+// latency / TTFT calculations still iterate `protocolTraces` directly.
+type MessageEntry = { ts: number; size: number; type: string };
+const MESSAGE_STORE_CAP = 3000;
+const messageStore = {
+  opGw: { forward: [] as MessageEntry[], reverse: [] as MessageEntry[] },
+  nodeGw: { forward: [] as MessageEntry[], reverse: [] as MessageEntry[] },
+};
+// Trace ids already recorded into messageStore. Prevents double-counting when
+// `loadProtocolTraces` runs after live events have already populated the store
+// (e.g. on reconnect). Capped to twice the store size so it can't grow
+// unboundedly during long sessions.
+const recordedMessageIds = new Set<string>();
+const RECORDED_MESSAGE_IDS_CAP = MESSAGE_STORE_CAP * 4;
+
+function pushBoundedMessage(buf: MessageEntry[], entry: MessageEntry) {
+  buf.push(entry);
+  if (buf.length > MESSAGE_STORE_CAP) {
+    buf.splice(0, buf.length - MESSAGE_STORE_CAP);
+  }
+}
+
+/**
+ * Record a single trace into `messageStore` if it belongs to a wire-pair
+ * direction and isn't already recorded. No-op for non-wire pairs (agent↔llm).
+ */
+function recordMessageFromTrace(t: ProtocolTraceRecord): void {
+  if (!t.id || recordedMessageIds.has(t.id)) {
+    return;
+  }
+  let buf: MessageEntry[] | null = null;
+  if (t.source === "operator" && t.target === "gateway") {
+    buf = messageStore.opGw.forward;
+  } else if (t.source === "gateway" && t.target === "operator") {
+    buf = messageStore.opGw.reverse;
+  } else if (t.source === "node" && t.target === "gateway") {
+    buf = messageStore.nodeGw.forward;
+  } else if (t.source === "gateway" && t.target === "node") {
+    buf = messageStore.nodeGw.reverse;
+  }
+  if (!buf) {
+    return;
+  }
+  const type = resolveMessageType(t);
+  if (!type) {
+    return;
+  }
+  pushBoundedMessage(buf, { ts: t.ts, size: t.payloadSize ?? 0, type });
+  recordedMessageIds.add(t.id);
+  if (recordedMessageIds.size > RECORDED_MESSAGE_IDS_CAP) {
+    // Cheap reset rather than a true LRU — worst case a few traces get
+    // re-recorded once. Caller is idempotent on count via the set check
+    // above and bounded buffer size, so duplicates would only show up if
+    // both sides of the reset overlap with a re-load, which is rare.
+    recordedMessageIds.clear();
+  }
+}
 
 /** Max cached samples / processed-id set size. */
 const MAX_LATENCY_CACHE = 2000;
@@ -1694,7 +1759,14 @@ export async function loadProtocolTraces(host: ProtocolMonitorHost) {
       { limit: MAX_VISIBLE },
     );
     const incoming = res.traces ?? [];
-    host.protocolTraces = incoming.filter((t) => !isIngestBlocklisted(t));
+    const filtered = incoming.filter((t) => !isIngestBlocklisted(t));
+    host.protocolTraces = filtered;
+    // Seed the per-direction Messages store from the bulk batch. The live
+    // event handler will continue to add new traces — recordedMessageIds
+    // dedupes by trace id so a reconnect-driven re-load doesn't double-count.
+    for (const t of filtered) {
+      recordMessageFromTrace(t);
+    }
   } catch {
     // ignore
   } finally {
@@ -1718,6 +1790,7 @@ export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unk
   }
   const next = [...host.protocolTraces, record];
   host.protocolTraces = next.length > MAX_VISIBLE ? next.slice(next.length - MAX_VISIBLE) : next;
+  recordMessageFromTrace(record);
 }
 
 /**
@@ -1827,6 +1900,11 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
     pingSamples.operator.reverse.length = 0;
     pingSamples.node.forward.length = 0;
     pingSamples.node.reverse.length = 0;
+    messageStore.opGw.forward.length = 0;
+    messageStore.opGw.reverse.length = 0;
+    messageStore.nodeGw.forward.length = 0;
+    messageStore.nodeGw.reverse.length = 0;
+    recordedMessageIds.clear();
     host.protocolSelectedTrace = null;
     clearLatencyCaches();
   } catch {
