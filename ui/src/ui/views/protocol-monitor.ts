@@ -1293,19 +1293,38 @@ function buildNetworkExplainerContent(
         ],
         intro: html`这是 ${directionLabel} 这条方向上,<em>所有单条 message</em> 的 throughput
           中最大的一个。每条 message 的 throughput =
-          <code>payloadBytes / pingOneWayMs × 1000</code> bytes/s, 也就是用同方向最近一次 ping
-          测得的单向延迟当作这条 message 的 "传输耗时" 来反算速率。`,
+          <code>payloadBytes / oneWayMs × 1000</code> bytes/s,其中 <code>oneWayMs</code> 是这条
+          message <em>真实测得</em> 的单向传输延迟,而不是用最近一次 ping 估算。`,
         sections: [
           transportSection(props.networkDirection),
           {
-            title: "为什么用 ping 延迟当作传输耗时",
+            title: "oneWayMs 是怎么测的",
             body: html`<p>
-              "throughput = payload / 传输耗时" 才是物理意义上的速率。但在收发端只观测
-              <code>send</code> / <code>recv</code> 两个时间点很难区分 "排队等待" 和 "在链路上传输",
-              所以这里用同方向最近一次 dedicated ping(<code>ping.peer-to-gw</code> 或
-              <code>ping.gw-to-peer</code>)测出来的单向延迟做近似 —— 它代表了 "一条小消息走过这条
-              链路所需的时间",再乘以 payload 大小就近似得到该 payload 的 wire-level throughput。
-            </p>`,
+                两个方向各自有不同的 per-message latency 来源,都依赖
+                <code>time.sync</code> 4-timestamp NTP 校正过的时钟偏移:
+              </p>
+              <ul>
+                <li>
+                  <strong>peer → gateway</strong>(op→gw / node→gw):peer 在每个 WS 帧上 stamp
+                  <code>sentAt</code>(已加 clockOffset 转换到 gateway 时钟), gateway 收到帧时记
+                  <code>recvTs = Date.now()</code>,
+                  <code>oneWayLatencyMs = recvTs − sentAt</code> 直接写在 trace record 上。
+                  Per-message,精确到这一帧。
+                </li>
+                <li>
+                  <strong>gateway → peer</strong>(gw→op / gw→node):gateway 端拿不到 peer 的 recv
+                  时间,所以由 peer 在收到每帧后调用 <code>captureRxSample</code>
+                  记录(同样把本地 recvTs 加 offset 投影到 gateway 时钟),每
+                  <code>${5}s</code> 通过 <code>protocol-traces.rx-report</code> 批量回传给
+                  gateway,再由 gateway 广播 <code>protocol.rx.samples</code> 到所有 UI。UI 端按
+                  <code>(s.ts − s.latencyMs) ≈ trace.ts</code> + <code>kind/method/event</code> 把
+                  rx-sample 精确 join 到 trace 上(误差 ≤ 200ms)。
+                </li>
+              </ul>
+              <p>
+                只有 join 失败 / 还没收到第一份 rx-report 时,才回退到 "最近一次 ping latency"
+                作为兜底。所以图表里几乎所有 sample 都是真实 per-message,而不是 ping 估算。
+              </p>`,
           },
           {
             title: "Peak 高 ≠ 一直高",
@@ -1326,8 +1345,8 @@ function buildNetworkExplainerContent(
           { label: "Samples", value: String(samples.length) },
         ],
         intro: html`${directionLabel} 这条方向上所有 per-message throughput 的算术平均 —— 每条
-          message 都按 <code>payloadBytes / pingOneWayMs × 1000</code> 算出 一个
-          bytes/s,然后求平均。`,
+          message 都按 <code>payloadBytes / oneWayMs × 1000</code> 算出一个 bytes/s (oneWayMs 是这条
+          message 实测的单向延迟,不是 ping 估算),然后求平均。`,
         sections: [
           {
             title: "计算公式",
@@ -1351,9 +1370,9 @@ function buildNetworkExplainerContent(
           {
             title: "和 Latency 的耦合",
             body: html`<p>
-              因为分母用的是同方向 ping 单向延迟,如果 latency 抖大(例如 GC、Wi-Fi 重传),
-              <em>同样大小</em> 的 message 算出的 throughput 会暂时变低 —— 这正是希望看到的:
-              "链路在这一刻变慢了" 反映为 "这条 message 的有效吞吐变低了"。
+              分母是 <em>这条 message 自己</em> 的单向 latency,所以 latency 抖动 (Wi-Fi 重传、GC
+              pause) 只会拖慢 <em>受影响的那几条 message</em> 的 throughput,不会像旧的 "用最近一次
+              ping 当除数" 那样把同一份抖动平摊到一整段时间窗里的所有 message 上。
             </p>`,
           },
         ],
@@ -1424,16 +1443,17 @@ function buildNetworkExplainerContent(
           {
             title: "Bytes/s 是怎么算的",
             body: html`<p>
-              和 Average / Peak 同一套口径:<code>payloadBytes / pingOneWayMs × 1000</code>。
-              所以这一栏会随 ping 抖动而变化 —— 它代表的是这条 message 在它发出/收到的那一刻
-              "在这条链路上的有效吞吐"。
+              和 Average / Peak 同一套口径:<code>payloadBytes / oneWayMs × 1000</code>, 其中
+              <code>oneWayMs</code> 是 <em>这条 message</em> 自己实测的单向延迟 (peer→gw 来自
+              trace.oneWayLatencyMs;gw→peer 来自 join 上的 rx-sample)。 所以这一栏只反映 "这条
+              message 在它发出/收到的那一刻在链路上的有效吞吐", 不会被全局 ping 抖动污染。
             </p>`,
           },
           {
             title: "什么时候这里会显示 —",
             body: html`<p>
-              ① 还没有 trace;② 还没有第一个 ping 样本(per-message throughput 需要 ping
-              延迟当分母,缺一不可)。
+              ① 还没有 trace;② per-message latency join 没找到匹配且 ping 兜底也没数据
+              (启动初期罕见)。
             </p>`,
           },
         ],

@@ -1023,12 +1023,72 @@ function getLatestPingOneWayMs(
 }
 
 /**
+ * Find the rx-sample whose original sentAt (= s.ts - s.latencyMs, both in
+ * gateway-clock) matches the trace's ts and whose kind/method/event matches
+ * the trace. Used for gw→peer throughput where the gateway can't directly
+ * observe per-frame recv time on its own clock.
+ *
+ * Match window is intentionally small (200ms): rx-sample.ts - latencyMs
+ * should equal trace.ts exactly (both are the same gateway-side sentAt
+ * value), modulo sub-ms clock-sync residual error and any rounding.
+ */
+function findRxLatencyForTrace(
+  samples: RxLatencySampleEntry[],
+  t: ProtocolTraceRecord,
+): number | null {
+  const targetMethod = t.method;
+  const targetEvent = t.event;
+  if (!targetMethod && !targetEvent) {
+    return null;
+  }
+  let bestLatency: number | null = null;
+  let bestDist = Infinity;
+  for (const s of samples) {
+    if (targetEvent) {
+      if (s.event !== targetEvent) {
+        continue;
+      }
+    } else if (targetMethod) {
+      if (s.method !== targetMethod) {
+        continue;
+      }
+    }
+    const sentMatch = s.ts - s.latencyMs;
+    const dist = Math.abs(sentMatch - t.ts);
+    if (dist > 200) {
+      continue;
+    }
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestLatency = s.latencyMs;
+    }
+  }
+  return bestLatency;
+}
+
+/**
  * Per-message throughput: for each non-blocklisted trace in the given
  * (source, target) direction, build a sample with
- * `bytesPerSec = payloadSize / pingOneWayMs * 1000`. Uses the most recent
- * ping latency for the matching direction at compute time. Skips traces
- * that landed before the first ping completed (no latency available yet)
- * and traces with zero payload.
+ * `bytesPerSec = payloadSize / oneWayMs * 1000` where `oneWayMs` is the
+ * actual per-message one-way latency:
+ *
+ *   - peer→gw (op→gw, node→gw): `trace.oneWayLatencyMs`, stamped at gateway
+ *     ingest as `recvTs - frame.sentAt` (peer's sentAt is offset-adjusted to
+ *     gateway clock by the same time-sync mechanism the latency chart uses).
+ *   - gw→peer (gw→op, gw→node): join the trace to the rx-sample reported by
+ *     the peer (`protocol-traces.rx-report` → `protocol.rx.samples`) by
+ *     (kind/method/event, sentAt match within 200ms). Peers stamp recvTs in
+ *     their adjusted clock and the gateway broadcasts the per-sample latency.
+ *
+ * Falls back to the most recent ping latency when neither per-message source
+ * is available — typically only during the startup grace before the first
+ * rx-report or for traces whose method/event isn't carried on rx-samples.
+ *
+ * This eliminates the variance of the old "use the last ping value as the
+ * divisor for every message" approach: each message gets its own contemporaneous
+ * latency, so a slow burst (Wi-Fi retransmit, GC pause) shows up as low
+ * throughput on those specific messages, not as a uniform smear over all
+ * messages within a ping interval.
  */
 function computePerMessageThroughput(
   traces: ProtocolTraceRecord[],
@@ -1037,10 +1097,11 @@ function computePerMessageThroughput(
   matchSource: TraceEntity,
   matchTarget: TraceEntity,
 ): ThroughputSample[] {
-  const oneWayMs = getLatestPingOneWayMs(pingSource, pingDirection);
-  if (oneWayMs === null || oneWayMs <= 0) {
-    return [];
-  }
+  const isPeerToGw = matchTarget === "gateway";
+  const peer: "operator" | "node" =
+    matchSource === "operator" || matchTarget === "operator" ? "operator" : "node";
+  const rxBuf = peer === "operator" ? rxSamplesOperator : rxSamplesNode;
+  const fallbackPingMs = getLatestPingOneWayMs(pingSource, pingDirection);
   const samples: ThroughputSample[] = [];
   for (const t of traces) {
     if (t.source !== matchSource || t.target !== matchTarget) {
@@ -1048,6 +1109,18 @@ function computePerMessageThroughput(
     }
     const bytes = t.payloadSize ?? 0;
     if (bytes <= 0) {
+      continue;
+    }
+    let oneWayMs: number | null;
+    if (isPeerToGw) {
+      oneWayMs = typeof t.oneWayLatencyMs === "number" ? t.oneWayLatencyMs : null;
+    } else {
+      oneWayMs = findRxLatencyForTrace(rxBuf, t);
+    }
+    if (oneWayMs === null || oneWayMs <= 0) {
+      oneWayMs = fallbackPingMs;
+    }
+    if (oneWayMs === null || oneWayMs <= 0) {
       continue;
     }
     samples.push({ ts: t.ts, bytesPerSec: (bytes / oneWayMs) * 1000, rawBytes: bytes });
