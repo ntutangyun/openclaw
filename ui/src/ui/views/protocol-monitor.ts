@@ -2738,12 +2738,48 @@ function selectDirectionMessages(
 }
 
 /**
- * Shared x-axis (time) domain for the throughput / latency / messages charts
- * within one direction tab. Computed once per render from whichever charts have
- * data, then threaded into each chart so they all anchor to the same time
- * window — makes it easy to read events across the three charts vertically.
+ * Shared x-axis (time) domain for the throughput / latency / messages charts.
+ * Spans every direction tab so switching tabs preserves the same x-axis range
+ * (events on op→gw line up vertically with events on node→gw, etc.).
  */
 type TimeWindow = { minTs: number; maxTs: number };
+
+/**
+ * Compute one TimeWindow that covers every chart series across every direction
+ * tab. Each series is already sorted by ts, so first/last entries give the
+ * local min/max — no full scan needed.
+ */
+function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
+  const tsValues: number[] = [];
+  const pushSeries = (arr: { ts: number }[] | undefined) => {
+    if (arr && arr.length > 0) {
+      tsValues.push(arr[0].ts, arr[arr.length - 1].ts);
+    }
+  };
+  // Throughput samples (per direction, both forward and reverse).
+  pushSeries(net.operatorGateway.forward);
+  pushSeries(net.operatorGateway.reverse);
+  pushSeries(net.gatewayNode.forward);
+  pushSeries(net.gatewayNode.reverse);
+  pushSeries(net.agentLlm.forward);
+  pushSeries(net.agentLlm.reverse);
+  // Latency samples (one stats object per direction; .samples is the array).
+  pushSeries(net.operatorGatewayOneWayLatency.samples);
+  pushSeries(net.gatewayOperatorOneWayLatency.samples);
+  pushSeries(net.nodeGatewayOneWayLatency.samples);
+  pushSeries(net.gatewayNodeOneWayLatency.samples);
+  pushSeries(net.agentLlmTtft.samples);
+  pushSeries(net.agentLlmGeneration.samples);
+  // Messages bars (only the 4 wire pair directions have these).
+  pushSeries(net.operatorGatewayMessages.forward.bars);
+  pushSeries(net.operatorGatewayMessages.reverse.bars);
+  pushSeries(net.gatewayNodeMessages.forward.bars);
+  pushSeries(net.gatewayNodeMessages.reverse.bars);
+  if (tsValues.length === 0) {
+    return undefined;
+  }
+  return { minTs: Math.min(...tsValues), maxTs: Math.max(...tsValues) };
+}
 
 /**
  * Stable color palette for message-type bars. Index assigned by the type's
@@ -2779,7 +2815,7 @@ function renderMessagesBarChartSvg(
   timeWindow?: TimeWindow,
 ): TemplateResult {
   if (data.bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+    return html`<div class="pm-chart-empty" style="height:130px;line-height:130px;">
       Waiting for first message...
     </div>`;
   }
@@ -3005,7 +3041,6 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
   const latency = selectDirectionLatency(net, props.networkDirection);
-  const messagesData = selectDirectionMessages(net, props.networkDirection);
 
   const peak = samples.length > 0 ? Math.max(...samples.map((s) => s.bytesPerSec)) : 0;
   const avg =
@@ -3021,24 +3056,12 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   const responsesBlock =
     props.networkDirection === "model-to-agent" ? renderResponsesSection(net, openExp) : nothing;
 
-  // Shared x-axis: union of the timestamp ranges from each chart that has
-  // data. Charts with no data fall through to their own empty state. Each
-  // chart series is already sorted by ts, so first/last entries are the
-  // local min/max — no need to scan the whole array.
-  const allTs: number[] = [];
-  if (samples.length > 0) {
-    allTs.push(samples[0].ts, samples[samples.length - 1].ts);
-  }
-  if (latency && latency.stats.samples.length > 0) {
-    const ls = latency.stats.samples;
-    allTs.push(ls[0].ts, ls[ls.length - 1].ts);
-  }
-  if (messagesData && messagesData.bars.length > 0) {
-    const bs = messagesData.bars;
-    allTs.push(bs[0].ts, bs[bs.length - 1].ts);
-  }
-  const timeWindow: TimeWindow | undefined =
-    allTs.length > 0 ? { minTs: Math.min(...allTs), maxTs: Math.max(...allTs) } : undefined;
+  // Shared x-axis across ALL direction tabs (op-gw, gw-op, node-gw, gw-node,
+  // agent-llm, llm-agent). Computed once per net snapshot from every chart's
+  // samples — switching tabs preserves the same time window so events line
+  // up vertically across both the three charts on the current tab and the
+  // charts on any other tab.
+  const timeWindow = computeGlobalTimeWindow(net);
 
   return html`
     <div class="pm-net-direction-header">
@@ -3429,7 +3452,7 @@ function renderSingleLineThroughputChart(
   const H = 260;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  const PIXEL_HEIGHT = 260;
+  const PIXEL_HEIGHT = 130;
 
   if (samples.length < 2) {
     return html`
@@ -3638,7 +3661,7 @@ function renderLatencyChartSvg(
 ): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+    return html`<div class="pm-chart-empty" style="height:130px;line-height:130px;">
       Waiting for data...
     </div>`;
   }
@@ -5077,7 +5100,7 @@ const STYLES = /* css */ `
   }
   .pm-chart-svg--tall {
     height: auto;
-    aspect-ratio: 460 / 260;
+    aspect-ratio: 460 / 130;
   }
   .pm-chart-empty {
     height: 120px;
