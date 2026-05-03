@@ -1,4 +1,29 @@
+import { GATEWAY_CLIENT_IDS } from "../../../../src/gateway/protocol/client-info.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+
+/**
+ * Operator-pair filter: in the op↔gw direction tabs, only count traces from
+ * the actual Control UI (or unknown-client traces, kept for backwards compat
+ * with traces captured before `client` was added). Excludes operator-role
+ * connections from agent CLI subprocesses, gateway-client backends, etc. —
+ * those still belong on the wire but pollute the operator monitor view.
+ *
+ * For non-operator-pair directions (node↔gw, agent↔llm), no filter is
+ * applied — those don't have the same identity-confusion problem.
+ */
+function isShownInOperatorPair(t: ProtocolTraceRecord): boolean {
+  if (!t.client) {
+    return true; // pre-upgrade trace, can't filter
+  }
+  return t.client === GATEWAY_CLIENT_IDS.CONTROL_UI;
+}
+
+function isOperatorPairTrace(t: ProtocolTraceRecord): boolean {
+  return (
+    (t.source === "operator" && t.target === "gateway") ||
+    (t.source === "gateway" && t.target === "operator")
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,6 +42,16 @@ export type ProtocolTraceRecord = {
   event?: string;
   connId?: string;
   role?: string;
+  /**
+   * Stable client identifier from the connect frame. Used by the UI to keep
+   * the operator-pair (op↔gw) monitor scoped to actual Control UI traffic
+   * and exclude agent CLI subprocesses that also connect with operator role
+   * (e.g. the agent calling `node.invoke` to drive a tool plugin shows up
+   * with `client === "cli"`, not the user's Control UI session).
+   */
+  client?: string;
+  /** Connect-frame `client.mode` (ui/cli/backend/webchat/…). */
+  clientMode?: string;
   ok?: boolean;
   payload?: unknown;
   runId?: string;
@@ -807,11 +842,15 @@ function ingestIntoNetwork(t: ProtocolTraceRecord): void {
   const tgt = t.target;
 
   if (src === "operator" && tgt === "gateway") {
-    addBucket(netState.operatorGateway.combined, bucket, size);
-    addBucket(netState.operatorGateway.forward, bucket, size);
+    if (isShownInOperatorPair(t)) {
+      addBucket(netState.operatorGateway.combined, bucket, size);
+      addBucket(netState.operatorGateway.forward, bucket, size);
+    }
   } else if (src === "gateway" && tgt === "operator") {
-    addBucket(netState.operatorGateway.combined, bucket, size);
-    addBucket(netState.operatorGateway.reverse, bucket, size);
+    if (isShownInOperatorPair(t)) {
+      addBucket(netState.operatorGateway.combined, bucket, size);
+      addBucket(netState.operatorGateway.reverse, bucket, size);
+    }
   }
 
   if (src === "agent" && tgt === "llm") {
@@ -1107,6 +1146,9 @@ function computePerMessageThroughput(
     if (t.source !== matchSource || t.target !== matchTarget) {
       continue;
     }
+    if (isOperatorPairTrace(t) && !isShownInOperatorPair(t)) {
+      continue;
+    }
     const bytes = t.payloadSize ?? 0;
     if (bytes <= 0) {
       continue;
@@ -1358,6 +1400,9 @@ function pushBoundedMessage(buf: MessageEntry[], entry: MessageEntry) {
  */
 function recordMessageFromTrace(t: ProtocolTraceRecord): void {
   if (!t.id || recordedMessageIds.has(t.id)) {
+    return;
+  }
+  if (isOperatorPairTrace(t) && !isShownInOperatorPair(t)) {
     return;
   }
   let buf: MessageEntry[] | null = null;

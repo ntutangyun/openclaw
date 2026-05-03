@@ -1545,6 +1545,8 @@ export function attachGatewayWsMessageHandler(params: {
         id: req.id,
         method: req.method,
         role: client.connect.role,
+        client: client.connect.client.id,
+        clientMode: client.connect.client.mode,
         payload: req.params,
         sentAt: req.sentAt,
       });
@@ -1603,6 +1605,8 @@ export function attachGatewayWsMessageHandler(params: {
           ok,
           method: req.method,
           role: client.connect.role,
+          client: client.connect.client.id,
+          clientMode: client.connect.client.mode,
           payload: ok ? payload : undefined,
           errorCode: error?.code,
           errorMessage: error?.message,

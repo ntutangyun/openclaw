@@ -35,6 +35,17 @@ export type ProtocolTraceRecord = {
   event?: string;
   connId?: string;
   role?: string;
+  /**
+   * Stable client identifier from the connect frame (e.g. `openclaw-control-ui`,
+   * `cli`, `openclaw-tui`, …). Lets the UI distinguish traffic from the actual
+   * Control UI vs other operator-role connections (agent CLI subprocesses,
+   * TUI, mobile apps) that all share `role: "operator"`. Set on req/res frames
+   * where the connection's client info is known; outbound broadcast events
+   * leave it undefined.
+   */
+  client?: string;
+  /** Connect-frame `client.mode` (ui/cli/backend/webchat/…) for the same use. */
+  clientMode?: string;
   ok?: boolean;
   payload?: unknown;
   runId?: string;
@@ -341,6 +352,8 @@ export class ProtocolTraceStore {
       event: meta.event as string | undefined,
       connId: meta.connId as string | undefined,
       role: meta.role as string | undefined,
+      client: typeof meta.client === "string" ? meta.client : undefined,
+      clientMode: typeof meta.clientMode === "string" ? meta.clientMode : undefined,
       ok: typeof meta.ok === "boolean" ? meta.ok : undefined,
       payload: meta.payload,
       runId,
