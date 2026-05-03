@@ -2713,6 +2713,14 @@ function selectDirectionMessages(
 }
 
 /**
+ * Shared x-axis (time) domain for the throughput / latency / messages charts
+ * within one direction tab. Computed once per render from whichever charts have
+ * data, then threaded into each chart so they all anchor to the same time
+ * window — makes it easy to read events across the three charts vertically.
+ */
+type TimeWindow = { minTs: number; maxTs: number };
+
+/**
  * Stable color palette for message-type bars. Index assigned by the type's
  * position in the cards list (sorted by count, so the most common type gets
  * the first color — consistent across renders for a given snapshot).
@@ -2743,6 +2751,7 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
 function renderMessagesBarChartSvg(
   data: MessagesDirection,
   colorMap: Map<string, string>,
+  timeWindow?: TimeWindow,
 ): TemplateResult {
   if (data.bars.length === 0) {
     return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
@@ -2758,8 +2767,10 @@ function renderMessagesBarChartSvg(
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const bars = data.bars;
-  const minTs = bars[0]?.ts ?? 0;
-  const maxTs = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? minTs + 1) : minTs + 1;
+  const localMin = bars[0]?.ts ?? 0;
+  const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
+  const minTs = timeWindow?.minTs ?? localMin;
+  const maxTs = timeWindow?.maxTs ?? localMax;
   const tsRange = Math.max(1, maxTs - minTs);
   const maxSize = Math.max(...bars.map((b) => b.size), 1);
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
@@ -2819,6 +2830,7 @@ function renderMessagesSection(
   direction: NetworkDirection,
   color: string,
   openExp: (key: string) => () => void,
+  timeWindow?: TimeWindow,
 ): TemplateResult | typeof nothing {
   const data = selectDirectionMessages(net, direction);
   if (!data) {
@@ -2856,7 +2868,7 @@ function renderMessagesSection(
         `,
       )}
     </div>
-    ${renderMessagesBarChartSvg(data, colorMap)}
+    ${renderMessagesBarChartSvg(data, colorMap, timeWindow)}
     <div class="pm-message-legend">
       ${data.cards.map(
         (c) => html`
@@ -2877,6 +2889,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
   const latency = selectDirectionLatency(net, props.networkDirection);
+  const messagesData = selectDirectionMessages(net, props.networkDirection);
 
   const peak = samples.length > 0 ? Math.max(...samples.map((s) => s.bytesPerSec)) : 0;
   const avg =
@@ -2891,6 +2904,25 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
     props.networkDirection === "agent-to-model" ? renderRequestsSection(net, openExp) : nothing;
   const responsesBlock =
     props.networkDirection === "model-to-agent" ? renderResponsesSection(net, openExp) : nothing;
+
+  // Shared x-axis: union of the timestamp ranges from each chart that has
+  // data. Charts with no data fall through to their own empty state. Each
+  // chart series is already sorted by ts, so first/last entries are the
+  // local min/max — no need to scan the whole array.
+  const allTs: number[] = [];
+  if (samples.length > 0) {
+    allTs.push(samples[0].ts, samples[samples.length - 1].ts);
+  }
+  if (latency && latency.stats.samples.length > 0) {
+    const ls = latency.stats.samples;
+    allTs.push(ls[0].ts, ls[ls.length - 1].ts);
+  }
+  if (messagesData && messagesData.bars.length > 0) {
+    const bs = messagesData.bars;
+    allTs.push(bs[0].ts, bs[bs.length - 1].ts);
+  }
+  const timeWindow: TimeWindow | undefined =
+    allTs.length > 0 ? { minTs: Math.min(...allTs), maxTs: Math.max(...allTs) } : undefined;
 
   return html`
     <div class="pm-net-direction-header">
@@ -2934,7 +2966,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
               openExp(`${latency.latencyKey}-peak`),
             )}
           </div>
-          ${renderLatencyChartSvg(latency.label, latency.stats, meta.color)}
+          ${renderLatencyChartSvg(latency.label, latency.stats, meta.color, timeWindow)}
         `
       : html`
           <div class="pm-net-no-latency">
@@ -2943,7 +2975,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
             <strong>Agent → Model</strong> 或 <strong>Model → Agent</strong> 标签页。
           </div>
         `}
-    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp)}
+    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
 
     <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
     <div class="pm-net-stat-grid">
@@ -2973,7 +3005,7 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
       )}
     </div>
 
-    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color)}
+    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color, timeWindow)}
   `;
 }
 
@@ -3271,6 +3303,7 @@ function renderSingleLineThroughputChart(
   title: string,
   samples: ThroughputSample[],
   color: string,
+  timeWindow?: TimeWindow,
 ): TemplateResult {
   const PAD_L = 64;
   const PAD_R = 24;
@@ -3296,13 +3329,16 @@ function renderSingleLineThroughputChart(
 
   const peak = Math.max(...samples.map((s) => s.bytesPerSec), 1);
   const avg = samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length;
-  const minTs = samples[0].ts;
-  const maxTs = samples[samples.length - 1].ts;
+  const minTs = timeWindow?.minTs ?? samples[0].ts;
+  const maxTs = timeWindow?.maxTs ?? samples[samples.length - 1].ts;
   const tsRange = maxTs - minTs || 1;
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / peak) * plotH;
   const linePoints = samples.map((p) => `${toX(p.ts)},${toY(p.bytesPerSec)}`).join(" ");
-  const areaPoints = `${PAD_L},${PAD_T + plotH} ` + linePoints + ` ${toX(maxTs)},${PAD_T + plotH}`;
+  const areaPoints =
+    `${toX(samples[0].ts)},${PAD_T + plotH} ` +
+    linePoints +
+    ` ${toX(samples[samples.length - 1].ts)},${PAD_T + plotH}`;
 
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
@@ -3478,7 +3514,12 @@ function formatMs(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string): TemplateResult {
+function renderLatencyChartSvg(
+  label: string,
+  stats: LatencyStats,
+  color: string,
+  timeWindow?: TimeWindow,
+): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
     return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
@@ -3496,8 +3537,10 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
   const plotH = H - PAD_T - PAD_B;
 
   const maxVal = Math.max(stats.peakMs ?? 1, 1);
-  const minTs = samples[0].ts;
-  const maxTs = samples.length > 1 ? samples[samples.length - 1].ts : minTs + 1000;
+  const localMin = samples[0].ts;
+  const localMax = samples.length > 1 ? samples[samples.length - 1].ts : localMin + 1000;
+  const minTs = timeWindow?.minTs ?? localMin;
+  const maxTs = timeWindow?.maxTs ?? localMax;
   const tsRange = maxTs - minTs || 1;
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
@@ -3516,7 +3559,7 @@ function renderLatencyChartSvg(label: string, stats: LatencyStats, color: string
   // Time-series polyline + area fill — gives the chart a shape even when
   // samples are sparse, instead of looking like "just an average line".
   const linePoints = samples.map((s) => `${toX(s.ts)},${toY(s.latencyMs)}`).join(" ");
-  const areaPoints = `${PAD_L},${PAD_T + plotH} ${linePoints} ${toX(maxTs)},${PAD_T + plotH}`;
+  const areaPoints = `${toX(localMin)},${PAD_T + plotH} ${linePoints} ${toX(localMax)},${PAD_T + plotH}`;
 
   // Reference lines for the distribution. Drawn back-to-front so the headline
   // (avg) renders on top. Skip lines whose value is 0 — happens before any
