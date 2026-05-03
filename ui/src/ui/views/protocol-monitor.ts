@@ -1290,32 +1290,27 @@ function buildNetworkExplainerContent(
           { label: "Peak", value: `${formatBytes(peak)}/s` },
           { label: "Samples", value: String(samples.length) },
         ],
-        intro: html`这是 ${directionLabel} 这条方向上,任意一个 3 秒采样桶里
-          <em>瞬时</em> 字节速率的最大值。可以理解为这一段时间内最 "尖" 的那一下流量。`,
+        intro: html`这是 ${directionLabel} 这条方向上,<em>所有单条 message</em> 的 throughput
+          中最大的一个。每条 message 的 throughput =
+          <code>payloadBytes / pingOneWayMs × 1000</code> bytes/s, 也就是用同方向最近一次 ping
+          测得的单向延迟当作这条 message 的 "传输耗时" 来反算速率。`,
         sections: [
           transportSection(props.networkDirection),
           {
-            title: "采样桶是怎么算出来的",
+            title: "为什么用 ping 延迟当作传输耗时",
             body: html`<p>
-              每条 trace record 都带有 <code>ts</code>(时间戳)和 <code>payloadSize</code> (这一帧的
-              payload 字节数)。<code>computeNetworkStats</code> 把所有 trace 按
-              <code>floor(ts / 3000) * 3000</code> 分到 3 秒一个的 bucket 里, 累加每个 bucket
-              的字节数,然后用 <code>bytes / 3000 * 1000</code> 换算成 bytes/s。
-            </p>`,
-          },
-          {
-            title: "为什么「瞬时」还要除以 3 秒",
-            body: html`<p>
-              真正的瞬时(每帧)峰值会非常抖,看不出趋势。3 秒滑窗在数据点的密度
-              和真实流量趋势之间取了一个折中:既不会被一两笔大请求拉飞,也不会把短促的 burst
-              全部抹平。
+              "throughput = payload / 传输耗时" 才是物理意义上的速率。但在收发端只观测
+              <code>send</code> / <code>recv</code> 两个时间点很难区分 "排队等待" 和 "在链路上传输",
+              所以这里用同方向最近一次 dedicated ping(<code>ping.peer-to-gw</code> 或
+              <code>ping.gw-to-peer</code>)测出来的单向延迟做近似 —— 它代表了 "一条小消息走过这条
+              链路所需的时间",再乘以 payload 大小就近似得到该 payload 的 wire-level throughput。
             </p>`,
           },
           {
             title: "Peak 高 ≠ 一直高",
             body: html`<p>
-              Peak 只反映"最高的那一桶",中位/平均才能反映稳态压力。同时关注
-              <strong>Average</strong> 卡片更能看出这条链路的常态负载。
+              Peak 只反映 "最大的那一条 message"。要看链路常态压力,看
+              <strong>Average</strong>;要看分布形状,看 <strong>Total Bytes</strong> 和样本计数。
             </p>`,
           },
         ],
@@ -1329,26 +1324,35 @@ function buildNetworkExplainerContent(
           { label: "Total bytes", value: formatBytes(totalBytes) },
           { label: "Samples", value: String(samples.length) },
         ],
-        intro: html`${directionLabel} 这条方向上所有采样桶 bytes/s 的算术平均。
-        也可以理解成"如果流量是恒定的,大概是多少 byte/s"。`,
+        intro: html`${directionLabel} 这条方向上所有 per-message throughput 的算术平均 —— 每条
+          message 都按 <code>payloadBytes / pingOneWayMs × 1000</code> 算出 一个
+          bytes/s,然后求平均。`,
         sections: [
           {
             title: "计算公式",
             body: html`<p>
-                <code>average = sum(bucket.bytesPerSec) / bucket count</code>。 注意分母是
-                <em>bucket 数</em>,不是总秒数 —— 完全没有流量的时段没有 bucket, 因此不会拉低均值。
+                <code>average = sum(perMessageBytesPerSec) / message count</code>。 分母是
+                <em>消息数</em>,不是总秒数 —— 空闲段没有消息,因此不会拉低均值。
               </p>
               <p class="pm-explainer-mini">
                 当前:${formatBytes(samples.reduce((a, s) => a + s.bytesPerSec, 0))} ÷
-                ${samples.length} buckets ≈ <strong>${formatBytes(avg)}/s</strong>。
+                ${samples.length} messages ≈ <strong>${formatBytes(avg)}/s</strong>。
               </p>`,
           },
           {
             title: "和 Total Bytes 的关系",
             body: html`<p>
-              如果你想算"自 session 开始的真实平均吞吐",更准确的算法是
-              <code>totalBytes / 实际持续时长</code>。本卡片显示的 average 是采样桶的
-              算术均值,会忽略空闲间隙。
+              如果你想算 "自 session 开始的真实平均吞吐",更准确的算法是
+              <code>totalBytes / 实际持续时长</code>。本卡片显示的 average 是 per-message
+              速率的算术均值,会忽略空闲间隙。
+            </p>`,
+          },
+          {
+            title: "和 Latency 的耦合",
+            body: html`<p>
+              因为分母用的是同方向 ping 单向延迟,如果 latency 抖大(例如 GC、Wi-Fi 重传),
+              <em>同样大小</em> 的 message 算出的 throughput 会暂时变低 —— 这正是希望看到的:
+              "链路在这一刻变慢了" 反映为 "这条 message 的有效吞吐变低了"。
             </p>`,
           },
         ],
@@ -1361,25 +1365,26 @@ function buildNetworkExplainerContent(
           { label: "Total", value: formatBytes(totalBytes) },
           { label: "Samples", value: String(samples.length) },
         ],
-        intro: html`${directionLabel} 这条方向上,从当前 traces buffer 起点到现在, 所有 trace record
-        的 payload 字节累加和。`,
+        intro: html`${directionLabel} 这条方向上,所有 trace 的 payload 字节累加和。 一条 trace =
+        一个 WebSocket 帧(req / res / event)。`,
         sections: [
           transportSection(props.networkDirection),
           {
             title: "数据从哪来",
             body: html`<p>
-              每条 trace record 上都带有 <code>payloadSize</code>(这一帧或这一段流的 payload
-              字节数)。对方向匹配(<code>source</code> + <code>target</code>)的 trace, 把
-              <code>payloadSize</code> 累加起来即得到 Total Bytes。
+              每条 trace record 上都带有 <code>payloadSize</code>(这一帧的 payload 字节数)。
+              对方向匹配(<code>source</code> + <code>target</code>)的 trace,把
+              <code>payloadSize</code> 累加起来即得到 Total Bytes。 这部分计算<em>不依赖 ping</em
+              >,所以哪怕还没收到第一个 ping 样本, Total Bytes 也是准确的。
             </p>`,
           },
           {
             title: "为什么可以「自 session 开始」累计",
             body: html`<p>
-              UI 的 trace buffer 只保留最近 <code>${1000}</code> 条 trace(MAX_VISIBLE),但 Total
-              Bytes 由 controller 侧的持久 accumulator 维护 —— 每条 trace 按 id 去重 累加一次,与
-              ring buffer eviction 解耦。所以即使旧 trace 被挤出 buffer, Total 也不会回落。注意这是
-              UI 自进程启动以来的累计,不是 gateway 端的计费。
+              UI 的 trace buffer 只保留最近 <code>${1000}</code> 条 trace(MAX_VISIBLE), 但 Total
+              Bytes 由 controller 侧的持久 accumulator 维护 —— 每条 trace 按 id 去重累加一次,与 ring
+              buffer eviction 解耦。所以即使旧 trace 被挤出 buffer, Total 也不会回落。注意这是 UI
+              自进程启动以来的累计,不是 gateway 端的计费。
             </p>`,
           },
         ],
@@ -1400,28 +1405,94 @@ function buildNetworkExplainerContent(
             value: lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "—",
           },
           {
-            label: "Bucket bytes",
+            label: "Payload",
             value: lastSample ? formatBytes(lastSample.rawBytes) : "—",
           },
         ],
-        intro: html`${directionLabel} 这条方向上 <em>最后一个</em> 有数据的 3 秒 bucket
-          的开始时间,以及那一桶里的瞬时速率。可以快速判断链路是否还活着。`,
+        intro: html`${directionLabel} 这条方向上 <em>最后一条</em> message 的时间戳、 它的
+          per-message throughput、以及那条 message 的 payload 大小。
+          可以快速判断链路是否还活着、最近一笔流量长什么样。`,
         sections: [
           {
             title: "时间含义",
             body: html`<p>
-              显示的是该 bucket 的起始时间(<code>floor(ts / 3000) * 3000</code> 之后的本地
-              时间)。如果链路当前很闲,这个时间可能比 "现在" 早不少。
+              显示的是 <em>这一条 message</em> 的本地接收时间(controller 看到 trace 的瞬间)。
+              如果链路当前很闲,这个时间可能比 "现在" 早不少。
+            </p>`,
+          },
+          {
+            title: "Bytes/s 是怎么算的",
+            body: html`<p>
+              和 Average / Peak 同一套口径:<code>payloadBytes / pingOneWayMs × 1000</code>。
+              所以这一栏会随 ping 抖动而变化 —— 它代表的是这条 message 在它发出/收到的那一刻
+              "在这条链路上的有效吞吐"。
             </p>`,
           },
           {
             title: "什么时候这里会显示 —",
             body: html`<p>
-              当 trace buffer 里没有匹配该方向的任何 trace 时(从未通信、或被 buffer 挤出)。
+              ① 还没有 trace;② 还没有第一个 ping 样本(per-message throughput 需要 ping
+              延迟当分母,缺一不可)。
             </p>`,
           },
         ],
       };
+  }
+
+  // Messages section: per-type cards (count + min/max bytes) + bar chart.
+  if (key.startsWith("messages-")) {
+    const data = selectDirectionMessages(net, props.networkDirection);
+    if (!data) {
+      return null;
+    }
+    const type = key.slice("messages-".length);
+    const card = data.cards.find((c) => c.type === type);
+    if (!card) {
+      return null;
+    }
+    const totalBars = data.bars.filter((b) => b.type === type).length;
+    return {
+      title: `${meta.shortLabel} · ${type}`,
+      stats: [
+        { label: "Count", value: String(card.count) },
+        { label: "Min", value: formatBytes(card.minBytes) },
+        { label: "Max", value: formatBytes(card.maxBytes) },
+      ],
+      intro: html`${directionLabel} 这条方向上,自 trace buffer 起点到现在, 类型为
+        <code>${type}</code> 的 WebSocket 帧总共出现了 <strong>${card.count}</strong> 次, payload 在
+        <strong>${formatBytes(card.minBytes)}</strong> 到
+        <strong>${formatBytes(card.maxBytes)}</strong> 之间。`,
+      sections: [
+        {
+          title: "卡片上的数字怎么算的",
+          body: html`<p>
+            <code>computePerDirectionMessages</code> 遍历方向匹配 (<code>source</code> +
+            <code>target</code>)的 trace,按 <code>resolveMessageType</code> 拿出类型标签 (<code
+              >event.&lt;name&gt;</code
+            >
+            或 <code>&lt;kind&gt;.&lt;method&gt;</code>), 按类型分组累加 count、追踪 min / max
+            payload 大小。
+          </p>`,
+        },
+        {
+          title: "和 bar chart 怎么对应",
+          body: html`<p>
+            条形图里的每一根细柱 = 一条 message,横轴是时间,纵轴是 payload 大小,颜色按类型
+            稳定分配(同一类型的所有柱子是同一颜色,与卡片左边的色条、底部 legend 对齐)。
+            这条卡片对应的类型在条形图上一共有
+            <strong>${totalBars}</strong> 根柱子。
+          </p>`,
+        },
+        {
+          title: "和 Throughput 的关系",
+          body: html`<p>
+            Throughput 是按时间维度看 "整条链路的速率",Messages 是按类型维度看
+            "都是哪些消息在跑、各自有多大"。 两者用的都是 <code>payloadSize</code> 字段,所以
+            <code>Sum(per-type bytes) ≈ Total Bytes</code>(忽略 trace ID 去重导致的 微小差异)。
+          </p>`,
+        },
+      ],
+    };
   }
 
   // Requests (Agent → Model) explainers
@@ -1442,6 +1513,30 @@ function buildNetworkExplainerContent(
     const stats = latency.stats;
     const latencyName = latency.label;
 
+    if (key.endsWith("-min")) {
+      return {
+        title: `${latencyName} · Min`,
+        stats: [
+          { label: "Min", value: formatMs(stats.minMs) },
+          { label: "Avg", value: formatMs(stats.avgMs) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`所有 sample 中最快的那一个 —— 通常最接近 <em>真实物理层 latency</em>:
+          抖动只会让单次 ping 变慢(GC pause、send queue 堆积、tab throttling),不会比
+          实际链路更快。${latencyExplainerIntro(latency.latencyKey)}`,
+        sections: [
+          {
+            title: "怎么解读",
+            body: html`<p>
+              Min 是物理链路本身的 "下限" 估计。如果 Min 接近 Avg / p50,说明链路稳定; 如果 Avg / p50
+              远高于 Min,说明经常被抖动拉慢(典型情况:event loop 拥堵、 Wi-Fi 重传、Tailscale
+              中继切换)。
+            </p>`,
+          },
+          latencySourceSection(latency.latencyKey),
+        ],
+      };
+    }
     if (key.endsWith("-avg")) {
       return {
         title: `${latencyName} · Average`,
@@ -1453,17 +1548,20 @@ function buildNetworkExplainerContent(
         sections: [
           {
             title: "计算公式",
-            body: html`<p><code>avg = sum(latencyMs) / count</code>。</p>
+            body: html`<p>
+                <code>avg = sum(oneWayMs) / count</code>,其中每个 <code>oneWayMs</code> = 一次 ping
+                的 <code>(t3 − t0) / 2</code>。
+              </p>
               <p class="pm-explainer-mini">
-                当前:${stats.count} 个 sample,平均 <strong>${formatMs(stats.avgMs)}</strong>。
+                当前:${stats.count} 个 ping sample,平均 <strong>${formatMs(stats.avgMs)}</strong>。
               </p>`,
           },
           latencySourceSection(latency.latencyKey),
           {
             title: "什么时候 avg 会失真",
             body: html`<p>
-              如果有少量极慢的请求(冷启动、超时重试),avg 会被它们拉高很多。 这种情况看
-              <strong>p50</strong>(中位数)更能反映"常态"。
+              如果有少量极慢的 ping(GC pause、网络抖动),avg 会被它们拉高很多。 这种情况看
+              <strong>p50</strong>(中位数)或 <strong>Min</strong> 更能反映 "常态" 的链路质量。
             </p>`,
           },
         ],
@@ -1605,21 +1703,20 @@ function latencyExplainerIntro(latencyKey: string): TemplateResult {
       return html`这里测量的是 assistant 流式输出本身的 <strong>持续时间</strong>:从 model
         回出第一段 assistant 内容,到下一个 tool call(或 lifecycle end)之间的窗口。`;
     case "lat-op-gw":
-      return html`这里测量的是 <strong>Operator → Gateway</strong> 单向 wire latency: operator 把 WS
-        frame 发出的瞬间(<code>frame.sentAt</code>)到 gateway 收到的瞬间
-        (<code>Date.now()</code>)之间的差值。`;
+      return html`这里测量的是 <strong>Operator → Gateway</strong> 方向的单向 latency, 来源是专用的
+        <code>ping.peer-to-gw</code> RPC:operator 每 10s 发起一次 ping, 用自己的时钟测出 RTT,再除以
+        2 作为单向延迟估计 —— <em>不依赖</em> 双方时钟同步, 也不假设上下行对称。`;
     case "lat-gw-op":
-      return html`这里显示的是 <strong>Gateway → Operator</strong> 方向的 latency。 因为 gateway
-        拿不到 operator 端的 recv 时间,我们 <em>对称地</em> 借用反向 (operator → gateway)的 one-way
-        数据来估计 —— 在 LAN / Tailscale 这种链路上 通常上下行延迟非常接近,所以这是一个合理的近似。`;
+      return html`这里测量的是 <strong>Gateway → Operator</strong> 方向的单向 latency, 来源是专用的
+        <code>ping.gw-to-peer</code> 事件 + <code>ping.gw-to-peer.ack</code> 回执: gateway 每 10s
+        推一条 ping,用自己的时钟测出 RTT,再除以 2。 与正向独立测量,不再靠 "对称估计"。`;
     case "lat-node-gw":
-      return html`这里测量的是 <strong>Node → Gateway</strong> 单向 wire latency: node 把 WS frame
-        发出的瞬间(<code>frame.sentAt</code>)到 gateway 收到的瞬间之间 的差值。`;
+      return html`这里测量的是 <strong>Node → Gateway</strong> 方向的单向 latency, 来源是专用的
+        <code>ping.peer-to-gw</code> RPC:node 每 10s 发起一次 ping, 用自己的时钟测出 RTT,再除以 2。`;
     case "lat-gw-node":
-      return html`这里显示的是 <strong>Gateway → Node</strong> 方向的 latency。 因为 gateway 拿不到
-        node 端的 recv 时间,我们 <em>对称地</em> 借用反向 (node → gateway)的 one-way
-        数据来估计。一般场景下两个方向的链路延迟非常接近, 所以这是一个合理的近似;真要精确测量,需要
-        node 把 "我观测到的 gateway → node 延迟" 反向汇报回来。`;
+      return html`这里测量的是 <strong>Gateway → Node</strong> 方向的单向 latency, 来源是专用的
+        <code>ping.gw-to-peer</code> 事件 + <code>ping.gw-to-peer.ack</code> 回执: gateway 每 10s
+        推一条 ping,用自己的时钟测出 RTT,再除以 2。 两个方向互相独立,各自用自己的时钟测量。`;
     default:
       return html``;
   }
@@ -1653,31 +1750,44 @@ function latencySourceSection(latencyKey: string): {
       return {
         title: "One-way 是怎么算出来的",
         body: html`<p>
-            每个 WS frame envelope 上都带有发送方的 <code>sentAt</code>(发送时刻的 wall clock, ms
-            since epoch)。Gateway 在收到 frame 时记下 <code>recvTs = Date.now()</code>, one-way
-            latency = <code>recvTs - sentAt</code>。整套计算在
-            <code>protocol-trace-store.captureTrace</code> 完成,结果存在 trace 上的
-            <code>oneWayLatencyMs</code> 字段里;UI 端的 <code>computeWsOneWayLatency</code> 再按
-            source 聚合。
+            来源是专用的
+            <strong>peer → gateway ping</strong>(<code>src/gateway/protocol/schema/ping.ts</code>)。
+            Peer(operator 或 node)每
+            <strong>${Math.round(/* PING_INTERVAL_MS */ 10000 / 1000)} 秒</strong>
+            发起一次 <code>ping.peer-to-gw</code> RPC:记下发送时刻 <code>t0</code>, gateway
+            立刻回包,peer 收到回包时记下 <code>t3</code>。 单向延迟 = <code>(t3 − t0) / 2</code>。
           </p>
           <p>
-            <strong>前提:</strong>各端时钟必须同步(NTP)。如果时钟差几百毫秒,one-way
-            数字会偏移那么多。Gateway 端会自动把 <em>负值</em> 钳到 0,把
-            <em>明显是 stale 的大正值</em>(超过 60s)丢弃。
+            <strong>不依赖时钟同步</strong>:整个 RTT 都用 peer 自己的时钟测, 两次读时间差只跟 peer
+            的 monotonic clock 有关,跟 gateway 端时钟差多少无关。
+          </p>
+          <p>
+            样本点放在 controller 侧的 <code>pingSamples[source].forward</code> 缓冲里, UI 端的
+            <code>computePingLatencyStats</code> 再算出 min / avg / p50 / p95 / peak。
           </p>`,
       };
     case "lat-gw-op":
     case "lat-gw-node":
       return {
-        title: "为什么 gw → peer 这边只能用 symmetric 估计",
+        title: "One-way 是怎么算出来的",
         body: html`<p>
-            打点公式 <code>recvTs - sentAt</code> 只能在收到 frame 的一端跑。 Gateway 对 outbound
-            frame 没有 peer 端的 recv 时间,因此这个方向 <em>无法直接 测量</em>。
+            来源是专用的
+            <strong>gateway → peer ping</strong>(<code>src/gateway/protocol/schema/ping.ts</code>)。
+            Gateway 每
+            <strong>${Math.round(/* PING_INTERVAL_MS */ 10000 / 1000)} 秒</strong>
+            广播一条 <code>ping.gw-to-peer</code> 事件:记下发送时刻 <code>t0</code>, peer
+            收到后立刻发回 <code>ping.gw-to-peer.ack</code>,gateway 收到 ack 时记下
+            <code>t3</code>。 单向延迟 = <code>(t3 − t0) / 2</code>。
           </p>
           <p>
-            目前的近似:把反向(peer → gateway)的 one-way 数据展示在这里,假设上下行链路
-            延迟对称。如果之后想要真正的双向独立测量,可以让 peer 把 "我观测到的 gateway → peer
-            one-way" 周期性回报,gateway 端单独存一份再展示。
+            <strong>与正向独立测量,不再靠对称估计</strong>:这个方向所有时间戳都用 gateway
+            自己的时钟,所以不依赖时钟同步,也不假设上下行对称 —— 适合
+            链路非对称的场景(例如上下行带宽差异、Tailscale 中继路径不一致)。
+          </p>
+          <p>
+            Peer 收到 ping 的处理时间会从 RTT 里减掉(peer 在 ack 里上报
+            <code>peerProcessingMs</code>),所以 peer 端 GC pause / event-loop
+            阻塞不会被算成网络延迟。
           </p>`,
       };
     default:
@@ -2635,7 +2745,7 @@ function renderMessagesBarChartSvg(
   colorMap: Map<string, string>,
 ): TemplateResult {
   if (data.bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:200px;line-height:200px;">
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
       Waiting for first message...
     </div>`;
   }
@@ -2644,7 +2754,7 @@ function renderMessagesBarChartSvg(
   const PAD_T = 14;
   const PAD_B = 28;
   const W = 460;
-  const H = 220;
+  const H = 260;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const bars = data.bars;
@@ -2668,7 +2778,7 @@ function renderMessagesBarChartSvg(
   const barWidth = 2;
   return html`
     <div class="pm-chart-block">
-      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg">
+      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
         ${yGridLines.map(
           (g) => svg`
             <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
@@ -2789,41 +2899,9 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
     </div>
 
     ${requestsBlock} ${responsesBlock}
-
-    <div class="pm-net-section-title">Throughput</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Peak",
-        `${formatBytes(peak)}/s`,
-        `${samples.length} samples`,
-        openExp("throughput-peak"),
-      )}
-      ${renderNetStatCard(
-        "Average",
-        `${formatBytes(avg)}/s`,
-        samples.length > 0 ? `over ${samples.length} buckets` : "no samples",
-        openExp("throughput-avg"),
-      )}
-      ${renderNetStatCard(
-        "Total Bytes",
-        formatBytes(totalBytes),
-        "since session start",
-        openExp("throughput-total"),
-      )}
-      ${renderNetStatCard(
-        "Last Activity",
-        lastTs ? new Date(lastTs).toLocaleTimeString("en-US", { hour12: false }) : "—",
-        lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "no traffic yet",
-        openExp("throughput-last"),
-      )}
-    </div>
-
-    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color)}
     ${latency
       ? html`
-          <div class="pm-net-section-title" style="margin-top:14px;">
-            Latency · ${latency.label}
-          </div>
+          <div class="pm-net-section-title">Latency · ${latency.label}</div>
           <div class="pm-net-stat-grid">
             ${renderNetStatCard(
               "Min",
@@ -2857,7 +2935,6 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
             )}
           </div>
           ${renderLatencyChartSvg(latency.label, latency.stats, meta.color)}
-          ${renderMessagesSection(net, props.networkDirection, meta.color, openExp)}
         `
       : html`
           <div class="pm-net-no-latency">
@@ -2866,6 +2943,37 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
             <strong>Agent → Model</strong> 或 <strong>Model → Agent</strong> 标签页。
           </div>
         `}
+    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp)}
+
+    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Peak",
+        `${formatBytes(peak)}/s`,
+        `${samples.length} samples`,
+        openExp("throughput-peak"),
+      )}
+      ${renderNetStatCard(
+        "Average",
+        `${formatBytes(avg)}/s`,
+        samples.length > 0 ? `over ${samples.length} messages` : "no samples",
+        openExp("throughput-avg"),
+      )}
+      ${renderNetStatCard(
+        "Total Bytes",
+        formatBytes(totalBytes),
+        "since session start",
+        openExp("throughput-total"),
+      )}
+      ${renderNetStatCard(
+        "Last Activity",
+        lastTs ? new Date(lastTs).toLocaleTimeString("en-US", { hour12: false }) : "—",
+        lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "no traffic yet",
+        openExp("throughput-last"),
+      )}
+    </div>
+
+    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color)}
   `;
 }
 
