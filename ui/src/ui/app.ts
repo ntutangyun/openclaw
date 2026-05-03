@@ -581,8 +581,7 @@ export class OpenClawApp extends LitElement {
     | "gw-to-op"
     | "gw-to-node"
     | "node-to-gw"
-    | "agent-to-model"
-    | "model-to-agent" = "op-to-gw";
+    | "agent-llm" = "op-to-gw";
   @state() protocolNetworkExplainer: string | null = null;
 
   client: GatewayBrowserClient | null = null;

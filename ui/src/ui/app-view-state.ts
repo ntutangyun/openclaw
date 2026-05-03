@@ -406,13 +406,7 @@ export type AppViewState = {
     protocolUsageExplainer: string | null;
     protocolMonitoringPaused: boolean;
     protocolControllerStateVersion: number;
-    protocolNetworkDirection:
-      | "op-to-gw"
-      | "gw-to-op"
-      | "gw-to-node"
-      | "node-to-gw"
-      | "agent-to-model"
-      | "model-to-agent";
+    protocolNetworkDirection: "op-to-gw" | "gw-to-op" | "gw-to-node" | "node-to-gw" | "agent-llm";
     protocolNetworkExplainer: string | null;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];

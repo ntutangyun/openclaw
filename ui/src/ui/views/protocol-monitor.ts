@@ -7,7 +7,7 @@ import type {
   CoalescedEntry,
   MessageTypeStats,
   LlmCallBar,
-  LlmCallSection,
+  LlmPerCallSample,
   MessageBar,
   MessagesDirection,
   NetworkStats,
@@ -44,13 +44,7 @@ import type { UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 export type ProtocolMonitorSubTab = "protocol" | "terminology" | "settings";
 
-export type NetworkDirection =
-  | "op-to-gw"
-  | "gw-to-op"
-  | "gw-to-node"
-  | "node-to-gw"
-  | "agent-to-model"
-  | "model-to-agent";
+export type NetworkDirection = "op-to-gw" | "gw-to-op" | "gw-to-node" | "node-to-gw" | "agent-llm";
 
 export type ProtocolMonitorProps = {
   traces: ProtocolTraceRecord[];
@@ -1520,12 +1514,69 @@ function buildNetworkExplainerContent(
     };
   }
 
-  // LLM Calls (per-model card click on agent|model tabs).
+  // LLM Calls (per-model card click on the merged agent|model tab).
   if (key.startsWith("llm-calls-")) {
-    return buildLlmCallsExplainer(key, net, props.networkDirection);
+    return buildLlmCallsExplainer(key, net);
   }
 
-  // Latency keys
+  // Agent|Model TTFT latency cards click through to the same handler the
+  // wire-pair latency cards use, but the agent-llm tab doesn't go through
+  // selectDirectionLatency (which returns null for it). Surface stats from
+  // net.agentLlm.ttft directly.
+  if (props.networkDirection === "agent-llm" && key.startsWith("lat-ttft")) {
+    const stats = net.agentLlm.ttft;
+    const latencyName = "TTFT — time-to-first-token";
+    if (key.endsWith("-min")) {
+      return {
+        title: `${latencyName} · Min`,
+        stats: [
+          { label: "Min", value: formatMs(stats.minMs) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`所有 TTFT sample 中最快的一次。每次 LLM call 贡献一个 sample (<code
+            >firstAssistantTs − requestTs</code
+          >)。`,
+        sections: [],
+      };
+    }
+    if (key.endsWith("-avg")) {
+      return {
+        title: `${latencyName} · Avg`,
+        stats: [
+          { label: "Avg", value: formatMs(stats.avgMs) },
+          { label: "Samples", value: String(stats.count) },
+        ],
+        intro: html`所有 TTFT sample 的算术平均。`,
+        sections: [],
+      };
+    }
+    if (key.endsWith("-p50")) {
+      return {
+        title: `${latencyName} · p50`,
+        stats: [{ label: "p50", value: formatMs(stats.p50Ms) }],
+        intro: html`TTFT 中位数 —— 比 avg 更能反映 "常态" 下 model 多久开始流式输出。`,
+        sections: [],
+      };
+    }
+    if (key.endsWith("-p95")) {
+      return {
+        title: `${latencyName} · p95`,
+        stats: [{ label: "p95", value: formatMs(stats.p95Ms) }],
+        intro: html`TTFT 95% 百分位。100 次 call 里有 95 次比这个值快、5 次比这个值慢。`,
+        sections: [],
+      };
+    }
+    if (key.endsWith("-peak")) {
+      return {
+        title: `${latencyName} · Peak`,
+        stats: [{ label: "Peak", value: formatMs(stats.peakMs) }],
+        intro: html`所有 TTFT sample 中最慢的一次 —— 通常是 cold start 或 provider 拥塞。`,
+        sections: [],
+      };
+    }
+  }
+
+  // Latency keys (wire-pair tabs)
   const latency = selectDirectionLatency(net, props.networkDirection);
   if (latency && key.startsWith(latency.latencyKey)) {
     const stats = latency.stats;
@@ -1688,23 +1739,14 @@ function transportSection(direction: NetworkDirection): {
           自己的 RPC / event 协议。Throughput 卡片统计的是这些 WS 帧的 payload 字节。
         </p>`,
       };
-    case "agent-to-model":
+    case "agent-llm":
       return {
         title: "这条方向用什么 transport",
         body: html`<p>
-          Agent → Model 走的是 <strong>HTTP/HTTPS</strong>,不是 WebSocket。 每次 LLM 调用 = 一次
-          HTTPS POST(请求体里有 system prompt、transcript、 tool schema 等)。Throughput
-          卡片记录的是这次 HTTP 请求体的 payload 字节(由 agent 在发出请求时打点 trace)。
-        </p>`,
-      };
-    case "model-to-agent":
-      return {
-        title: "这条方向用什么 transport",
-        body: html`<p>
-          Model → Agent 是 <strong>SSE(Server-Sent Events)</strong> 流, 构筑在 Agent → Model 那次
-          HTTPS 响应之上。Model 把 assistant 的 token、 tool call、stop_reason 等以一连串 SSE
-          事件回流。Throughput 卡片记录的是 每个 SSE 事件帧的 payload 字节(由 agent 在接收时打点
-          trace)。
+          Agent ↔ Model 走的是 <strong>HTTP/HTTPS</strong> + <strong>SSE</strong>。 每次 LLM 调用 =
+          一次 HTTPS POST(请求体里有 system prompt、transcript、tool schema 等), response 通过
+          Server-Sent Events 流回(每帧 = 一段 assistant delta)。 这一页把请求 + 整个 SSE 流当作
+          <em>一次 call</em> 一起统计。
         </p>`,
       };
     default:
@@ -2595,15 +2637,9 @@ const DIRECTION_META: DirectionMeta[] = [
     color: "#16a34a",
   },
   {
-    id: "agent-to-model",
-    shortLabel: "Agent → Model",
-    longLabel: "Agent (AP) → Model",
-    color: "#f59e0b",
-  },
-  {
-    id: "model-to-agent",
-    shortLabel: "Model → Agent",
-    longLabel: "Model → Agent (AP)",
+    id: "agent-llm",
+    shortLabel: "Agent ↔ Model",
+    longLabel: "Agent ↔ Model (LLM call lifecycle)",
     color: "#a855f7",
   },
 ];
@@ -2622,14 +2658,9 @@ function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): Thr
       return net.gatewayNode.forward;
     case "node-to-gw":
       return net.gatewayNode.reverse;
-    // Agent ↔ Model uses per-LLM-call throughput rather than bucket-aggregated
-    // bytes/sec so each bar represents one full call rather than smearing
-    // across SSE deltas. Matches the wire-pair design: per-message everything.
-    case "agent-to-model":
-      return net.agentLlmCallThroughput.request;
-    case "model-to-agent":
-      return net.agentLlmCallThroughput.response;
     default:
+      // agent-llm has its own dedicated renderer (renderAgentLlmContent)
+      // and does not flow through this wire-pair throughput selector.
       return [];
   }
 }
@@ -2668,19 +2699,8 @@ function selectDirectionLatency(
         label: "Gateway → Node · one-way (peer-measured)",
         latencyKey: "lat-gw-node",
       };
-    case "agent-to-model":
-      return {
-        stats: net.agentLlmTtft,
-        label: "TTFT — time-to-first-token",
-        latencyKey: "lat-ttft",
-      };
-    case "model-to-agent":
-      return {
-        stats: net.agentLlmGeneration,
-        label: "Generation — assistant streaming duration",
-        latencyKey: "lat-gen",
-      };
     default:
+      // agent-llm has its own renderer; latency lives in net.agentLlm.ttft.
       return null;
   }
 }
@@ -2752,28 +2772,28 @@ function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
       tsValues.push(arr[0].ts, arr[arr.length - 1].ts);
     }
   };
-  // Throughput samples (per direction, both forward and reverse).
+  // Wire-pair throughput samples (forward + reverse for each pair).
   pushSeries(net.operatorGateway.forward);
   pushSeries(net.operatorGateway.reverse);
   pushSeries(net.gatewayNode.forward);
   pushSeries(net.gatewayNode.reverse);
-  pushSeries(net.agentLlm.forward);
-  pushSeries(net.agentLlm.reverse);
-  // Latency samples (one stats object per direction; .samples is the array).
+  // Wire-pair latency samples (one stats object per direction).
   pushSeries(net.operatorGatewayOneWayLatency.samples);
   pushSeries(net.gatewayOperatorOneWayLatency.samples);
   pushSeries(net.nodeGatewayOneWayLatency.samples);
   pushSeries(net.gatewayNodeOneWayLatency.samples);
-  pushSeries(net.agentLlmTtft.samples);
-  pushSeries(net.agentLlmGeneration.samples);
-  // Messages bars (only the 4 wire pair directions have these).
+  // Wire-pair messages bars.
   pushSeries(net.operatorGatewayMessages.forward.bars);
   pushSeries(net.operatorGatewayMessages.reverse.bars);
   pushSeries(net.gatewayNodeMessages.forward.bars);
   pushSeries(net.gatewayNodeMessages.reverse.bars);
-  // LLM call bars (only the 2 agent-llm directions have these).
-  pushSeries(net.agentLlmCalls.request.bars);
-  pushSeries(net.agentLlmCalls.response.bars);
+  // Agent ↔ Model: every per-call series in the merged tab.
+  pushSeries(net.agentLlm.requests.bars);
+  pushSeries(net.agentLlm.ttft.samples);
+  pushSeries(net.agentLlm.sse.perCallHz);
+  pushSeries(net.agentLlm.sse.perCallAvgBytes);
+  pushSeries(net.agentLlm.tools.perCallToolCount);
+  pushSeries(net.agentLlm.responses.perCallBytes);
   if (tsValues.length === 0) {
     return undefined;
   }
@@ -3036,21 +3056,6 @@ function renderMessagesSection(
   `;
 }
 
-/**
- * Pick the LlmCallSection that drives the agent|model monitor for the given
- * direction tab. Returns null for non-agent-llm directions.
- */
-function selectDirectionLlmCalls(net: NetworkStats, id: NetworkDirection): LlmCallSection | null {
-  switch (id) {
-    case "agent-to-model":
-      return net.agentLlmCalls.request;
-    case "model-to-agent":
-      return net.agentLlmCalls.response;
-    default:
-      return null;
-  }
-}
-
 function renderLlmCallBarChartSvg(
   bars: LlmCallBar[],
   colorMap: Map<string, string>,
@@ -3219,71 +3224,381 @@ function handleLlmCallBarHover(
   tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
 }
 
-function renderLlmCallsSection(
-  net: NetworkStats,
-  direction: NetworkDirection,
+/**
+ * Generic line chart for the agent|model tab's per-call series (SSE Hz,
+ * bytes/SSE, tool count, response bytes). Each sample is one LLM call —
+ * x = ts, y = value, with hover crosshair + tooltip showing the formatted
+ * value and the call's timestamp. Y-axis label uses `formatY`; tooltip
+ * uses `tooltipLabel` to describe what's being measured.
+ */
+function renderLineChart(
+  samples: LlmPerCallSample[],
   color: string,
-  openExp: (key: string) => () => void,
+  formatY: (v: number) => string,
+  tooltipLabel: string,
   timeWindow?: TimeWindow,
-): TemplateResult | typeof nothing {
-  const data = selectDirectionLlmCalls(net, direction);
-  if (!data) {
-    return nothing;
+): TemplateResult {
+  if (samples.length === 0) {
+    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+      Waiting for first sample...
+    </div>`;
   }
-  const totalCount = data.cards.reduce((a, c) => a + c.count, 0);
-  const sectionTitle =
-    direction === "agent-to-model" ? "LLM Calls (request)" : "LLM Calls (response)";
-  if (data.cards.length === 0) {
-    return html`
-      <div class="pm-net-section-title" style="margin-top:14px;">
-        ${sectionTitle} · ${totalCount} total
-      </div>
-      <div class="pm-chart-empty" style="height:80px;line-height:80px;">
-        Waiting for first LLM call to complete...
-      </div>
-    `;
-  }
-  // Stable color per model so bars and legend (and cards' left border) align.
-  const colorMap = buildMessageTypeColorMap(data.cards.map((c) => c.model));
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 260;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const localMin = samples[0].ts;
+  const localMax =
+    samples.length > 1 ? (samples[samples.length - 1]?.ts ?? localMin + 1) : localMin + 1;
+  const minTs = timeWindow?.minTs ?? localMin;
+  const maxTs = timeWindow?.maxTs ?? localMax;
+  const tsRange = Math.max(1, maxTs - minTs);
+  const maxVal = Math.max(...samples.map((s) => s.value), 1);
+  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
+  const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
+  const yGridCount = 4;
+  const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxVal / yGridCount) * (i + 1);
+    return { y: toY(val), label: formatY(val) };
+  });
+  const xTickCount = 5;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
+    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
+    return { x: toX(ts), label: chartTimeLabel(ts) };
+  });
+  const linePoints = samples.map((s) => `${toX(s.ts)},${toY(s.value)}`).join(" ");
+  const areaPoints = `${toX(localMin)},${PAD_T + plotH} ${linePoints} ${toX(localMax)},${PAD_T + plotH}`;
+  const chartId = `linechart-${(samples[0]?.ts ?? 0).toString(36)}-${tooltipLabel.replace(/\W/g, "")}`;
   return html`
-    <div class="pm-net-section-title" style="margin-top:14px;">
-      ${sectionTitle} · ${totalCount} total
-    </div>
-    <div class="pm-message-cards">
-      ${data.cards.map(
-        (c) => html`
-          <button
-            class="pm-message-card"
-            style="border-left-color:${colorMap.get(c.model) ?? color};"
-            @click=${openExp(`llm-calls-${c.model}`)}
-          >
-            <div class="pm-message-card-type" title=${c.model}>${c.model}</div>
-            <div class="pm-message-card-count">${c.count}</div>
-            <div class="pm-message-card-sub">
-              ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
-            </div>
-          </button>
-        `,
-      )}
-    </div>
-    ${renderLlmCallBarChartSvg(data.bars, colorMap, timeWindow)}
-    <div class="pm-message-legend">
-      ${data.cards.map(
-        (c) => html`
-          <span class="pm-message-legend-item">
-            <span
-              class="pm-message-legend-swatch"
-              style="background:${colorMap.get(c.model) ?? color};"
-            ></span>
-            <span class="pm-message-legend-label">${c.model}</span>
-          </span>
-        `,
-      )}
+    <div class="pm-chart-block">
+      <div
+        class="pm-chart-wrap"
+        @mousemove=${(e: MouseEvent) =>
+          handleLineChartHover(
+            e,
+            samples,
+            formatY,
+            tooltipLabel,
+            minTs,
+            tsRange,
+            maxVal,
+            PAD_L,
+            plotW,
+            plotH,
+            PAD_T,
+            H,
+            W,
+          )}
+        @mouseleave=${handleChartLeave}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${yGridLines.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+            `,
+          )}
+          <polygon points="${areaPoints}" fill="${color}" opacity="0.15" />
+          <polyline
+            points="${linePoints}"
+            fill="none"
+            stroke="${color}"
+            stroke-width="1.6"
+            stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"
+          />
+          ${samples.map(
+            (s) => svg`
+              <circle cx="${toX(s.ts)}" cy="${toY(s.value)}" r="3.5"
+                fill="${color}" stroke="#ffffff" stroke-width="1" opacity="0.95" />
+            `,
+          )}
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
     </div>
   `;
 }
 
+function handleLineChartHover(
+  e: MouseEvent,
+  samples: LlmPerCallSample[],
+  formatY: (v: number) => string,
+  tooltipLabel: string,
+  minTs: number,
+  tsRange: number,
+  maxVal: number,
+  padL: number,
+  plotW: number,
+  plotH: number,
+  padT: number,
+  chartH: number,
+  chartW: number,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  if (xRatio < 0 || xRatio > 1) {
+    handleChartLeave(e);
+    return;
+  }
+  const hoverTs = minTs + xRatio * tsRange;
+  let nearest = samples[0];
+  let nearestDist = Infinity;
+  for (const s of samples) {
+    const d = Math.abs(s.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = s;
+    }
+  }
+  const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
+  const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
+  if (!tip || !cross || !nearest) {
+    return;
+  }
+  const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
+  const padLPct = (padL / chartW) * 100;
+  const plotWPct = (plotW / chartW) * 100;
+  const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
+  cross.style.display = "block";
+  cross.style.left = `${crossLeftPct}%`;
+  tip.style.display = "block";
+  const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
+    hour12: false,
+    fractionalSecondDigits: 1,
+  });
+  const extraStr =
+    nearest.extra !== undefined
+      ? `<br/><span style="color:#6b7280;">${tooltipLabel === "Hz" ? "events" : "events"}:</span> ${nearest.extra}`
+      : "";
+  tip.innerHTML =
+    `<b>${formatY(nearest.value)}</b> <span style="color:#9ca3af;">${tooltipLabel}</span>${extraStr}<br/>` +
+    `<span style="color:#9ca3af;">${time}</span>`;
+  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
+  tip.style.left = `${tipLeft}%`;
+  const nearestYPct = padT + plotH - (nearest.value / maxVal) * plotH;
+  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
+}
+
+function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
+  const meta = getDirectionMeta(props.networkDirection);
+  const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
+  const timeWindow = computeGlobalTimeWindow(net);
+  const reqs = net.agentLlm.requests;
+  const ttft = net.agentLlm.ttft;
+  const sse = net.agentLlm.sse;
+  const tools = net.agentLlm.tools;
+  const responses = net.agentLlm.responses;
+
+  const reqColorMap = buildMessageTypeColorMap(reqs.cards.map((c) => c.model));
+  const formatHz = (v: number) => `${v.toFixed(2)} Hz`;
+  const formatBytesShort = (v: number) => formatBytes(v);
+  const formatToolCount = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+
+  return html`
+    <div class="pm-net-direction-header">
+      <span class="pm-dot" style="background:${meta.color};"></span>
+      <strong>${meta.longLabel}</strong>
+    </div>
+
+    <!-- Section 1: LLM Requests (HTTP requests, surfaced immediately) -->
+    <div class="pm-net-section-title">LLM Requests · ${reqs.totalRequests} total</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Total",
+        String(reqs.totalRequests),
+        "since session start",
+        openExp("llm-req-total"),
+      )}
+      ${renderNetStatCard(
+        "Avg",
+        formatBytes(reqs.averageBytes),
+        "per request",
+        openExp("llm-req-avg"),
+      )}
+      ${renderNetStatCard("Min", formatBytes(reqs.minBytes), "smallest", openExp("llm-req-min"))}
+      ${renderNetStatCard("Max", formatBytes(reqs.maxBytes), "largest", openExp("llm-req-max"))}
+    </div>
+    ${reqs.cards.length > 0
+      ? html`
+          <div class="pm-message-cards">
+            ${reqs.cards.map(
+              (c) => html`
+                <button
+                  class="pm-message-card"
+                  style="border-left-color:${reqColorMap.get(c.model) ?? meta.color};"
+                  @click=${openExp(`llm-calls-${c.model}`)}
+                >
+                  <div class="pm-message-card-type" title=${c.model}>${c.model}</div>
+                  <div class="pm-message-card-count">${c.count}</div>
+                  <div class="pm-message-card-sub">
+                    ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+                  </div>
+                </button>
+              `,
+            )}
+          </div>
+        `
+      : nothing}
+    ${renderLlmCallBarChartSvg(reqs.bars, reqColorMap, timeWindow)}
+    ${reqs.cards.length > 0
+      ? html`
+          <div class="pm-message-legend">
+            ${reqs.cards.map(
+              (c) => html`
+                <span class="pm-message-legend-item">
+                  <span
+                    class="pm-message-legend-swatch"
+                    style="background:${reqColorMap.get(c.model) ?? meta.color};"
+                  ></span>
+                  <span class="pm-message-legend-label">${c.model}</span>
+                </span>
+              `,
+            )}
+          </div>
+        `
+      : nothing}
+
+    <!-- Section 2: TTFT (per-request) -->
+    <div class="pm-net-section-title" style="margin-top:14px;">TTFT · ${ttft.count} samples</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard("Min", formatMs(ttft.minMs), "best", openExp("lat-ttft-min"))}
+      ${renderNetStatCard(
+        "Avg",
+        formatMs(ttft.avgMs),
+        `${ttft.count} samples`,
+        openExp("lat-ttft-avg"),
+      )}
+      ${renderNetStatCard("p50", formatMs(ttft.p50Ms), "median", openExp("lat-ttft-p50"))}
+      ${renderNetStatCard("p95", formatMs(ttft.p95Ms), "tail", openExp("lat-ttft-p95"))}
+      ${renderNetStatCard("Peak", formatMs(ttft.peakMs), "worst", openExp("lat-ttft-peak"))}
+    </div>
+    ${renderLatencyChartSvg("TTFT", ttft, meta.color, timeWindow)}
+
+    <!-- Section 3: SSE rate + size -->
+    <div class="pm-net-section-title" style="margin-top:14px;">SSE · ${sse.totalEvents} events</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard("Total", String(sse.totalEvents), "all calls", openExp("llm-sse-total"))}
+      ${renderNetStatCard(
+        "Hz (avg)",
+        sse.averageHz === null ? "—" : `${sse.averageHz.toFixed(2)} /s`,
+        "during streaming",
+        openExp("llm-sse-hz"),
+      )}
+      ${renderNetStatCard(
+        "Avg bytes",
+        formatBytes(sse.averageBytes),
+        "per event",
+        openExp("llm-sse-avg"),
+      )}
+      ${renderNetStatCard(
+        "Min bytes",
+        formatBytes(sse.minBytes),
+        "smallest",
+        openExp("llm-sse-min"),
+      )}
+      ${renderNetStatCard(
+        "Max bytes",
+        formatBytes(sse.maxBytes),
+        "largest",
+        openExp("llm-sse-max"),
+      )}
+    </div>
+    <div class="pm-chart-subtitle">SSE rate (Hz) per LLM call</div>
+    ${renderLineChart(sse.perCallHz, meta.color, formatHz, "Hz", timeWindow)}
+    <div class="pm-chart-subtitle" style="margin-top:8px;">Avg bytes / SSE event per LLM call</div>
+    ${renderLineChart(sse.perCallAvgBytes, meta.color, formatBytesShort, "avg bytes", timeWindow)}
+
+    <!-- Section 4: Tool calls per response -->
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Tools · ${tools.totalToolCalls} total
+    </div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Total",
+        String(tools.totalToolCalls),
+        "tool calls",
+        openExp("llm-tools-total"),
+      )}
+      ${renderNetStatCard(
+        "Avg / response",
+        tools.averagePerResponse > 0 ? tools.averagePerResponse.toFixed(2) : "—",
+        "per completed response",
+        openExp("llm-tools-avg"),
+      )}
+    </div>
+    ${renderLineChart(tools.perCallToolCount, meta.color, formatToolCount, "tools", timeWindow)}
+
+    <!-- Section 5: Complete responses -->
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Complete Responses · ${responses.totalResponses} total
+    </div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Total",
+        String(responses.totalResponses),
+        "lifecycle end seen",
+        openExp("llm-resp-total"),
+      )}
+      ${renderNetStatCard(
+        "Avg bytes",
+        formatBytes(responses.averageBytes),
+        "per response",
+        openExp("llm-resp-avg"),
+      )}
+      ${renderNetStatCard(
+        "Min bytes",
+        formatBytes(responses.minBytes),
+        "smallest",
+        openExp("llm-resp-min"),
+      )}
+      ${renderNetStatCard(
+        "Max bytes",
+        formatBytes(responses.maxBytes),
+        "largest",
+        openExp("llm-resp-max"),
+      )}
+    </div>
+    ${renderLineChart(
+      responses.perCallBytes,
+      meta.color,
+      formatBytesShort,
+      "response bytes",
+      timeWindow,
+    )}
+  `;
+}
+
 function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
+  // Agent ↔ Model has its own dedicated 5-section layout (Requests, TTFT,
+  // SSE, Tools, Complete Responses) — see renderAgentLlmContent below.
+  if (props.networkDirection === "agent-llm") {
+    return renderAgentLlmContent(net, props);
+  }
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
   const latency = selectDirectionLatency(net, props.networkDirection);
@@ -3355,7 +3670,6 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
           </div>
         `}
     ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
-    ${renderLlmCallsSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
 
     <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
     <div class="pm-net-stat-grid">
@@ -3389,25 +3703,16 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   `;
 }
 
-function buildLlmCallsExplainer(
-  key: string,
-  net: NetworkStats,
-  direction: NetworkDirection,
-): ExplainerContent | null {
-  const data = selectDirectionLlmCalls(net, direction);
-  if (!data) {
-    return null;
-  }
+function buildLlmCallsExplainer(key: string, net: NetworkStats): ExplainerContent | null {
+  const data = net.agentLlm.requests;
   const model = key.slice("llm-calls-".length);
   const card = data.cards.find((c) => c.model === model);
   if (!card) {
     return null;
   }
   const totalBars = data.bars.filter((b) => b.model === model).length;
-  const view = direction === "agent-to-model" ? "request" : "response";
-  const sizeLabel = view === "request" ? "request body" : "response stream";
   return {
-    title: `${direction === "agent-to-model" ? "Agent → Model" : "Model → Agent"} · ${model}`,
+    title: `Agent ↔ Model · ${model}`,
     stats: [
       { label: "Calls", value: String(card.count) },
       { label: "Min", value: formatBytes(card.minBytes) },
@@ -3415,8 +3720,7 @@ function buildLlmCallsExplainer(
       { label: "Total", value: formatBytes(card.totalBytes) },
     ],
     intro: html`这条卡片显示模型 <code>${model}</code> 在当前 session 中累计的
-      <strong>${card.count}</strong> 次 LLM 调用。每次调用的
-      ${view === "request" ? "请求体" : "回流总字节"}范围是
+      <strong>${card.count}</strong> 次 LLM 请求。每次请求体的大小范围是
       <strong>${formatBytes(card.minBytes)}</strong> 到
       <strong>${formatBytes(card.maxBytes)}</strong>,合计
       <strong>${formatBytes(card.totalBytes)}</strong>。`,
@@ -3427,28 +3731,24 @@ function buildLlmCallsExplainer(
           一次 LLM call = 同一个 <code>runId</code> 上的「lifecycle start/request 事件 + 后续所有
           assistant SSE 事件 + lifecycle end」三段汇总。 controller 侧的
           <code>llmCallStore</code> 在 trace 进入时按 runId 累加,所以 <em>不</em> 受 trace ring
-          buffer (MAX_VISIBLE=1000) eviction 影响 —— 即便 SSE delta 把 trace buffer 顶满,这里的 call
+          buffer (MAX_VISIBLE=1000) eviction 影响。即便 SSE delta 把 trace buffer 顶满,这里的 call
           列表也不会缩水。
         </p>`,
       },
       {
         title: "Bar chart 的对应关系",
         body: html`<p>
-          条形图里每根柱子 = 一次 LLM call。横轴是 call 发起时间,纵轴是
-          ${sizeLabel}的字节数,颜色按模型稳定分配(同一模型同色,与左边色条、 底部 legend
-          对齐)。这条卡片对应的模型在条形图上一共有
+          条形图里每根柱子 = 一次 LLM 请求,横轴是请求时间,纵轴是请求体字节数,
+          颜色按模型稳定分配(同模型同色)。这条卡片对应的模型在条形图上一共有
           <strong>${totalBars}</strong> 根柱子。
         </p>`,
       },
       {
-        title: "和 Throughput 的关系",
+        title: "请求 vs 完整响应",
         body: html`<p>
-          Throughput 用的是同一个 call 的
-          ${view === "request"
-            ? "<code>requestBytes / TTFT × 1000</code>"
-            : "<code>responseBytes / generationDuration × 1000</code>"}
-          —— 一次 call 一个 sample,而不是按 SSE delta 逐帧。 这意味着 throughput 也不会被 SSE
-          数量噪声拉飞。
+          请求(本节)在 lifecycle start 一发出就进入统计 —— <em>不</em> 等 LLM 流式响应
+          完成。完整响应统计放在最下面的 "Complete Responses" 区域,只在 lifecycle end
+          到达后才计入,所以两边的 count 短期内可以不一致。
         </p>`,
       },
     ],
@@ -5150,6 +5450,14 @@ const STYLES = /* css */ `
   .pm-chart-svg--tall {
     height: auto;
     aspect-ratio: 460 / 260;
+  }
+  .pm-chart-subtitle {
+    font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 4px 0 4px;
   }
   .pm-chart-empty {
     height: 120px;

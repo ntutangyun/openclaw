@@ -305,6 +305,76 @@ export type LlmCall = {
   responseEventCount: number;
   /** Sum of all SSE event payload sizes for this call. */
   responseBytes: number;
+  /** Min single SSE event size in this call (Infinity until first event). */
+  minSseBytes: number;
+  /** Max single SSE event size in this call. */
+  maxSseBytes: number;
+  /** Number of tool calls (`stream:"tool"` start events) attributed to this run. */
+  toolCallCount: number;
+  /** True after a lifecycle `end` is observed for this run. */
+  responseComplete: boolean;
+};
+
+/**
+ * Per-call data point — one entry per LLM call. Used for line charts where
+ * the y-value isn't bytes/sec (the original ThroughputSample shape) so we
+ * keep both: `value` is the headline, `extra` is whatever supplementary
+ * number the tooltip wants to surface.
+ */
+export type LlmPerCallSample = {
+  ts: number;
+  value: number;
+  extra?: number;
+};
+
+/** Headline rollup for the "LLM Requests" section. */
+export type LlmRequestSection = {
+  totalRequests: number;
+  averageBytes: number;
+  minBytes: number;
+  maxBytes: number;
+  cards: LlmCallCard[];
+  bars: LlmCallBar[];
+};
+
+/** Headline rollup for the "SSE" section. */
+export type LlmSseSection = {
+  totalEvents: number;
+  /** Mean events/sec across all calls' streaming windows (firstTs..lastTs). */
+  averageHz: number | null;
+  averageBytes: number;
+  minBytes: number;
+  maxBytes: number;
+  /** One sample per call: y = sse/sec for that call's streaming window. */
+  perCallHz: LlmPerCallSample[];
+  /** One sample per call: y = avg bytes/sse for that call. */
+  perCallAvgBytes: LlmPerCallSample[];
+};
+
+/** Headline rollup for the "Tools" section. */
+export type LlmToolSection = {
+  totalToolCalls: number;
+  averagePerResponse: number;
+  /** One sample per LLM call: y = tool call count. */
+  perCallToolCount: LlmPerCallSample[];
+};
+
+/** Headline rollup for the "Complete Responses" section. */
+export type LlmResponseSection = {
+  totalResponses: number;
+  averageBytes: number;
+  minBytes: number;
+  maxBytes: number;
+  /** One sample per completed response: y = total response bytes. */
+  perCallBytes: LlmPerCallSample[];
+};
+
+export type AgentLlmStats = {
+  requests: LlmRequestSection;
+  ttft: LatencyStats;
+  sse: LlmSseSection;
+  tools: LlmToolSection;
+  responses: LlmResponseSection;
 };
 
 /**
@@ -337,7 +407,6 @@ export type NetworkStats = {
   totalBytesIn: number;
   totalBytesOut: number;
   operatorGateway: DirectionalThroughputSamples;
-  agentLlm: DirectionalThroughputSamples;
   gatewayNode: DirectionalThroughputSamples;
   /**
    * Per-message throughput stats for the wire pairs. Each sample is
@@ -356,10 +425,14 @@ export type NetworkStats = {
    */
   operatorGatewayMessages: DirectionalMessages;
   gatewayNodeMessages: DirectionalMessages;
-  /** Agent-LLM TTFT latency samples (one per LLM call). */
-  agentLlmTtft: LatencyStats;
-  /** Agent-LLM full generation latency samples (one per LLM call). */
-  agentLlmGeneration: LatencyStats;
+  /**
+   * Merged Agent ↔ Model rollup. Replaces the old split agent-to-model /
+   * model-to-agent direction tabs. Contains: HTTP request bars, per-call
+   * TTFT latency stats, SSE rate + size stats, tool call counts per
+   * response, and complete-response bytes — all keyed by `runId` from
+   * `llmCallStore` so they survive trace ring buffer eviction.
+   */
+  agentLlm: AgentLlmStats;
   /**
    * Operator → Gateway WS one-way latency samples, derived from
    * `frame.sentAt` stamped by the operator client. Assumes synced clocks.
@@ -382,23 +455,6 @@ export type NetworkStats = {
    * client and reported back via `protocol-traces.rx-report`.
    */
   gatewayNodeOneWayLatency: LatencyStats;
-  /** Agent → Model request (lifecycle start) rollup. */
-  requestStats: RequestStats;
-  /** Model → Agent SSE response rollup. */
-  responseStats: ResponseStats;
-  /**
-   * Per-LLM-call breakdown for the agent|model monitor "LLM Calls" section.
-   * `request` view sizes bars by request bytes (agent→model tab),
-   * `response` view sizes bars by total response bytes (model→agent tab).
-   * Decoupled from the trace ring buffer — survives SSE eviction.
-   */
-  agentLlmCalls: { request: LlmCallSection; response: LlmCallSection };
-  /**
-   * Per-LLM-call throughput series. agent→model = `requestBytes / TTFT *
-   * 1000` (one sample per call). model→agent = `responseBytes /
-   * generationDuration * 1000` (one sample per call).
-   */
-  agentLlmCallThroughput: { request: ThroughputSample[]; response: ThroughputSample[] };
 };
 
 // ---------------------------------------------------------------------------
@@ -1016,50 +1072,37 @@ function routeToDirectional(r: RouteAccumulator): DirectionalThroughputSamples {
   };
 }
 
-function buildRequestStats(): RequestStats {
-  const { total, peakSize, totalSize, latestTs, latestSize } = netState.requests;
-  return {
-    total,
-    peakPayloadSize: peakSize,
-    avgPayloadSize: total > 0 ? Math.round(totalSize / total) : 0,
-    latestTs,
-    latestPayloadSize: latestSize,
-  };
-}
-
-function buildResponseStats(): ResponseStats {
-  const { total, peakSize, totalSize, firstTs, lastTs } = netState.responses;
-  const hasSpan = firstTs !== null && lastTs !== null && lastTs > firstTs;
-  return {
-    totalEvents: total,
-    avgEventsPerSec: hasSpan ? total / ((lastTs - firstTs) / 1000) : null,
-    peakPayloadSize: peakSize,
-    avgPayloadSize: total > 0 ? Math.round(totalSize / total) : 0,
-  };
-}
-
 export function computeNetworkStats(
   traces: ProtocolTraceRecord[],
   modelFilter?: string | null,
-  runModelMap?: Map<string, string>,
+  // _runModelMap kept for callers that pass it positionally; the new
+  // per-call store carries `model` on each LlmCall entry directly so we
+  // don't need an external map. Underscore prefix suppresses unused warn.
+  _runModelMap?: Map<string, string>,
 ): NetworkStats {
   for (const t of traces) {
     ingestIntoNetwork(t);
   }
   trimNetProcessed();
 
+  // Apply model filter to TTFT samples by passing model→null when not
+  // selected; the per-call stats we build below already carry model on
+  // each sample so a downstream filter could reuse the same approach.
+  const ttftStats = buildAgentLlmTtftStats();
+  const ttftFiltered = filterLatencyByModel(ttftStats, modelFilter);
   return {
     totalBytesIn: netState.totalBytesIn,
     totalBytesOut: netState.totalBytesOut,
     operatorGateway: routeToDirectional(netState.operatorGateway),
-    agentLlm: routeToDirectional(netState.agentLlm),
     gatewayNode: routeToDirectional(netState.gatewayNode),
-    agentLlmTtft: filterLatencyByModel(computeAgentLlmTtft(traces, runModelMap), modelFilter),
-    agentLlmGeneration: filterLatencyByModel(
-      computeAgentLlmGeneration(traces, runModelMap),
-      modelFilter,
-    ),
-    // Latency now sources from dedicated 5s pings (RTT/2 in each direction)
+    agentLlm: {
+      requests: buildAgentLlmRequestSection(),
+      ttft: ttftFiltered,
+      sse: buildAgentLlmSseSection(),
+      tools: buildAgentLlmToolSection(),
+      responses: buildAgentLlmResponseSection(),
+    },
+    // Latency now sources from dedicated 10s pings (RTT/2 in each direction)
     // instead of mining functional-message sentAt. See ping.ts for design.
     operatorGatewayOneWayLatency: computePingLatencyStats("operator", "forward"),
     gatewayOperatorOneWayLatency: computePingLatencyStats("operator", "reverse"),
@@ -1088,16 +1131,6 @@ export function computeNetworkStats(
     gatewayNodeMessages: {
       forward: buildMessagesDirection(messageStore.nodeGw.forward),
       reverse: buildMessagesDirection(messageStore.nodeGw.reverse),
-    },
-    requestStats: buildRequestStats(),
-    responseStats: buildResponseStats(),
-    agentLlmCalls: {
-      request: buildLlmCallSection("request"),
-      response: buildLlmCallSection("response"),
-    },
-    agentLlmCallThroughput: {
-      request: buildLlmCallThroughput("request"),
-      response: buildLlmCallThroughput("response"),
     },
   };
 }
@@ -1530,17 +1563,21 @@ function trimLlmCallStoreIfNeeded() {
 
 /**
  * Fold a single trace into the LlmCall store. Called once per trace at
- * ingest time (dedupe via recordedLlmCallTraceIds). Handles three roles:
+ * ingest time (dedupe via recordedLlmCallTraceIds). Handles four roles:
  *
- *   - agent→llm lifecycle start/request → seed call entry, capture model +
- *     request bytes.
- *   - llm→agent assistant stream event → grow firstAssistantTs / lastAssistantTs,
- *     bump count, accumulate response bytes.
- *   - llm→agent lifecycle end → finalize lastAssistantTs (rare: signals end
- *     of stream when no further assistant deltas arrive).
+ *   - agent→llm lifecycle start/request → seed call entry (model, requestTs,
+ *     requestBytes).
+ *   - llm→agent assistant stream event → grow firstAssistantTs /
+ *     lastAssistantTs / responseEventCount / responseBytes / min/max sse bytes.
+ *   - llm→agent lifecycle end → finalize lastAssistantTs and mark
+ *     responseComplete (the signal that "section 5: complete responses"
+ *     uses to know this run is done).
+ *   - agent→gateway tool start (`stream:"tool"`, `phase:"start"`,
+ *     same runId) → bump toolCallCount.
  *
- * Skips traces missing a `runId` (can't key the call) or for runs we've
- * never seen a lifecycle start for (incomplete data).
+ * Skips traces missing a `runId`. Skips runs we've never seen a lifecycle
+ * start for (assistant / tool events arriving before the start are
+ * incomplete data, which can happen if the trace buffer started mid-call).
  */
 function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
   if (!t.id || recordedLlmCallTraceIds.has(t.id) || !t.runId) {
@@ -1548,20 +1585,20 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
   }
   const isAgentToLlm = t.source === "agent" && t.target === "llm";
   const isLlmToAgent = t.source === "llm" && t.target === "agent";
-  if (!isAgentToLlm && !isLlmToAgent) {
-    return;
-  }
+  const isToolStart =
+    t.kind === "event" && t.stream === "tool" && resolvePhase(t.payload) === "start";
 
+  // Seed the call entry on the first lifecycle start/request we see.
   if (isAgentToLlm && t.kind === "event" && t.stream === "lifecycle") {
     const phase = resolvePhase(t.payload);
     if (phase !== "start" && phase !== "request") {
+      // Other agent→llm lifecycle events (rare) — ignore.
+      recordedLlmCallTraceIds.add(t.id);
       return;
     }
     const existing = llmCallStore.get(t.runId);
     if (existing) {
-      // Multiple start/request events for the same runId — keep the first
-      // (it's the actual call boundary). Later starts likely indicate
-      // reused runIds across calls, which we treat as one logical call.
+      // Multiple start/request events for the same runId — keep the first.
       recordedLlmCallTraceIds.add(t.id);
       return;
     }
@@ -1574,12 +1611,17 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
       lastAssistantTs: null,
       responseEventCount: 0,
       responseBytes: 0,
+      minSseBytes: Number.POSITIVE_INFINITY,
+      maxSseBytes: 0,
+      toolCallCount: 0,
+      responseComplete: false,
     });
     recordedLlmCallTraceIds.add(t.id);
     trimLlmCallStoreIfNeeded();
     return;
   }
 
+  // Stream growth from llm→agent.
   if (isLlmToAgent) {
     const call = llmCallStore.get(t.runId);
     if (!call) {
@@ -1591,8 +1633,14 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
       }
       call.lastAssistantTs = t.ts;
       call.responseEventCount += 1;
-      call.responseBytes += t.payloadSize ?? 0;
-      // Backfill model from a later lifecycle event if we missed it earlier.
+      const size = t.payloadSize ?? 0;
+      call.responseBytes += size;
+      if (size > 0 && size < call.minSseBytes) {
+        call.minSseBytes = size;
+      }
+      if (size > call.maxSseBytes) {
+        call.maxSseBytes = size;
+      }
       if (!call.model) {
         const m = pickLlmCallModel(t);
         if (m) {
@@ -1606,6 +1654,7 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
       const phase = resolvePhase(t.payload);
       if (phase === "end") {
         call.lastAssistantTs = Math.max(call.lastAssistantTs ?? 0, t.ts);
+        call.responseComplete = true;
       }
       if (!call.model) {
         const m = pickLlmCallModel(t);
@@ -1618,23 +1667,50 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
     }
   }
 
+  // Tool starts can fire from agent→gateway with the same runId. The
+  // count belongs on the LLM call that triggered them (whichever was the
+  // most recent active call for this runId).
+  if (isToolStart) {
+    const call = llmCallStore.get(t.runId);
+    if (call) {
+      call.toolCallCount += 1;
+      recordedLlmCallTraceIds.add(t.id);
+    }
+    return;
+  }
+
   if (recordedLlmCallTraceIds.size > RECORDED_LLM_CALL_IDS_CAP) {
     recordedLlmCallTraceIds.clear();
   }
 }
 
-function buildLlmCallSection(view: "request" | "response"): LlmCallSection {
+/**
+ * Section 1: HTTP requests. Surfaces as soon as the lifecycle start fires —
+ * does not wait for the LLM stream to complete. Mirrors the "Messages" card
+ * + bar chart shape used on wire-pair tabs.
+ */
+function buildAgentLlmRequestSection(): LlmRequestSection {
   const cardMap = new Map<string, LlmCallCard>();
   const bars: LlmCallBar[] = [];
+  let totalBytes = 0;
+  let totalRequests = 0;
+  let minBytes = Number.POSITIVE_INFINITY;
+  let maxBytes = 0;
   for (const call of llmCallStore.values()) {
     const model = call.model ?? UNKNOWN_MODEL_LABEL;
-    const size = view === "request" ? call.requestBytes : call.responseBytes;
+    const size = call.requestBytes;
     if (size <= 0) {
-      // For "response" view, calls that haven't streamed any tokens yet
-      // get skipped — no bar makes sense. They'll appear once SSE starts.
       continue;
     }
     bars.push({ ts: call.requestTs, size, model });
+    totalRequests += 1;
+    totalBytes += size;
+    if (size < minBytes) {
+      minBytes = size;
+    }
+    if (size > maxBytes) {
+      maxBytes = size;
+    }
     const existing = cardMap.get(model);
     if (existing) {
       existing.count += 1;
@@ -1656,268 +1732,160 @@ function buildLlmCallSection(view: "request" | "response"): LlmCallSection {
     }
   }
   return {
+    totalRequests,
+    averageBytes: totalRequests > 0 ? Math.round(totalBytes / totalRequests) : 0,
+    minBytes: totalRequests > 0 ? minBytes : 0,
+    maxBytes,
     cards: Array.from(cardMap.values()).toSorted((a, b) => b.count - a.count),
     bars: bars.toSorted((a, b) => a.ts - b.ts),
   };
 }
 
 /**
- * Per-call throughput: requestBytes / TTFT for agent→model, responseBytes /
- * generationDuration for model→agent. Skips calls with missing latency
- * data (e.g. SSE never arrived) or zero payload.
+ * Section 2: TTFT latency. Same LatencyStats shape the latency chart already
+ * understands — one sample per call: `firstAssistantTs - requestTs`.
  */
-function buildLlmCallThroughput(view: "request" | "response"): ThroughputSample[] {
-  const samples: ThroughputSample[] = [];
+function buildAgentLlmTtftStats(): LatencyStats {
+  const samples: LatencySample[] = [];
   for (const call of llmCallStore.values()) {
-    if (view === "request") {
-      if (call.firstAssistantTs === null || call.requestBytes <= 0) {
-        continue;
-      }
-      const ttftMs = call.firstAssistantTs - call.requestTs;
-      if (ttftMs <= 0) {
-        continue;
-      }
-      samples.push({
-        ts: call.requestTs,
-        bytesPerSec: (call.requestBytes / ttftMs) * 1000,
-        rawBytes: call.requestBytes,
-      });
-    } else {
-      if (
-        call.firstAssistantTs === null ||
-        call.lastAssistantTs === null ||
-        call.responseBytes <= 0
-      ) {
-        continue;
-      }
-      const genMs = call.lastAssistantTs - call.firstAssistantTs;
-      if (genMs <= 0) {
-        continue;
-      }
-      samples.push({
+    if (call.firstAssistantTs === null) {
+      continue;
+    }
+    const ttftMs = call.firstAssistantTs - call.requestTs;
+    if (ttftMs <= 0) {
+      continue;
+    }
+    samples.push({
+      ts: call.requestTs,
+      latencyMs: ttftMs,
+      model: call.model ?? undefined,
+    });
+  }
+  return buildLatencyStats(samples.toSorted((a, b) => a.ts - b.ts));
+}
+
+/**
+ * Section 3: SSE rate + size. The "Hz" metric is measured ONLY across each
+ * call's actual streaming window (`firstAssistantTs..lastAssistantTs`) so
+ * idle gaps between calls don't drag the rate down. Two per-call series
+ * drive the line charts: SSE/sec (rate trend) and avg bytes/SSE (size
+ * trend).
+ */
+function buildAgentLlmSseSection(): LlmSseSection {
+  let totalEvents = 0;
+  let totalBytes = 0;
+  let minBytes = Number.POSITIVE_INFINITY;
+  let maxBytes = 0;
+  let weightedHzNumerator = 0;
+  let weightedHzDenominator = 0;
+  const perCallHz: LlmPerCallSample[] = [];
+  const perCallAvgBytes: LlmPerCallSample[] = [];
+  for (const call of llmCallStore.values()) {
+    if (call.responseEventCount === 0) {
+      continue;
+    }
+    totalEvents += call.responseEventCount;
+    totalBytes += call.responseBytes;
+    if (call.minSseBytes !== Number.POSITIVE_INFINITY && call.minSseBytes < minBytes) {
+      minBytes = call.minSseBytes;
+    }
+    if (call.maxSseBytes > maxBytes) {
+      maxBytes = call.maxSseBytes;
+    }
+    if (
+      call.firstAssistantTs !== null &&
+      call.lastAssistantTs !== null &&
+      call.lastAssistantTs > call.firstAssistantTs
+    ) {
+      const windowMs = call.lastAssistantTs - call.firstAssistantTs;
+      const hz = (call.responseEventCount / windowMs) * 1000;
+      perCallHz.push({ ts: call.firstAssistantTs, value: hz, extra: call.responseEventCount });
+      weightedHzNumerator += call.responseEventCount;
+      weightedHzDenominator += windowMs / 1000;
+    }
+    const avg = call.responseBytes / call.responseEventCount;
+    if (call.firstAssistantTs !== null) {
+      perCallAvgBytes.push({
         ts: call.firstAssistantTs,
-        bytesPerSec: (call.responseBytes / genMs) * 1000,
-        rawBytes: call.responseBytes,
+        value: avg,
+        extra: call.responseEventCount,
       });
     }
   }
-  return samples.toSorted((a, b) => a.ts - b.ts);
-}
-
-/** Max cached samples / processed-id set size. */
-const MAX_LATENCY_CACHE = 2000;
-
-function trimLatencyCache(cache: LatencySample[]) {
-  if (cache.length > MAX_LATENCY_CACHE) {
-    cache.splice(0, cache.length - MAX_LATENCY_CACHE);
-  }
-}
-
-function trimProcessedSet(processed: Set<string>) {
-  if (processed.size > MAX_LATENCY_CACHE * 4) {
-    // Keep the set from growing unboundedly; clear and let it refill
-    // (worst case: a few traces get re-processed once)
-    processed.clear();
-  }
-}
-
-/**
- * Agent-LLM TTFT: per-LLM-call time from the call boundary (lifecycle start
- * or tool end) to the first assistant stream event.
- *
- * Uses a persistent cache so samples survive trace buffer eviction.
- * Only processes traces not yet seen (by trace id).
- */
-function computeAgentLlmTtft(
-  traces: ProtocolTraceRecord[],
-  runModelMap?: Map<string, string>,
-): LatencyStats {
-  for (const t of traces) {
-    if (ttftProcessed.has(t.id)) {
-      continue;
-    }
-    ttftProcessed.add(t.id);
-
-    if (!t.runId || t.kind !== "event") {
-      continue;
-    }
-
-    // Lifecycle start: begin/reset tracking this run
-    if (t.stream === "lifecycle" && resolvePhase(t.payload) === "start") {
-      ttftRunState.set(t.runId, {
-        lastBoundaryTs: t.ts,
-        hasBoundary: true,
-        inBurst: false,
-        callIndex: 0,
-      });
-      continue;
-    }
-
-    // Tool end/result: marks a new call boundary
-    if (t.stream === "tool") {
-      const phase = resolvePhase(t.payload);
-      if (phase === "end" || phase === "result") {
-        let state = ttftRunState.get(t.runId);
-        if (!state) {
-          state = { lastBoundaryTs: t.ts, hasBoundary: true, inBurst: false, callIndex: 0 };
-          ttftRunState.set(t.runId, state);
-        } else {
-          state.lastBoundaryTs = t.ts;
-          state.hasBoundary = true;
-          state.inBurst = false;
-        }
-      }
-      continue;
-    }
-
-    // First assistant event after a boundary = TTFT for this LLM call
-    if (t.stream === "assistant") {
-      let state = ttftRunState.get(t.runId);
-      if (!state) {
-        // No boundary seen (evicted); bootstrap but can't compute TTFT
-        state = { lastBoundaryTs: t.ts, hasBoundary: false, inBurst: true, callIndex: 0 };
-        ttftRunState.set(t.runId, state);
-        continue;
-      }
-
-      if (!state.inBurst && state.hasBoundary) {
-        state.callIndex++;
-        state.inBurst = true;
-        const ttft = t.ts - state.lastBoundaryTs;
-        if (ttft > 0) {
-          ttftCache.push({
-            ts: t.ts,
-            latencyMs: ttft,
-            label: `TTFT #${state.callIndex}`,
-            model: t.runId ? runModelMap?.get(t.runId) : undefined,
-          });
-        }
-      } else if (!state.inBurst) {
-        state.inBurst = true;
-      }
-      continue;
-    }
-
-    // Lifecycle end: clean up
-    if (t.stream === "lifecycle") {
-      const phase = resolvePhase(t.payload);
-      if (phase === "end" || phase === "complete" || phase === "error") {
-        ttftRunState.delete(t.runId);
-      }
-    }
-  }
-  trimLatencyCache(ttftCache);
-  trimProcessedSet(ttftProcessed);
-  return buildLatencyStats(ttftCache);
-}
-
-/**
- * Agent-LLM generation latency: per-LLM-call duration of each assistant
- * event burst (first assistant event to last assistant event before the next
- * tool call or lifecycle end).
- *
- * Uses a persistent cache so samples survive trace buffer eviction.
- * Only processes traces not yet seen (by trace id).
- */
-function computeAgentLlmGeneration(
-  traces: ProtocolTraceRecord[],
-  runModelMap?: Map<string, string>,
-): LatencyStats {
-  const flushBurst = (state: GenRunState) => {
-    if (state.burstStartTs !== null && state.burstLastTs !== null) {
-      const duration = state.burstLastTs - state.burstStartTs;
-      if (duration > 0) {
-        genCache.push({
-          ts: state.burstLastTs,
-          latencyMs: duration,
-          label: `gen #${state.callIndex}`,
-          model: state.runId ? runModelMap?.get(state.runId) : undefined,
-        });
-      }
-    }
+  return {
+    totalEvents,
+    averageHz: weightedHzDenominator > 0 ? weightedHzNumerator / weightedHzDenominator : null,
+    averageBytes: totalEvents > 0 ? totalBytes / totalEvents : 0,
+    minBytes: totalEvents > 0 ? minBytes : 0,
+    maxBytes,
+    perCallHz: perCallHz.toSorted((a, b) => a.ts - b.ts),
+    perCallAvgBytes: perCallAvgBytes.toSorted((a, b) => a.ts - b.ts),
   };
+}
 
-  const initGenState = (runId?: string): GenRunState => ({
-    burstStartTs: null,
-    burstLastTs: null,
-    burstLastId: null,
-    callIndex: 0,
-    runId,
-  });
-
-  for (const t of traces) {
-    if (genProcessed.has(t.id)) {
-      continue;
+/**
+ * Section 4: Tool calls per response. Counts agent→gateway tool start events
+ * grouped by the LLM call (`runId`) that triggered them. Average is per
+ * COMPLETED response (responseComplete=true) so unfinished-call partial
+ * counts don't pull the average down.
+ */
+function buildAgentLlmToolSection(): LlmToolSection {
+  const perCallToolCount: LlmPerCallSample[] = [];
+  let totalToolCalls = 0;
+  let completedResponses = 0;
+  for (const call of llmCallStore.values()) {
+    totalToolCalls += call.toolCallCount;
+    if (call.responseComplete) {
+      completedResponses += 1;
     }
-    genProcessed.add(t.id);
-
-    if (!t.runId || t.kind !== "event") {
-      continue;
-    }
-
-    // Lifecycle start: begin tracking
-    if (t.stream === "lifecycle" && resolvePhase(t.payload) === "start") {
-      genRunState.set(t.runId, initGenState(t.runId));
-      continue;
-    }
-
-    // Assistant event: track burst
-    if (t.stream === "assistant") {
-      let state = genRunState.get(t.runId);
-      if (!state) {
-        state = initGenState(t.runId);
-        genRunState.set(t.runId, state);
-      }
-      if (state.burstStartTs === null) {
-        state.callIndex++;
-        state.burstStartTs = t.ts;
-      }
-      state.burstLastTs = t.ts;
-      state.burstLastId = t.id;
-      continue;
-    }
-
-    // Tool event or lifecycle end: flush current burst
-    if (t.stream === "tool" || t.stream === "lifecycle") {
-      const state = genRunState.get(t.runId);
-      if (state) {
-        flushBurst(state);
-        state.burstStartTs = null;
-        state.burstLastTs = null;
-        state.burstLastId = null;
-      }
-
-      if (t.stream === "lifecycle") {
-        const phase = resolvePhase(t.payload);
-        if (phase === "end" || phase === "complete" || phase === "error") {
-          if (state) {
-            flushBurst(state);
-          }
-          genRunState.delete(t.runId);
-        }
-      }
-    }
+    perCallToolCount.push({
+      ts: call.requestTs,
+      value: call.toolCallCount,
+    });
   }
+  return {
+    totalToolCalls,
+    averagePerResponse: completedResponses > 0 ? totalToolCalls / completedResponses : 0,
+    perCallToolCount: perCallToolCount.toSorted((a, b) => a.ts - b.ts),
+  };
+}
 
-  // Show in-progress burst as live (not persisted until complete)
-  const liveExtras: LatencySample[] = [];
-  for (const state of genRunState.values()) {
-    if (state.burstStartTs !== null && state.burstLastTs !== null) {
-      const duration = state.burstLastTs - state.burstStartTs;
-      if (duration > 0) {
-        liveExtras.push({
-          ts: state.burstLastTs,
-          latencyMs: duration,
-          label: `gen #${state.callIndex} (live)`,
-          model: state.runId ? runModelMap?.get(state.runId) : undefined,
-        });
-      }
+/**
+ * Section 5: Complete responses. Only counts calls whose lifecycle end has
+ * been observed (`responseComplete`). The bar/line chart shows
+ * responseBytes per completed call.
+ */
+function buildAgentLlmResponseSection(): LlmResponseSection {
+  const perCallBytes: LlmPerCallSample[] = [];
+  let totalResponses = 0;
+  let totalBytes = 0;
+  let minBytes = Number.POSITIVE_INFINITY;
+  let maxBytes = 0;
+  for (const call of llmCallStore.values()) {
+    if (!call.responseComplete) {
+      continue;
     }
+    totalResponses += 1;
+    totalBytes += call.responseBytes;
+    if (call.responseBytes < minBytes) {
+      minBytes = call.responseBytes;
+    }
+    if (call.responseBytes > maxBytes) {
+      maxBytes = call.responseBytes;
+    }
+    perCallBytes.push({
+      ts: call.firstAssistantTs ?? call.requestTs,
+      value: call.responseBytes,
+      extra: call.responseEventCount,
+    });
   }
-
-  trimLatencyCache(genCache);
-  trimProcessedSet(genProcessed);
-  return buildLatencyStats([...genCache, ...liveExtras]);
+  return {
+    totalResponses,
+    averageBytes: totalResponses > 0 ? Math.round(totalBytes / totalResponses) : 0,
+    minBytes: totalResponses > 0 ? minBytes : 0,
+    maxBytes,
+    perCallBytes: perCallBytes.toSorted((a, b) => a.ts - b.ts),
+  };
 }
 
 /** Clear latency + network accumulators (called when user resets traces). */
