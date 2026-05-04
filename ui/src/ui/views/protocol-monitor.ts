@@ -1696,10 +1696,11 @@ function buildNetworkExplainerContent(
         { label: "Value", value: entry.value },
         { label: "Detail", value: entry.sub },
       ],
-      intro: html`Per-LLM-call generation throughput =
-        <code>responseBytes / generationDurationMs × 1000</code>. Each call contributes one sample
-        once it has streamed at least two SSE deltas (so there's a measurable duration between first
-        and last token).`,
+      intro: html`Throughput during streaming period only =
+        <code>sseBytes / (lastSseTs − firstSseTs) × 1000</code>. Each call contributes one sample
+        only when it streamed at least two assistant SSE deltas (so there's a measurable duration
+        between first and last token). Calls whose response was purely tool-use blocks have
+        sseEventCount = 0 and don't appear here — they're tracked under TTFT instead.`,
       sections: [],
     };
   }
@@ -4126,17 +4127,19 @@ function renderAgentLlmThroughputSection(
   const tpt = callThroughput;
   if (tpt.count === 0) {
     return html`
-      <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+      <div class="pm-net-section-title" style="margin-top:14px;">Throughput during streaming</div>
       <div class="pm-chart-empty" style="height:80px;line-height:80px;">
-        Waiting for first measurable LLM call on this direction.
+        Waiting for an LLM call with a measurable streaming period (≥ 2 assistant SSE deltas with
+        non-zero duration).
       </div>
     `;
   }
   return html`
     <div class="pm-net-section-title" style="margin-top:14px;">
-      Throughput · ${tpt.count} ${tpt.count === 1 ? "call" : "calls"}
+      Throughput during streaming · ${tpt.count}
+      ${tpt.count === 1 ? "streaming period" : "streaming periods"}
     </div>
-    <div class="pm-net-subsection-title">Per-call generation throughput</div>
+    <div class="pm-net-subsection-title">Throughput during streaming period only</div>
     ${renderNetStatRow([
       {
         title: "Min",

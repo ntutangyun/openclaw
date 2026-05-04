@@ -306,14 +306,35 @@ export type LlmCall = {
   requestTs: number;
   /** Serialized request body size (lifecycle event's `data.requestSize`). */
   requestBytes: number;
-  /** First assistant SSE event ts; null until first chunk arrives. */
+  /**
+   * First "any response" ts — the first event that is observable evidence the
+   * model has started responding. Includes both assistant SSE deltas (when
+   * the model emits text) AND tool-start events (when the model goes
+   * straight to a `tool_use` block). Drives TTFT.
+   */
   firstAssistantTs: number | null;
-  /** Most recent assistant SSE event ts; tracks last activity for the call. */
+  /**
+   * Most recent "any response" ts. Same union as `firstAssistantTs` (text or
+   * tool-start). Used as the upper bound of the call's active window.
+   */
   lastAssistantTs: number | null;
-  /** SSE event count for this call (one per parsed JSONL record). */
+  /** Total response-event count (assistant SSE deltas + tool starts). */
   responseEventCount: number;
-  /** Sum of all SSE event payload sizes for this call. */
+  /** Sum of all response payload sizes (assistant SSE + tool-start args). */
   responseBytes: number;
+  /**
+   * SSE-ONLY first/last/count/bytes — used for the "Throughput during
+   * streaming" metric, which should reflect ONLY periods where the model is
+   * streaming text/tokens, not periods where it just emitted a single
+   * tool_use block. A call whose response is purely tool-start events has
+   * sseEventCount = 0 and contributes nothing to throughput, even though it
+   * has TTFT (driven by `firstAssistantTs` above). Streaming-period count =
+   * number of calls with sseEventCount ≥ 2.
+   */
+  firstSseTs: number | null;
+  lastSseTs: number | null;
+  sseEventCount: number;
+  sseBytes: number;
   /** Min single SSE event size in this call (Infinity until first event). */
   minSseBytes: number;
   /** Max single SSE event size in this call. */
@@ -1779,6 +1800,10 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
         lastAssistantTs: null,
         responseEventCount: 0,
         responseBytes: 0,
+        firstSseTs: null,
+        lastSseTs: null,
+        sseEventCount: 0,
+        sseBytes: 0,
         minSseBytes: Number.POSITIVE_INFINITY,
         maxSseBytes: 0,
         toolCallCount: 0,
@@ -1810,6 +1835,14 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
       call.responseEventCount += 1;
       const size = t.payloadSize ?? 0;
       call.responseBytes += size;
+      // SSE-only counters — used by the "Throughput during streaming"
+      // metric, which excludes tool-only calls.
+      if (call.firstSseTs === null) {
+        call.firstSseTs = t.ts;
+      }
+      call.lastSseTs = t.ts;
+      call.sseEventCount += 1;
+      call.sseBytes += size;
       if (size > 0 && size < call.minSseBytes) {
         call.minSseBytes = size;
       }
@@ -2037,36 +2070,46 @@ function buildAgentLlmStats(): AgentLlmStats {
     cards.push(c);
   }
 
-  // Per-call TTFT samples + per-call generation throughput. One sample per
-  // LLM call: TTFT = firstAssistantTs − requestTs; throughput =
-  // responseBytes / generationDurationMs * 1000 (only when the call recorded
-  // ≥ 2 response events, so there's a measurable duration). Both "response
-  // events" categories are counted: assistant SSE deltas AND tool-start
-  // events (the model's tool_use blocks decoded from the same SSE stream),
-  // so calls whose response is purely tool calls (no text preamble) still
-  // produce a TTFT sample and, when there are ≥ 2 events, a throughput
-  // sample. callThroughput drives the agent|model Throughput section.
+  // Per-call TTFT samples + per-call streaming-period throughput.
+  //
+  // TTFT — one sample per LLM call that received ANY response (assistant SSE
+  // delta OR tool-start event). Tool-only calls count: when the model goes
+  // straight to a tool_use block with no text preamble, the tool-start event
+  // is the first observable evidence of the response.
+  //
+  // Throughput during streaming — one sample per call that had a measurable
+  // STREAMING period, defined as ≥ 2 assistant SSE events with a non-zero
+  // duration between the first and last. Tool-only calls (no SSE) are
+  // excluded — emitting two tool_use blocks back-to-back isn't "streaming"
+  // in the SSE sense, and including them inflated the sample count past the
+  // user's expectation of "one sample per streaming period". Bytes used in
+  // the rate are SSE-only too (sseBytes), so the bytes/sec figure reflects
+  // actual model token-emission speed, not tool-arg payload size.
   const ttftSamples: LatencySample[] = [];
   const callThroughputSamples: ThroughputSample[] = [];
   for (const call of llmCallStore.values()) {
-    if (call.firstAssistantTs === null) {
-      continue;
+    if (call.firstAssistantTs !== null) {
+      const ttftMs = call.firstAssistantTs - call.requestTs;
+      if (ttftMs > 0) {
+        ttftSamples.push({
+          ts: call.requestTs,
+          latencyMs: ttftMs,
+          model: call.model ?? undefined,
+        });
+      }
     }
-    const ttftMs = call.firstAssistantTs - call.requestTs;
-    if (ttftMs > 0) {
-      ttftSamples.push({
-        ts: call.requestTs,
-        latencyMs: ttftMs,
-        model: call.model ?? undefined,
-      });
-    }
-    if (call.lastAssistantTs !== null && call.responseBytes > 0 && call.responseEventCount >= 2) {
-      const genMs = call.lastAssistantTs - call.firstAssistantTs;
+    if (
+      call.firstSseTs !== null &&
+      call.lastSseTs !== null &&
+      call.sseEventCount >= 2 &&
+      call.sseBytes > 0
+    ) {
+      const genMs = call.lastSseTs - call.firstSseTs;
       if (genMs > 0) {
         callThroughputSamples.push({
           ts: call.requestTs,
-          bytesPerSec: (call.responseBytes / genMs) * 1000,
-          rawBytes: call.responseBytes,
+          bytesPerSec: (call.sseBytes / genMs) * 1000,
+          rawBytes: call.sseBytes,
         });
       }
     }
