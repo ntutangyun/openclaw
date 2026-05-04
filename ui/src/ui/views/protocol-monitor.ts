@@ -2878,24 +2878,29 @@ function getDirectionMeta(id: NetworkDirection): DirectionMeta {
 }
 
 function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): ThroughputSample[] {
-  // Use the per-MESSAGE throughput samples (operatorGatewayThroughputStats /
-  // gatewayNodeThroughputStats), NOT the per-1s-bucket aggregates from
-  // routeToDirectional. Each sample here = one frame's (envelope-aware) bytes
-  // divided by its measured one-way latency, so it's comparable to the
-  // Messages section instead of being a bucket sum.
+  // Per-MESSAGE throughput samples (one ThroughputSample per frame).
   //
-  // Naming gotcha: in *ThroughputStats, `forward` always means "peer → gw"
-  // (computePeerToGwThroughput on traces) and `reverse` always means "gw →
-  // peer" (computeGwToPeerThroughput on peer-reported rxSamples). So for the
-  // node tab, "node-to-gw" maps to .forward (node is the peer) and
-  // "gw-to-node" maps to .reverse.
+  // Source split by direction:
+  //   - peer→gw (op-to-gw, node-to-gw): use messages.throughputSamples from
+  //     the messageStore. The store sees the WIDER message set (health,
+  //     polls, presence, etc.) — *ThroughputStats.forward iterates the
+  //     blocklist-filtered trace ring buffer, so on sessions whose op→gw
+  //     traffic is nearly all polls (Control UI sitting idle), it would
+  //     report 0 measured messages while the Messages section above shows
+  //     dozens. Sourcing from the store instead keeps the "N measured
+  //     messages" count consistent with the Messages totals.
+  //   - gw→peer (gw-to-op, gw-to-node): keep using *ThroughputStats.reverse
+  //     because the gateway-side trace records for outbound frames don't
+  //     carry oneWayLatencyMs (it can't observe its own arrival times). The
+  //     reverse stats are built from peer-reported rxSamples, which DO have
+  //     latencyMs.
   switch (id) {
     case "op-to-gw":
-      return net.operatorGatewayThroughputStats.forward.samples;
+      return net.operatorGatewayMessages.forward.throughputSamples;
     case "gw-to-op":
       return net.operatorGatewayThroughputStats.reverse.samples;
     case "node-to-gw":
-      return net.gatewayNodeThroughputStats.forward.samples;
+      return net.gatewayNodeMessages.forward.throughputSamples;
     case "gw-to-node":
       return net.gatewayNodeThroughputStats.reverse.samples;
     default:
@@ -3072,10 +3077,9 @@ function renderMessagesBarChartSvg(
   timeWindow?: TimeWindow,
   _fullWidth: boolean = false,
 ): TemplateResult {
-  // The Messages bar chart is the section's headline chart — render at the
-  // shorter aspect ratio (pm-chart-block--short) so it doesn't dominate the
-  // panel above the legend + cards beneath it.
-  const blockClass = "pm-chart-block pm-chart-block--short";
+  // pm-chart-block is full-width with the shorter (460/195) aspect ratio
+  // applied globally to .pm-chart-svg--tall, so no per-call class is needed.
+  const blockClass = "pm-chart-block";
   if (data.bars.length === 0) {
     return html`
       <div class="${blockClass}">
@@ -3090,7 +3094,7 @@ function renderMessagesBarChartSvg(
   const PAD_T = 14;
   const PAD_B = 28;
   const W = 460;
-  const H = 260;
+  const H = 195;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const bars = data.bars;
@@ -3453,7 +3457,7 @@ function renderAgentLlmEventChartSvg(
   timeWindow?: TimeWindow,
 ): TemplateResult {
   if (bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
+    return html`<div class="pm-chart-empty" style="height:195px;line-height:195px;">
       Waiting for first agent ↔ model event...
     </div>`;
   }
@@ -3462,7 +3466,7 @@ function renderAgentLlmEventChartSvg(
   const PAD_T = 14;
   const PAD_B = 28;
   const W = 460;
-  const H = 260;
+  const H = 195;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const localMin = bars[0]?.ts ?? 0;
@@ -4008,7 +4012,7 @@ function renderLatencyChartSvg(
   if (samples.length === 0) {
     return html`
       <div class="pm-chart-block">
-        <div class="pm-chart-empty" style="height:260px;line-height:260px;">
+        <div class="pm-chart-empty" style="height:195px;line-height:195px;">
           Waiting for data...
         </div>
       </div>
@@ -4020,7 +4024,7 @@ function renderLatencyChartSvg(
   const PAD_T = 14;
   const PAD_B = 28;
   const W = 460;
-  const H = 260;
+  const H = 195;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
 
@@ -5564,12 +5568,9 @@ const STYLES = /* css */ `
     max-width: 100%;
   }
   .pm-chart-block--short {
-    /* Used by the Messages bar chart only — the user wanted that specific
-       chart at 3/4 the height of the others (it's a headline chart that
-       sits above the section's cards/legend, not a deep-dive view). */
-  }
-  .pm-chart-block--short .pm-chart-svg--tall {
-    aspect-ratio: 460 / 195;
+    /* Backwards-compat: the global pm-chart-svg--tall aspect ratio is now
+       460/195, so this modifier is a no-op. Kept to avoid breaking any
+       external HTML exports that reference the class name. */
   }
   .pm-chart-header {
     display: flex;
@@ -5598,8 +5599,14 @@ const STYLES = /* css */ `
     height: 120px;
   }
   .pm-chart-svg--tall {
+    /* All "tall" charts (messages bar / latency line / agent|model events)
+       render at the same shorter aspect ratio. The viewBox in the SVGs is
+       set to 0 0 460 195 to match — keeping the two in sync prevents the
+       default xMidYMid-meet preserveAspectRatio from leaving empty bands on
+       the sides, which would offset mouse-hover coordinates from the
+       rendered bars. */
     height: auto;
-    aspect-ratio: 460 / 260;
+    aspect-ratio: 460 / 195;
   }
   .pm-chart-subtitle {
     font-size: 10px;
