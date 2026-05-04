@@ -1842,11 +1842,36 @@ function recordLlmCallFromTrace(t: ProtocolTraceRecord): void {
     }
   }
 
-  // Tool starts attribute to the most recent call for this runId.
+  // Tool starts attribute to the most recent call for this runId. They also
+  // count as response activity for TTFT and throughput because the model's
+  // tool_use block is part of the SAME SSE stream as text deltas — when a
+  // call's response is purely tool calls (no text preamble, common in agentic
+  // flows where the model says "I'll use bash to do X"), the tool-start
+  // event is the ONLY observable evidence of the response. Without this, the
+  // call would record TTFT=null and responseBytes=0, so its TTFT sample and
+  // its callThroughput sample would silently never get emitted.
+  //
+  // Only tool-START events count — tool-result/update events are agent-local
+  // execution output, not LLM output, and a long-running tool's result can
+  // arrive minutes after the model finished generating, which would skew the
+  // generation-throughput denominator if we let it extend lastAssistantTs.
   if (isToolStart) {
     const callKey = lastCallByRunId.get(t.runId);
     const call = callKey ? llmCallStore.get(callKey) : undefined;
     if (call) {
+      const size = t.payloadSize ?? 0;
+      if (call.firstAssistantTs === null) {
+        call.firstAssistantTs = t.ts;
+      }
+      call.lastAssistantTs = Math.max(call.lastAssistantTs ?? 0, t.ts);
+      call.responseBytes += size;
+      call.responseEventCount += 1;
+      if (size > 0 && size < call.minSseBytes) {
+        call.minSseBytes = size;
+      }
+      if (size > call.maxSseBytes) {
+        call.maxSseBytes = size;
+      }
       call.toolCallCount += 1;
     }
     recordedLlmCallTraceIds.add(t.id);
@@ -2014,9 +2039,13 @@ function buildAgentLlmStats(): AgentLlmStats {
 
   // Per-call TTFT samples + per-call generation throughput. One sample per
   // LLM call: TTFT = firstAssistantTs − requestTs; throughput =
-  // responseBytes / generationDurationMs * 1000 (only when the call streamed
-  // ≥ 2 SSE events, so there's a measurable duration). callThroughput drives
-  // the agent|model Throughput section's per-message-throughput stats.
+  // responseBytes / generationDurationMs * 1000 (only when the call recorded
+  // ≥ 2 response events, so there's a measurable duration). Both "response
+  // events" categories are counted: assistant SSE deltas AND tool-start
+  // events (the model's tool_use blocks decoded from the same SSE stream),
+  // so calls whose response is purely tool calls (no text preamble) still
+  // produce a TTFT sample and, when there are ≥ 2 events, a throughput
+  // sample. callThroughput drives the agent|model Throughput section.
   const ttftSamples: LatencySample[] = [];
   const callThroughputSamples: ThroughputSample[] = [];
   for (const call of llmCallStore.values()) {
