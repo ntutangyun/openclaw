@@ -90,10 +90,10 @@ export type ProtocolMonitorProps = {
   exportCapturedAt?: number;
   /**
    * Optional re-render hook. Called by view-local interactive widgets that
-   * mutate module-level state Lit can't observe directly (e.g. the Messages
-   * bar chart's wheel-zoom range, kept in `messagesChartZoom`). When omitted
-   * (or in the export viewer where re-renders aren't useful), those widgets
-   * still update the DOM directly so the visual stays in sync until the next
+   * mutate module-level state Lit can't observe directly (e.g. the bar
+   * charts' wheel-zoom range, kept in `barChartZoom`). When omitted (or in
+   * the export viewer where re-renders aren't useful), those widgets still
+   * update the DOM directly so the visual stays in sync until the next
    * natural re-render.
    */
   onRequestUpdate?: () => void;
@@ -3051,17 +3051,20 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
 }
 
 /**
- * Module-level x-axis zoom state for the Messages bar chart, keyed by the
- * direction tab (op-to-gw, gw-to-op, node-to-gw, gw-to-node). Each entry is
- * the user's currently chosen visible time range; absent = auto (use the
- * computed timeWindow). Lives at module scope so it persists across Lit
- * re-renders and across tab switches.
+ * Module-level x-axis zoom state for the bar charts, keyed by chart id.
+ * Current keys:
+ *   - `messages-${direction}` for each wire-pair Messages bar chart
+ *   - `agent-llm-events`      for the agent|model Events-by-category chart
+ *
+ * Each entry is the user's currently chosen visible time range; absent = auto
+ * (use the computed timeWindow). Lives at module scope so it persists across
+ * Lit re-renders and across tab switches.
  *
  * The zoom only affects the x-axis (time) — the y-axis (bar height = bytes)
- * stays auto-scaled to the visible bars so the bars within the zoom window
- * are always sized relative to each other, not to off-screen extremes.
+ * stays auto-scaled to the visible bars so bars within the zoom window are
+ * always sized relative to each other, not to off-screen extremes.
  */
-const messagesChartZoom = new Map<string, { minTs: number; maxTs: number }>();
+const barChartZoom = new Map<string, { minTs: number; maxTs: number }>();
 
 /** Min visible time span (ms) — clamps zoom-in so we don't over-scroll. */
 const MIN_ZOOM_SPAN_MS = 50;
@@ -3098,7 +3101,7 @@ function renderMessagesBarChartSvg(
   const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
   const autoMinTs = timeWindow?.minTs ?? localMin;
   const autoMaxTs = timeWindow?.maxTs ?? localMax;
-  const zoom = messagesChartZoom.get(zoomKey);
+  const zoom = barChartZoom.get(zoomKey);
   // Clamp a stale zoom to the data bounds (e.g. user reset traces while zoomed
   // in — the saved range may now lie entirely outside the new data). If the
   // clamp would collapse the range to nothing, drop the zoom and fall back to
@@ -3114,7 +3117,7 @@ function renderMessagesBarChartSvg(
       viewMaxTs = clampedMax;
       isZoomed = true;
     } else {
-      messagesChartZoom.delete(zoomKey);
+      barChartZoom.delete(zoomKey);
     }
   }
   const tsRange = Math.max(1, viewMaxTs - viewMinTs);
@@ -3144,8 +3147,8 @@ function renderMessagesBarChartSvg(
   };
   const onDblClick = (e: MouseEvent) => {
     e.preventDefault();
-    if (messagesChartZoom.has(zoomKey)) {
-      messagesChartZoom.delete(zoomKey);
+    if (barChartZoom.has(zoomKey)) {
+      barChartZoom.delete(zoomKey);
       onRequestUpdate?.();
     }
   };
@@ -3165,7 +3168,7 @@ function renderMessagesBarChartSvg(
               type="button"
               class="pm-chart-zoom-reset"
               @click=${() => {
-                messagesChartZoom.delete(zoomKey);
+                barChartZoom.delete(zoomKey);
                 onRequestUpdate?.();
               }}
             >
@@ -3305,7 +3308,7 @@ function handleBarChartHover(
  * Wheel-zoom on the messages bar chart's x-axis. Zooms in (deltaY < 0) /
  * out (deltaY > 0) around the cursor's time position so the bar under the
  * cursor stays under the cursor through the zoom step. Updates the module-
- * level `messagesChartZoom` map for the given key; the caller is expected to
+ * level `barChartZoom` map for the given key; the caller is expected to
  * trigger a re-render so the chart picks up the new range.
  *
  * Pan with shift+wheel: shifts the visible range left/right by ~10% per
@@ -3351,7 +3354,7 @@ function handleBarChartZoom(
     nextMin = Math.max(nextMin, autoMinTs);
     nextMax = Math.min(nextMax, autoMaxTs);
     if (nextMax - nextMin >= MIN_ZOOM_SPAN_MS) {
-      messagesChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
+      barChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
     }
     return;
   }
@@ -3362,7 +3365,7 @@ function handleBarChartZoom(
   let nextSpan = curSpan * factor;
   // Cap at the auto span — zooming out past the data bounds reverts to auto.
   if (nextSpan >= autoSpan) {
-    messagesChartZoom.delete(zoomKey);
+    barChartZoom.delete(zoomKey);
     return;
   }
   if (nextSpan < MIN_ZOOM_SPAN_MS) {
@@ -3382,7 +3385,7 @@ function handleBarChartZoom(
   }
   nextMin = Math.max(nextMin, autoMinTs);
   nextMax = Math.min(nextMax, autoMaxTs);
-  messagesChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
+  barChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
 }
 
 function renderMessagesSection(
@@ -3509,7 +3512,7 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
       Events by category · ${stats.totalEvents} total · ${stats.cards.length}
       ${stats.cards.length === 1 ? "type" : "types"}
     </div>
-    ${renderAgentLlmEventChartSvg(stats.bars, colorMap, timeWindow)}
+    ${renderAgentLlmEventChartSvg(stats.bars, colorMap, timeWindow, props.onRequestUpdate)}
     <div class="pm-message-legend">
       ${stats.cards.map((c) => {
         const cat = c.category;
@@ -3599,8 +3602,10 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
 function renderAgentLlmEventChartSvg(
   bars: AgentLlmEventBar[],
   colorMap: Map<string, string>,
-  timeWindow?: TimeWindow,
+  timeWindow: TimeWindow | undefined,
+  onRequestUpdate?: () => void,
 ): TemplateResult {
+  const zoomKey = "agent-llm-events";
   if (bars.length === 0) {
     return html`<div class="pm-chart-empty" style="height:195px;line-height:195px;">
       Waiting for first agent ↔ model event...
@@ -3616,15 +3621,37 @@ function renderAgentLlmEventChartSvg(
   const plotH = H - PAD_T - PAD_B;
   const localMin = bars[0]?.ts ?? 0;
   const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
-  const minTs = timeWindow?.minTs ?? localMin;
-  const maxTs = timeWindow?.maxTs ?? localMax;
-  const tsRange = Math.max(1, maxTs - minTs);
+  const autoMinTs = timeWindow?.minTs ?? localMin;
+  const autoMaxTs = timeWindow?.maxTs ?? localMax;
+  // Apply persisted zoom state, with the same stale-clamp logic as the
+  // messages chart: if the saved range no longer overlaps current data,
+  // self-evict and fall back to auto.
+  const zoom = barChartZoom.get(zoomKey);
+  let viewMinTs = autoMinTs;
+  let viewMaxTs = autoMaxTs;
+  let isZoomed = false;
+  if (zoom) {
+    const clampedMin = Math.max(zoom.minTs, autoMinTs);
+    const clampedMax = Math.min(zoom.maxTs, autoMaxTs);
+    if (clampedMax - clampedMin >= MIN_ZOOM_SPAN_MS) {
+      viewMinTs = clampedMin;
+      viewMaxTs = clampedMax;
+      isZoomed = true;
+    } else {
+      barChartZoom.delete(zoomKey);
+    }
+  }
+  const tsRange = Math.max(1, viewMaxTs - viewMinTs);
+  // Filter to bars in the visible range so the log y-scale recomputes against
+  // what's actually on screen — otherwise a single off-screen 200KB request
+  // would squash the visible SSE deltas to nothing.
+  const visibleBars = isZoomed ? bars.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : bars;
   // log scale for y so SSE deltas (tens of bytes) and request bodies
   // (hundreds of KB) coexist without the small bars vanishing.
-  const sizes = bars.map((b) => Math.max(1, b.size));
+  const sizes = visibleBars.map((b) => Math.max(1, b.size));
   const maxSize = Math.max(...sizes, 1);
   const logMax = Math.log10(maxSize + 1);
-  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
+  const toX = (ts: number) => PAD_L + ((ts - viewMinTs) / tsRange) * plotW;
   const toY = (s: number) => PAD_T + plotH - (Math.log10(Math.max(1, s) + 1) / logMax) * plotH;
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
@@ -3634,21 +3661,55 @@ function renderAgentLlmEventChartSvg(
   });
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
-    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
+    const ts = viewMinTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
   const barWidth = 2;
   const chartId = `agent-llm-bars-${(bars[0]?.ts ?? 0).toString(36)}`;
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    handleBarChartZoom(e, zoomKey, viewMinTs, viewMaxTs, autoMinTs, autoMaxTs, PAD_L, plotW, W);
+    onRequestUpdate?.();
+  };
+  const onDblClick = (e: MouseEvent) => {
+    e.preventDefault();
+    if (barChartZoom.has(zoomKey)) {
+      barChartZoom.delete(zoomKey);
+      onRequestUpdate?.();
+    }
+  };
   return html`
     <div class="pm-chart-block">
+      <div class="pm-chart-zoom-bar">
+        <span class="pm-chart-zoom-hint">
+          ${isZoomed
+            ? html`<strong>Zoomed:</strong> ${chartTimeLabel(viewMinTs)} –
+                ${chartTimeLabel(viewMaxTs)} · ${visibleBars.length} of ${bars.length} events`
+            : html`<span class="pm-muted"
+                >Scroll on the chart to zoom on time, double-click to reset</span
+              >`}
+        </span>
+        ${isZoomed
+          ? html`<button
+              type="button"
+              class="pm-chart-zoom-reset"
+              @click=${() => {
+                barChartZoom.delete(zoomKey);
+                onRequestUpdate?.();
+              }}
+            >
+              Reset zoom
+            </button>`
+          : nothing}
+      </div>
       <div
         class="pm-chart-wrap"
         @mousemove=${(e: MouseEvent) =>
           handleAgentLlmBarHover(
             e,
-            bars,
+            visibleBars,
             colorMap,
-            minTs,
+            viewMinTs,
             tsRange,
             logMax,
             PAD_L,
@@ -3659,6 +3720,8 @@ function renderAgentLlmEventChartSvg(
             W,
           )}
         @mouseleave=${handleChartLeave}
+        @wheel=${onWheel}
+        @dblclick=${onDblClick}
       >
         <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
           ${yGridLines.map(
@@ -3683,7 +3746,7 @@ function renderAgentLlmEventChartSvg(
                 fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
             `,
           )}
-          ${bars.map((b) => {
+          ${visibleBars.map((b) => {
             const x = toX(b.ts) - barWidth / 2;
             const y = toY(b.size);
             const h = PAD_T + plotH - y;
