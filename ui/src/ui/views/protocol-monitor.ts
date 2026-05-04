@@ -2986,14 +2986,31 @@ type TimeWindow = { minTs: number; maxTs: number };
 
 /**
  * Compute one TimeWindow that covers every chart series across every direction
- * tab. Each series is already sorted by ts, so first/last entries give the
- * local min/max — no full scan needed.
+ * tab. Iterates ALL entries (not just first/last) so unsorted series — e.g.
+ * messageStore after a bulk reload landed older traces alongside newer live
+ * ones, or pingSamples that may arrive slightly out of order under load —
+ * still produce correct global min/max. The previous first+last optimization
+ * gave wrong bounds on those paths and caused the time axes on different
+ * direction tabs (and on the live vs. exported viewer) to disagree.
+ *
+ * Cost: O(total entries across all series). With 3000 messages × 4 + 10000
+ * agent|model events + a few hundred ping/throughput samples per direction,
+ * worst-case ~25k iterations per render — well under 1 ms.
  */
 function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
-  const tsValues: number[] = [];
+  let minTs = Infinity;
+  let maxTs = -Infinity;
   const pushSeries = (arr: { ts: number }[] | undefined) => {
-    if (arr && arr.length > 0) {
-      tsValues.push(arr[0].ts, arr[arr.length - 1].ts);
+    if (!arr) {
+      return;
+    }
+    for (const e of arr) {
+      if (e.ts < minTs) {
+        minTs = e.ts;
+      }
+      if (e.ts > maxTs) {
+        maxTs = e.ts;
+      }
     }
   };
   // Wire-pair throughput samples (forward + reverse for each pair).
@@ -3016,10 +3033,10 @@ function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
   pushSeries(net.agentLlm.ttft.samples);
   pushSeries(net.agentLlm.bars);
   pushSeries(net.agentLlm.callThroughput.samples);
-  if (tsValues.length === 0) {
+  if (minTs === Infinity || maxTs === -Infinity) {
     return undefined;
   }
-  return { minTs: Math.min(...tsValues), maxTs: Math.max(...tsValues) };
+  return { minTs, maxTs };
 }
 
 /**
@@ -3051,20 +3068,47 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
 }
 
 /**
- * Module-level x-axis zoom state for the bar charts, keyed by chart id.
- * Current keys:
- *   - `messages-${direction}` for each wire-pair Messages bar chart
- *   - `agent-llm-events`      for the agent|model Events-by-category chart
+ * Module-level x-axis zoom state, keyed by direction tab. One entry per tab
+ * is shared across every chart on that tab (Messages bar chart + Latency
+ * chart on wire-pair tabs; the Events-by-category chart on the agent|model
+ * tab) so all charts on the same page stay aligned through a zoom — the
+ * user scrolls on the messages chart, and the latency chart's x-axis snaps
+ * to the same range. Absent entry = auto (use the computed timeWindow).
  *
- * Each entry is the user's currently chosen visible time range; absent = auto
- * (use the computed timeWindow). Lives at module scope so it persists across
- * Lit re-renders and across tab switches.
+ * Keys:
+ *   - `op-to-gw`, `gw-to-op`, `node-to-gw`, `gw-to-node` — wire-pair tabs
+ *   - `agent-llm` — agent|model tab
  *
- * The zoom only affects the x-axis (time) — the y-axis (bar height = bytes)
- * stays auto-scaled to the visible bars so bars within the zoom window are
+ * Lives at module scope so it persists across Lit re-renders and tab
+ * switches. The zoom only affects the x-axis (time) — the y-axis stays
+ * auto-scaled to the visible data so bars/lines within the zoom window are
  * always sized relative to each other, not to off-screen extremes.
  */
 const barChartZoom = new Map<string, { minTs: number; maxTs: number }>();
+
+/**
+ * Resolve the active zoom range for a direction tab (or `null` if no zoom).
+ * Stale zoom whose range no longer overlaps current data gets self-evicted
+ * so a stale entry from before a Reset doesn't pin the chart to an empty
+ * window forever.
+ */
+function resolveActiveZoom(
+  zoomKey: string,
+  autoMinTs: number,
+  autoMaxTs: number,
+): { minTs: number; maxTs: number } | null {
+  const zoom = barChartZoom.get(zoomKey);
+  if (!zoom) {
+    return null;
+  }
+  const clampedMin = Math.max(zoom.minTs, autoMinTs);
+  const clampedMax = Math.min(zoom.maxTs, autoMaxTs);
+  if (clampedMax - clampedMin < MIN_ZOOM_SPAN_MS) {
+    barChartZoom.delete(zoomKey);
+    return null;
+  }
+  return { minTs: clampedMin, maxTs: clampedMax };
+}
 
 /** Min visible time span (ms) — clamps zoom-in so we don't over-scroll. */
 const MIN_ZOOM_SPAN_MS = 50;
@@ -3097,28 +3141,32 @@ function renderMessagesBarChartSvg(
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const bars = data.bars;
-  const localMin = bars[0]?.ts ?? 0;
-  const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
+  // bars may be unsorted (bulk-load can land older traces after newer live
+  // ones), so don't rely on bars[0]/bars[-1] for fallback bounds. Scan.
+  let scannedMin = Infinity;
+  let scannedMax = -Infinity;
+  for (const b of bars) {
+    if (b.ts < scannedMin) {
+      scannedMin = b.ts;
+    }
+    if (b.ts > scannedMax) {
+      scannedMax = b.ts;
+    }
+  }
+  const localMin = scannedMin === Infinity ? 0 : scannedMin;
+  const localMax = scannedMax === -Infinity ? localMin + 1 : scannedMax;
   const autoMinTs = timeWindow?.minTs ?? localMin;
   const autoMaxTs = timeWindow?.maxTs ?? localMax;
-  const zoom = barChartZoom.get(zoomKey);
-  // Clamp a stale zoom to the data bounds (e.g. user reset traces while zoomed
-  // in — the saved range may now lie entirely outside the new data). If the
-  // clamp would collapse the range to nothing, drop the zoom and fall back to
-  // auto.
+  // Resolve the active zoom (or null). Same key for every chart on this tab,
+  // so the latency chart on the same direction follows the same range.
+  const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
   let viewMinTs = autoMinTs;
   let viewMaxTs = autoMaxTs;
   let isZoomed = false;
-  if (zoom) {
-    const clampedMin = Math.max(zoom.minTs, autoMinTs);
-    const clampedMax = Math.min(zoom.maxTs, autoMaxTs);
-    if (clampedMax - clampedMin >= MIN_ZOOM_SPAN_MS) {
-      viewMinTs = clampedMin;
-      viewMaxTs = clampedMax;
-      isZoomed = true;
-    } else {
-      barChartZoom.delete(zoomKey);
-    }
+  if (zoomActive) {
+    viewMinTs = zoomActive.minTs;
+    viewMaxTs = zoomActive.maxTs;
+    isZoomed = true;
   }
   const tsRange = Math.max(1, viewMaxTs - viewMinTs);
   // Filter to bars actually inside the visible range. Out-of-range bars don't
@@ -3422,13 +3470,7 @@ function renderMessagesSection(
       Messages · ${totalCount} total · ${data.cards.length}
       ${data.cards.length === 1 ? "type" : "types"}
     </div>
-    ${renderMessagesBarChartSvg(
-      data,
-      colorMap,
-      timeWindow,
-      `messages-${direction}`,
-      onRequestUpdate,
-    )}
+    ${renderMessagesBarChartSvg(data, colorMap, timeWindow, direction, onRequestUpdate)}
     <div class="pm-message-legend">
       ${data.cards.map(
         (c) => html`
@@ -3605,7 +3647,7 @@ function renderAgentLlmEventChartSvg(
   timeWindow: TimeWindow | undefined,
   onRequestUpdate?: () => void,
 ): TemplateResult {
-  const zoomKey = "agent-llm-events";
+  const zoomKey = "agent-llm";
   if (bars.length === 0) {
     return html`<div class="pm-chart-empty" style="height:195px;line-height:195px;">
       Waiting for first agent ↔ model event...
@@ -3619,27 +3661,33 @@ function renderAgentLlmEventChartSvg(
   const H = 195;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  const localMin = bars[0]?.ts ?? 0;
-  const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
+  // Defensive scan — bars may be unsorted on rehydrate, so don't trust
+  // bars[0]/bars[-1] for fallback bounds.
+  let scannedMin = Infinity;
+  let scannedMax = -Infinity;
+  for (const b of bars) {
+    if (b.ts < scannedMin) {
+      scannedMin = b.ts;
+    }
+    if (b.ts > scannedMax) {
+      scannedMax = b.ts;
+    }
+  }
+  const localMin = scannedMin === Infinity ? 0 : scannedMin;
+  const localMax = scannedMax === -Infinity ? localMin + 1 : scannedMax;
   const autoMinTs = timeWindow?.minTs ?? localMin;
   const autoMaxTs = timeWindow?.maxTs ?? localMax;
-  // Apply persisted zoom state, with the same stale-clamp logic as the
-  // messages chart: if the saved range no longer overlaps current data,
-  // self-evict and fall back to auto.
-  const zoom = barChartZoom.get(zoomKey);
+  // Shared zoom state with whatever else lives on this tab (currently only
+  // this chart, but using the same per-tab key as the wire-pair tabs keeps
+  // the API uniform).
+  const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
   let viewMinTs = autoMinTs;
   let viewMaxTs = autoMaxTs;
   let isZoomed = false;
-  if (zoom) {
-    const clampedMin = Math.max(zoom.minTs, autoMinTs);
-    const clampedMax = Math.min(zoom.maxTs, autoMaxTs);
-    if (clampedMax - clampedMin >= MIN_ZOOM_SPAN_MS) {
-      viewMinTs = clampedMin;
-      viewMaxTs = clampedMax;
-      isZoomed = true;
-    } else {
-      barChartZoom.delete(zoomKey);
-    }
+  if (zoomActive) {
+    viewMinTs = zoomActive.minTs;
+    viewMaxTs = zoomActive.maxTs;
+    isZoomed = true;
   }
   const tsRange = Math.max(1, viewMaxTs - viewMinTs);
   // Filter to bars in the visible range so the log y-scale recomputes against
@@ -3867,7 +3915,13 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
           <div class="pm-net-section-title" style="margin-top:14px;">
             Latency · ${latency.label}
           </div>
-          ${renderLatencyChartSvg(latency.label, latency.stats, meta.color, timeWindow)}
+          ${renderLatencyChartSvg(
+            latency.label,
+            latency.stats,
+            meta.color,
+            timeWindow,
+            props.networkDirection,
+          )}
           ${renderNetStatRow([
             {
               title: "Min",
@@ -4186,7 +4240,8 @@ function renderLatencyChartSvg(
   label: string,
   stats: LatencyStats,
   color: string,
-  timeWindow?: TimeWindow,
+  timeWindow: TimeWindow | undefined,
+  zoomKey: string,
 ): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
@@ -4209,10 +4264,28 @@ function renderLatencyChartSvg(
   const plotH = H - PAD_T - PAD_B;
 
   const maxVal = Math.max(stats.peakMs ?? 1, 1);
-  const localMin = samples[0].ts;
-  const localMax = samples.length > 1 ? samples[samples.length - 1].ts : localMin + 1000;
-  const minTs = timeWindow?.minTs ?? localMin;
-  const maxTs = timeWindow?.maxTs ?? localMax;
+  // Defensive scan — samples may be unsorted on rehydrate.
+  let scannedMin = Infinity;
+  let scannedMax = -Infinity;
+  for (const s of samples) {
+    if (s.ts < scannedMin) {
+      scannedMin = s.ts;
+    }
+    if (s.ts > scannedMax) {
+      scannedMax = s.ts;
+    }
+  }
+  const localMin = scannedMin === Infinity ? 0 : scannedMin;
+  const localMax = scannedMax === -Infinity ? localMin + 1000 : scannedMax;
+  const autoMinTs = timeWindow?.minTs ?? localMin;
+  const autoMaxTs = timeWindow?.maxTs ?? localMax;
+  // Follow the per-direction zoom set by the messages bar chart on the same
+  // tab so both charts share the same x-axis range. The latency chart has
+  // no wheel handler of its own — zoom is driven entirely by the user
+  // scrolling on the messages chart.
+  const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
+  const minTs = zoomActive ? zoomActive.minTs : autoMinTs;
+  const maxTs = zoomActive ? zoomActive.maxTs : autoMaxTs;
   const tsRange = maxTs - minTs || 1;
   const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
   const toY = (v: number) => PAD_T + plotH - (v / maxVal) * plotH;
