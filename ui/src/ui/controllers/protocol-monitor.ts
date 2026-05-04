@@ -251,6 +251,15 @@ export type MessageBar = {
 export type MessagesDirection = {
   cards: MessageTypeCard[];
   bars: MessageBar[];
+  /**
+   * Per-message throughput samples derived from the same message store that
+   * feeds `cards` / `bars`. One sample per message that has a measurable
+   * `oneWayLatencyMs`. Both the Messages section and the wire-pair
+   * Throughput section read from this same store, so the per-message byte
+   * counts in those two sections always match — no inconsistency from
+   * separate filters.
+   */
+  throughputSamples: ThroughputSample[];
 };
 
 export type DirectionalMessages = {
@@ -1235,7 +1244,11 @@ function computePeerToGwThroughput(
     if (isOperatorPairTrace(t) && !isShownInOperatorPair(t)) {
       continue;
     }
-    const bytes = t.payloadSize ?? 0;
+    // Use envelope-aware frame size so this matches the Messages section
+    // (which also uses estimateFrameSize). Otherwise tiny RPCs like
+    // `req.node.list` (params: {}, payloadSize: 2) would show 2-byte
+    // throughput here while the Messages section shows ~80-byte bars.
+    const bytes = estimateFrameSize(t);
     if (bytes <= 0) {
       continue;
     }
@@ -1273,10 +1286,21 @@ function computeGwToPeerThroughput(rxSamples: RxLatencySampleEntry[]): Throughpu
     if (s.latencyMs <= 0) {
       continue;
     }
+    // Mirror estimateFrameSize: peer-reported payloadSize is inner-payload
+    // only, so add an envelope estimate based on whichever of method/event is
+    // populated. Keeps gw→peer per-message bytes comparable to the Messages
+    // section (which gets envelope-aware sizes for the same frames).
+    let envelope = 30;
+    if (s.method) {
+      envelope = 50 + s.method.length + 8 /* avg id length */ + 25 /* sentAt */;
+    } else if (s.event) {
+      envelope = 30 + s.event.length;
+    }
+    const bytes = s.payloadSize + envelope;
     samples.push({
       ts: s.ts,
-      bytesPerSec: (s.payloadSize / s.latencyMs) * 1000,
-      rawBytes: s.payloadSize,
+      bytesPerSec: (bytes / s.latencyMs) * 1000,
+      rawBytes: bytes,
     });
   }
   return samples;
@@ -1304,8 +1328,16 @@ function resolveMessageType(t: ProtocolTraceRecord): string | null {
 function buildMessagesDirection(buf: MessageEntry[]): MessagesDirection {
   const cardMap = new Map<string, MessageTypeCard>();
   const bars: MessageBar[] = [];
+  const throughputSamples: ThroughputSample[] = [];
   for (const e of buf) {
     bars.push({ ts: e.ts, size: e.size, type: e.type });
+    if (e.oneWayLatencyMs !== undefined && e.oneWayLatencyMs > 0) {
+      throughputSamples.push({
+        ts: e.ts,
+        bytesPerSec: (e.size / e.oneWayLatencyMs) * 1000,
+        rawBytes: e.size,
+      });
+    }
     const existing = cardMap.get(e.type);
     if (existing) {
       existing.count += 1;
@@ -1327,6 +1359,7 @@ function buildMessagesDirection(buf: MessageEntry[]): MessagesDirection {
   return {
     cards: Array.from(cardMap.values()).toSorted((a, b) => b.count - a.count),
     bars,
+    throughputSamples,
   };
 }
 
@@ -1526,12 +1559,57 @@ const PING_SAMPLE_CAP = 1000;
 // agent↔llm directions don't get a store here because they're not "wire"
 // traffic and would be dominated by SSE deltas anyway; their throughput /
 // latency / TTFT calculations still iterate `protocolTraces` directly.
-type MessageEntry = { ts: number; size: number; type: string };
+/**
+ * Persistent per-direction message-store entry. `size` is the estimated
+ * **on-wire frame size** in bytes (envelope + payload), NOT just the inner
+ * `payloadSize`. The Messages cards/bars and the wire-pair Throughput
+ * section both read from this field, so the user-facing numbers in those
+ * two sections always match. `oneWayLatencyMs` is carried through so the
+ * Throughput section can compute per-message bytes/sec without a second
+ * pass over the trace ring buffer.
+ */
+type MessageEntry = {
+  ts: number;
+  size: number;
+  type: string;
+  oneWayLatencyMs?: number;
+};
 const MESSAGE_STORE_CAP = 3000;
 const messageStore = {
   opGw: { forward: [] as MessageEntry[], reverse: [] as MessageEntry[] },
   nodeGw: { forward: [] as MessageEntry[], reverse: [] as MessageEntry[] },
 };
+
+/**
+ * Estimate the **full frame size** of a WS trace record on the wire — the
+ * envelope (`type`/`id`/`method`/`event` keys plus the JSON delimiters and
+ * `sentAt` for inbound) plus the inner `payloadSize`. The gateway-side
+ * `payloadSize` is JSON.stringify-of-payload only, so for tiny RPCs like
+ * `req.node.list` (`params: {}`) it reports 2 bytes, which is misleading
+ * because the actual frame on the wire is closer to 80–100 bytes. This
+ * helper folds in a per-kind envelope estimate so the Messages section's
+ * size cards reflect what was actually transmitted, not just the params blob.
+ */
+function estimateFrameSize(t: ProtocolTraceRecord): number {
+  const inner = t.payloadSize ?? 0;
+  const idLen = typeof t.reqId === "string" ? t.reqId.length : 8;
+  if (t.kind === "req") {
+    // {"type":"req","id":"<reqId>","method":"<method>","params":<payload>,"sentAt":1234567890123}
+    const methodLen = t.method?.length ?? 0;
+    return inner + 50 + methodLen + idLen + 25;
+  }
+  if (t.kind === "res") {
+    // {"type":"res","id":"<reqId>","ok":true,"payload":<payload>}
+    return inner + 35 + idLen;
+  }
+  if (t.kind === "event") {
+    // {"type":"event","event":"<name>","payload":<payload>}
+    const eventLen = t.event?.length ?? 0;
+    return inner + 30 + eventLen;
+  }
+  // Open / hello / close / parse-error frames — small, no envelope known.
+  return inner + 20;
+}
 // Trace ids already recorded into messageStore. Prevents double-counting when
 // `loadProtocolTraces` runs after live events have already populated the store
 // (e.g. on reconnect). Capped to twice the store size so it can't grow
@@ -1580,7 +1658,15 @@ function recordMessageFromTrace(t: ProtocolTraceRecord): void {
   if (!type) {
     return;
   }
-  pushBoundedMessage(buf, { ts: t.ts, size: t.payloadSize ?? 0, type });
+  pushBoundedMessage(buf, {
+    ts: t.ts,
+    size: estimateFrameSize(t),
+    type,
+    oneWayLatencyMs:
+      typeof t.oneWayLatencyMs === "number" && t.oneWayLatencyMs > 0
+        ? t.oneWayLatencyMs
+        : undefined,
+  });
   recordedMessageIds.add(t.id);
   if (recordedMessageIds.size > RECORDED_MESSAGE_IDS_CAP) {
     // Cheap reset rather than a true LRU — worst case a few traces get

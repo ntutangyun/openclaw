@@ -2157,16 +2157,21 @@ function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResu
     <div class="pm-protocol-layout">
       <!-- Left half: messages, tool calls, sequence diagram -->
       <div class="pm-left-half">
-        <div class="pm-left-top">
-          <div class="pm-live-card-col">
-            <div class="pm-section-title">Latest Messages</div>
-            ${renderChatCards(chatMessages)}
+        <details class="pm-live-cards-details">
+          <summary class="pm-live-cards-summary">
+            Latest Messages (${chatMessages.length}) · Latest Tool Calls (${toolCalls.length})
+          </summary>
+          <div class="pm-left-top">
+            <div class="pm-live-card-col">
+              <div class="pm-section-title">Latest Messages</div>
+              ${renderChatCards(chatMessages)}
+            </div>
+            <div class="pm-live-card-col">
+              <div class="pm-section-title">Latest Tool Calls</div>
+              ${renderToolCallCards(toolCalls)}
+            </div>
           </div>
-          <div class="pm-live-card-col">
-            <div class="pm-section-title">Latest Tool Calls</div>
-            ${renderToolCallCards(toolCalls)}
-          </div>
-        </div>
+        </details>
         <div class="pm-diagram-section">
           <div
             class="pm-section-title"
@@ -2870,15 +2875,26 @@ function getDirectionMeta(id: NetworkDirection): DirectionMeta {
 }
 
 function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): ThroughputSample[] {
+  // Use the per-MESSAGE throughput samples (operatorGatewayThroughputStats /
+  // gatewayNodeThroughputStats), NOT the per-1s-bucket aggregates from
+  // routeToDirectional. Each sample here = one frame's (envelope-aware) bytes
+  // divided by its measured one-way latency, so it's comparable to the
+  // Messages section instead of being a bucket sum.
+  //
+  // Naming gotcha: in *ThroughputStats, `forward` always means "peer → gw"
+  // (computePeerToGwThroughput on traces) and `reverse` always means "gw →
+  // peer" (computeGwToPeerThroughput on peer-reported rxSamples). So for the
+  // node tab, "node-to-gw" maps to .forward (node is the peer) and
+  // "gw-to-node" maps to .reverse.
   switch (id) {
     case "op-to-gw":
-      return net.operatorGateway.forward;
+      return net.operatorGatewayThroughputStats.forward.samples;
     case "gw-to-op":
-      return net.operatorGateway.reverse;
-    case "gw-to-node":
-      return net.gatewayNode.forward;
+      return net.operatorGatewayThroughputStats.reverse.samples;
     case "node-to-gw":
-      return net.gatewayNode.reverse;
+      return net.gatewayNodeThroughputStats.forward.samples;
+    case "gw-to-node":
+      return net.gatewayNodeThroughputStats.reverse.samples;
     default:
       // agent-llm has its own dedicated renderer (renderAgentLlmContent)
       // and does not flow through this wire-pair throughput selector.
@@ -3051,11 +3067,17 @@ function renderMessagesBarChartSvg(
   data: MessagesDirection,
   colorMap: Map<string, string>,
   timeWindow?: TimeWindow,
+  fullWidth: boolean = false,
 ): TemplateResult {
+  const blockClass = fullWidth ? "pm-chart-block pm-chart-block--full" : "pm-chart-block";
   if (data.bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
-      Waiting for first message...
-    </div>`;
+    return html`
+      <div class="${blockClass}">
+        <div class="pm-chart-empty" style="height:260px;line-height:260px;">
+          Waiting for first message...
+        </div>
+      </div>
+    `;
   }
   const PAD_L = 64;
   const PAD_R = 24;
@@ -3088,7 +3110,7 @@ function renderMessagesBarChartSvg(
   const barWidth = 2;
   const chartId = `bars-${(bars[0]?.ts ?? 0).toString(36)}`;
   return html`
-    <div class="pm-chart-block">
+    <div class="${blockClass}">
       <div
         class="pm-chart-wrap"
         @mousemove=${(e: MouseEvent) =>
@@ -3229,49 +3251,60 @@ function renderMessagesSection(
   const totalCount = data.cards.reduce((a, c) => a + c.count, 0);
   if (data.cards.length === 0) {
     return html`
-      <div class="pm-net-section-title" style="margin-top:14px;">
-        Messages · ${totalCount} total
-      </div>
+      <div class="pm-net-section-title">Messages · ${totalCount} total</div>
       <div class="pm-chart-empty" style="height:80px;line-height:80px;">
-        No agentic-task messages observed yet on this direction.
+        No messages observed yet on this direction.
       </div>
     `;
   }
   // Stable color per type so bars and legend (and cards' left border) align.
   const colorMap = buildMessageTypeColorMap(data.cards.map((c) => c.type));
+  // Chart first (full width), then a collapsed-by-default <details> wrapping
+  // the per-type cards + legend. Wire-pair tabs can have 20+ distinct types
+  // (health/heartbeat/presence/poll/etc.), so showing every card up-front
+  // crowds the panel — keep them one click away.
   return html`
-    <div class="pm-net-section-title" style="margin-top:14px;">Messages · ${totalCount} total</div>
-    <div class="pm-message-cards">
-      ${data.cards.map(
-        (c) => html`
-          <button
-            class="pm-message-card"
-            style="border-left-color:${colorMap.get(c.type) ?? color};"
-            @click=${openExp(`messages-${c.type}`)}
-          >
-            <div class="pm-message-card-type" title=${c.type}>${c.type}</div>
-            <div class="pm-message-card-count">${c.count}</div>
-            <div class="pm-message-card-sub">
-              ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
-            </div>
-          </button>
-        `,
-      )}
+    <div class="pm-net-section-title">
+      Messages · ${totalCount} total · ${data.cards.length}
+      ${data.cards.length === 1 ? "type" : "types"}
     </div>
-    ${renderMessagesBarChartSvg(data, colorMap, timeWindow)}
-    <div class="pm-message-legend">
-      ${data.cards.map(
-        (c) => html`
-          <span class="pm-message-legend-item">
-            <span
-              class="pm-message-legend-swatch"
-              style="background:${colorMap.get(c.type) ?? color};"
-            ></span>
-            <span class="pm-message-legend-label">${c.type}</span>
-          </span>
-        `,
-      )}
-    </div>
+    ${renderMessagesBarChartSvg(data, colorMap, timeWindow, /* fullWidth */ true)}
+    <details class="pm-message-types-details">
+      <summary class="pm-message-types-summary">
+        Show ${data.cards.length} message ${data.cards.length === 1 ? "type" : "types"} (cards +
+        legend)
+      </summary>
+      <div class="pm-message-cards" style="margin-top:6px;">
+        ${data.cards.map(
+          (c) => html`
+            <button
+              class="pm-message-card"
+              style="border-left-color:${colorMap.get(c.type) ?? color};"
+              @click=${openExp(`messages-${c.type}`)}
+            >
+              <div class="pm-message-card-type" title=${c.type}>${c.type}</div>
+              <div class="pm-message-card-count">${c.count}</div>
+              <div class="pm-message-card-sub">
+                ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+              </div>
+            </button>
+          `,
+        )}
+      </div>
+      <div class="pm-message-legend">
+        ${data.cards.map(
+          (c) => html`
+            <span class="pm-message-legend-item">
+              <span
+                class="pm-message-legend-swatch"
+                style="background:${colorMap.get(c.type) ?? color};"
+              ></span>
+              <span class="pm-message-legend-label">${c.type}</span>
+            </span>
+          `,
+        )}
+      </div>
+    </details>
   `;
 }
 
@@ -3619,21 +3652,34 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
         `}
 
     <!-- 3. Throughput — metrics only (no chart) -->
-    ${renderWireThroughputStatsSection(samples, openExp)}
+    ${renderWireThroughputStatsSection(
+      samples,
+      selectDirectionMessages(net, props.networkDirection),
+      openExp,
+    )}
   `;
 }
 
 /**
  * Render the Throughput section as a metrics-only block (no chart). Two
- * groups: per-message throughput (bytes/sec, derived from each message's
- * payloadBytes / oneWayMs) and per-message bytes (raw payload sizes).
+ * groups:
+ *   - Per-message throughput (bytes/sec): derived from each message's
+ *     envelope-aware bytes ÷ measured one-way latency. Source = the existing
+ *     per-message throughput infrastructure (peer→gw uses trace.oneWayLatencyMs;
+ *     gw→peer uses peer-reported rxSamples). Skips messages without a
+ *     measured latency, so this set is a subset of the Messages section.
+ *   - Per-message bytes: sourced directly from the Messages section's bar
+ *     data (messageStore via selectDirectionMessages). Counts/min/max/avg
+ *     here therefore always match the per-type cards above.
  */
 function renderWireThroughputStatsSection(
-  samples: ThroughputSample[],
+  throughputSamples: ThroughputSample[],
+  messages: MessagesDirection | null,
   openExp: (key: string) => () => void,
 ): TemplateResult {
-  const count = samples.length;
-  if (count === 0) {
+  const tptCount = throughputSamples.length;
+  const messageCount = messages?.bars.length ?? 0;
+  if (tptCount === 0 && messageCount === 0) {
     return html`
       <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
       <div class="pm-chart-empty" style="height:80px;line-height:80px;">
@@ -3641,86 +3687,115 @@ function renderWireThroughputStatsSection(
       </div>
     `;
   }
-  const bytesPerSecValues = samples.map((s) => s.bytesPerSec);
-  const sortedTpt = bytesPerSecValues.slice().toSorted((a, b) => a - b);
-  const tptSum = sortedTpt.reduce((a, b) => a + b, 0);
-  const tptMin = sortedTpt[0] ?? 0;
-  const tptPeak = sortedTpt[sortedTpt.length - 1] ?? 0;
-  const tptAvg = tptSum / count;
-  const tptMedian = sortedTpt[Math.floor(count * 0.5)] ?? 0;
 
-  const byteValues = samples.map((s) => s.rawBytes);
-  const sortedBytes = byteValues.slice().toSorted((a, b) => a - b);
-  const totalBytes = sortedBytes.reduce((a, b) => a + b, 0);
-  const minBytes = sortedBytes[0] ?? 0;
-  const maxBytes = sortedBytes[sortedBytes.length - 1] ?? 0;
-  const avgBytes = totalBytes / count;
-  const medianBytes = sortedBytes[Math.floor(count * 0.5)] ?? 0;
+  // Per-message throughput (only messages with measured latency contribute).
+  let tptMin = 0;
+  let tptPeak = 0;
+  let tptAvg = 0;
+  let tptMedian = 0;
+  if (tptCount > 0) {
+    const bytesPerSecValues = throughputSamples.map((s) => s.bytesPerSec);
+    const sortedTpt = bytesPerSecValues.slice().toSorted((a, b) => a - b);
+    const tptSum = sortedTpt.reduce((a, b) => a + b, 0);
+    tptMin = sortedTpt[0] ?? 0;
+    tptPeak = sortedTpt[sortedTpt.length - 1] ?? 0;
+    tptAvg = tptSum / tptCount;
+    tptMedian = sortedTpt[Math.floor(tptCount * 0.5)] ?? 0;
+  }
+
+  // Per-message bytes — sourced from the same messageStore that feeds the
+  // Messages section, so the numbers MATCH (no separate filter, no
+  // bucket-vs-message confusion).
+  let minBytes = 0;
+  let maxBytes = 0;
+  let avgBytes = 0;
+  let medianBytes = 0;
+  let totalBytes = 0;
+  if (messageCount > 0 && messages) {
+    const byteValues = messages.bars.map((b) => b.size);
+    const sortedBytes = byteValues.slice().toSorted((a, b) => a - b);
+    totalBytes = sortedBytes.reduce((a, b) => a + b, 0);
+    minBytes = sortedBytes[0] ?? 0;
+    maxBytes = sortedBytes[sortedBytes.length - 1] ?? 0;
+    avgBytes = totalBytes / messageCount;
+    medianBytes = sortedBytes[Math.floor(messageCount * 0.5)] ?? 0;
+  }
 
   return html`
-    <div class="pm-net-section-title" style="margin-top:14px;">
-      Throughput · ${count} ${count === 1 ? "message" : "messages"}
+    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    <div class="pm-net-subsection-title">
+      Per-message throughput · ${tptCount}
+      ${tptCount === 1 ? "measured message" : "measured messages"}
     </div>
-    <div class="pm-net-subsection-title">Per-message throughput</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Min",
-        `${formatBytes(tptMin)}/s`,
-        "slowest message",
-        openExp("throughput-min"),
-      )}
-      ${renderNetStatCard(
-        "Peak",
-        `${formatBytes(tptPeak)}/s`,
-        "fastest message",
-        openExp("throughput-peak"),
-      )}
-      ${renderNetStatCard(
-        "Average",
-        `${formatBytes(tptAvg)}/s`,
-        `over ${count} messages`,
-        openExp("throughput-avg"),
-      )}
-      ${renderNetStatCard(
-        "Median",
-        `${formatBytes(tptMedian)}/s`,
-        "p50",
-        openExp("throughput-median"),
-      )}
+    ${tptCount === 0
+      ? html`<div class="pm-chart-empty" style="height:60px;line-height:60px;">
+          No per-message latency available yet on this direction.
+        </div>`
+      : html`<div class="pm-net-stat-grid">
+          ${renderNetStatCard(
+            "Min",
+            `${formatBytes(tptMin)}/s`,
+            "slowest message",
+            openExp("throughput-min"),
+          )}
+          ${renderNetStatCard(
+            "Peak",
+            `${formatBytes(tptPeak)}/s`,
+            "fastest message",
+            openExp("throughput-peak"),
+          )}
+          ${renderNetStatCard(
+            "Average",
+            `${formatBytes(tptAvg)}/s`,
+            `over ${tptCount} messages`,
+            openExp("throughput-avg"),
+          )}
+          ${renderNetStatCard(
+            "Median",
+            `${formatBytes(tptMedian)}/s`,
+            "p50",
+            openExp("throughput-median"),
+          )}
+        </div>`}
+    <div class="pm-net-subsection-title" style="margin-top:10px;">
+      Per-message bytes · ${messageCount} ${messageCount === 1 ? "message" : "messages"}
     </div>
-    <div class="pm-net-subsection-title" style="margin-top:10px;">Per-message bytes</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Min",
-        formatBytes(minBytes),
-        "smallest payload",
-        openExp("throughput-bytes-min"),
-      )}
-      ${renderNetStatCard(
-        "Max",
-        formatBytes(maxBytes),
-        "largest payload",
-        openExp("throughput-bytes-max"),
-      )}
-      ${renderNetStatCard(
-        "Average",
-        formatBytes(avgBytes),
-        `over ${count} messages`,
-        openExp("throughput-bytes-avg"),
-      )}
-      ${renderNetStatCard(
-        "Median",
-        formatBytes(medianBytes),
-        "p50",
-        openExp("throughput-bytes-median"),
-      )}
-      ${renderNetStatCard(
-        "Total",
-        formatBytes(totalBytes),
-        "all payloads summed",
-        openExp("throughput-total"),
-      )}
-    </div>
+    ${messageCount === 0
+      ? html`<div class="pm-chart-empty" style="height:60px;line-height:60px;">
+          No messages on this direction yet.
+        </div>`
+      : html`<div class="pm-net-stat-grid">
+          ${renderNetStatCard(
+            "Min",
+            formatBytes(minBytes),
+            "smallest frame",
+            openExp("throughput-bytes-min"),
+          )}
+          ${renderNetStatCard(
+            "Max",
+            formatBytes(maxBytes),
+            "largest frame",
+            openExp("throughput-bytes-max"),
+          )}
+          ${renderNetStatCard(
+            "Average",
+            formatBytes(avgBytes),
+            `over ${messageCount} messages`,
+            openExp("throughput-bytes-avg"),
+          )}
+          ${renderNetStatCard(
+            "Median",
+            formatBytes(medianBytes),
+            "p50",
+            openExp("throughput-bytes-median"),
+          )}
+          ${renderNetStatCard(
+            "Total",
+            formatBytes(totalBytes),
+            "all frames summed",
+            openExp("throughput-total"),
+          )}
+        </div>`}
   `;
 }
 
@@ -4512,7 +4587,6 @@ const STYLES = /* css */ `
     display: grid;
     grid-template-columns: 1fr 1fr;
     flex-shrink: 0;
-    border-bottom: 1px solid #d4d8e8;
   }
   .pm-live-card-col {
     display: flex;
@@ -4520,6 +4594,26 @@ const STYLES = /* css */ `
     padding: 8px;
     max-height: 300px;
     overflow-y: auto;
+  }
+  .pm-live-cards-details {
+    flex-shrink: 0;
+    border-bottom: 1px solid #d4d8e8;
+  }
+  .pm-live-cards-summary {
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    color: #1a1a2e;
+    padding: 6px 10px;
+    background: #f8fafc;
+    user-select: none;
+    list-style: revert;
+  }
+  .pm-live-cards-summary:hover {
+    background: #f1f3f9;
+  }
+  .pm-live-cards-details[open] .pm-live-cards-summary {
+    border-bottom: 1px solid #e5e7eb;
   }
   .pm-live-card-col:first-child {
     border-right: 1px solid #d4d8e8;
@@ -4665,6 +4759,25 @@ const STYLES = /* css */ `
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin: 4px 0 4px;
+  }
+  .pm-message-types-details {
+    margin: 6px 0 8px;
+  }
+  .pm-message-types-summary {
+    cursor: pointer;
+    font-size: 11px;
+    color: #4b5563;
+    padding: 4px 8px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    user-select: none;
+  }
+  .pm-message-types-summary:hover {
+    background: #e5e7eb;
+  }
+  .pm-message-types-details[open] .pm-message-types-summary {
+    margin-bottom: 4px;
   }
   .pm-net-stat-grid {
     display: grid;
@@ -5308,6 +5421,12 @@ const STYLES = /* css */ `
        on the inner svg makes the height shrink proportionally. Cards
        and legend siblings are unaffected, they keep their full width. */
     max-width: 75%;
+  }
+  .pm-chart-block--full {
+    /* Full-width variant for the Messages bar chart (the section's headline
+       chart, intentionally allowed to span the panel even when other charts
+       are capped). */
+    max-width: 100%;
   }
   .pm-chart-header {
     display: flex;
