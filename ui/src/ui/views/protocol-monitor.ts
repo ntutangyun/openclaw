@@ -2199,7 +2199,10 @@ function renderProtocolAndNetworkPane(props: ProtocolMonitorProps): TemplateResu
       <!-- Right half: model filter, usage, directional network/latency tabs -->
       <div class="pm-right-half">
         ${renderModelFilter(allModels, props)}
-        <div class="pm-usage-banner">${renderUsageOverview(props)}</div>
+        <details class="pm-usage-details">
+          <summary class="pm-usage-summary">Usage Overview</summary>
+          <div class="pm-usage-banner">${renderUsageOverview(props)}</div>
+        </details>
         ${renderDirectionalNetworkPane(netStats, props)}
       </div>
     </div>
@@ -3067,13 +3070,16 @@ function renderMessagesBarChartSvg(
   data: MessagesDirection,
   colorMap: Map<string, string>,
   timeWindow?: TimeWindow,
-  fullWidth: boolean = false,
+  _fullWidth: boolean = false,
 ): TemplateResult {
-  const blockClass = fullWidth ? "pm-chart-block pm-chart-block--full" : "pm-chart-block";
+  // The Messages bar chart is the section's headline chart — render at the
+  // shorter aspect ratio (pm-chart-block--short) so it doesn't dominate the
+  // panel above the legend + cards beneath it.
+  const blockClass = "pm-chart-block pm-chart-block--short";
   if (data.bars.length === 0) {
     return html`
       <div class="${blockClass}">
-        <div class="pm-chart-empty" style="height:260px;line-height:260px;">
+        <div class="pm-chart-empty" style="height:195px;line-height:195px;">
           Waiting for first message...
         </div>
       </div>
@@ -3259,20 +3265,34 @@ function renderMessagesSection(
   }
   // Stable color per type so bars and legend (and cards' left border) align.
   const colorMap = buildMessageTypeColorMap(data.cards.map((c) => c.type));
-  // Chart first (full width), then a collapsed-by-default <details> wrapping
-  // the per-type cards + legend. Wire-pair tabs can have 20+ distinct types
-  // (health/heartbeat/presence/poll/etc.), so showing every card up-front
-  // crowds the panel — keep them one click away.
+  // Chart first (full width), then the legend (always visible — it's a key
+  // for the chart so collapsing it would defeat the chart), then a
+  // collapsed-by-default <details> wrapping the per-type cards. Wire-pair
+  // tabs can have 20+ distinct types (health/heartbeat/presence/poll/etc.),
+  // so showing every card up-front crowds the panel — keep them one click
+  // away while the legend stays visible.
   return html`
     <div class="pm-net-section-title">
       Messages · ${totalCount} total · ${data.cards.length}
       ${data.cards.length === 1 ? "type" : "types"}
     </div>
     ${renderMessagesBarChartSvg(data, colorMap, timeWindow, /* fullWidth */ true)}
+    <div class="pm-message-legend">
+      ${data.cards.map(
+        (c) => html`
+          <span class="pm-message-legend-item">
+            <span
+              class="pm-message-legend-swatch"
+              style="background:${colorMap.get(c.type) ?? color};"
+            ></span>
+            <span class="pm-message-legend-label">${c.type}</span>
+          </span>
+        `,
+      )}
+    </div>
     <details class="pm-message-types-details">
       <summary class="pm-message-types-summary">
-        Show ${data.cards.length} message ${data.cards.length === 1 ? "type" : "types"} (cards +
-        legend)
+        Show ${data.cards.length} message ${data.cards.length === 1 ? "type" : "types"} (cards)
       </summary>
       <div class="pm-message-cards" style="margin-top:6px;">
         ${data.cards.map(
@@ -3288,19 +3308,6 @@ function renderMessagesSection(
                 ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
               </div>
             </button>
-          `,
-        )}
-      </div>
-      <div class="pm-message-legend">
-        ${data.cards.map(
-          (c) => html`
-            <span class="pm-message-legend-item">
-              <span
-                class="pm-message-legend-swatch"
-                style="background:${colorMap.get(c.type) ?? color};"
-              ></span>
-              <span class="pm-message-legend-label">${c.type}</span>
-            </span>
           `,
         )}
       </div>
@@ -3348,28 +3355,10 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
       <strong>${meta.longLabel}</strong>
     </div>
 
-    <!-- 1. Events by category — per-category cards + unified bar chart + legend -->
-    <div class="pm-net-section-title">Events by category · ${stats.totalEvents} total</div>
-    <div class="pm-message-cards">
-      ${stats.cards.map((c) => {
-        const cat = c.category;
-        const color = colorMap.get(cat) ?? meta.color;
-        return html`
-          <button
-            class="pm-message-card"
-            style="border-left-color:${color};"
-            @click=${openExp(`llm-event-${cat}`)}
-          >
-            <div class="pm-message-card-type" title=${AGENT_LLM_CATEGORY_LABELS[cat]}>
-              ${AGENT_LLM_CATEGORY_LABELS[cat]}
-            </div>
-            <div class="pm-message-card-count">${c.count}</div>
-            <div class="pm-message-card-sub">
-              ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
-            </div>
-          </button>
-        `;
-      })}
+    <!-- 1. Events by category — chart first, legend always visible, cards collapsed -->
+    <div class="pm-net-section-title">
+      Events by category · ${stats.totalEvents} total · ${stats.cards.length}
+      ${stats.cards.length === 1 ? "type" : "types"}
     </div>
     ${renderAgentLlmEventChartSvg(stats.bars, colorMap, timeWindow)}
     <div class="pm-message-legend">
@@ -3384,23 +3373,74 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
         `;
       })}
     </div>
+    ${stats.cards.length === 0
+      ? nothing
+      : html`
+          <details class="pm-message-types-details">
+            <summary class="pm-message-types-summary">
+              Show ${stats.cards.length} event
+              ${stats.cards.length === 1 ? "category" : "categories"} (cards)
+            </summary>
+            <div class="pm-message-cards" style="margin-top:6px;">
+              ${stats.cards.map((c) => {
+                const cat = c.category;
+                const color = colorMap.get(cat) ?? meta.color;
+                return html`
+                  <button
+                    class="pm-message-card"
+                    style="border-left-color:${color};"
+                    @click=${openExp(`llm-event-${cat}`)}
+                  >
+                    <div class="pm-message-card-type" title=${AGENT_LLM_CATEGORY_LABELS[cat]}>
+                      ${AGENT_LLM_CATEGORY_LABELS[cat]}
+                    </div>
+                    <div class="pm-message-card-count">${c.count}</div>
+                    <div class="pm-message-card-sub">
+                      ${formatBytes(c.minBytes)} – ${formatBytes(c.maxBytes)}
+                    </div>
+                  </button>
+                `;
+              })}
+            </div>
+          </details>
+        `}
 
-    <!-- 2. TTFT — distribution cards (per-call latency) -->
+    <!-- 2. TTFT — single merged row of distribution stats (no chart) -->
     <div class="pm-net-section-title" style="margin-top:14px;">
       TTFT · ${ttft.count} ${ttft.count === 1 ? "call" : "calls"}
     </div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard("Min", formatMs(ttft.minMs), "best", openExp("lat-ttft-min"))}
-      ${renderNetStatCard(
-        "Avg",
-        formatMs(ttft.avgMs),
-        `${ttft.count} samples`,
-        openExp("lat-ttft-avg"),
-      )}
-      ${renderNetStatCard("p50", formatMs(ttft.p50Ms), "median", openExp("lat-ttft-p50"))}
-      ${renderNetStatCard("p95", formatMs(ttft.p95Ms), "tail", openExp("lat-ttft-p95"))}
-      ${renderNetStatCard("Peak", formatMs(ttft.peakMs), "worst", openExp("lat-ttft-peak"))}
-    </div>
+    ${renderNetStatRow([
+      {
+        title: "Min",
+        value: formatMs(ttft.minMs),
+        sub: "best",
+        onClick: openExp("lat-ttft-min"),
+      },
+      {
+        title: "Avg",
+        value: formatMs(ttft.avgMs),
+        sub: `${ttft.count} samples`,
+        onClick: openExp("lat-ttft-avg"),
+      },
+      {
+        title: "p50",
+        value: formatMs(ttft.p50Ms),
+        sub: "median",
+        onClick: openExp("lat-ttft-p50"),
+      },
+      {
+        title: "p95",
+        value: formatMs(ttft.p95Ms),
+        sub: "tail",
+        onClick: openExp("lat-ttft-p95"),
+      },
+      {
+        title: "Peak",
+        value: formatMs(ttft.peakMs),
+        sub: "worst",
+        onClick: openExp("lat-ttft-peak"),
+      },
+    ])}
 
     <!-- 3. Throughput — metrics only (no chart) -->
     ${renderAgentLlmThroughputSection(stats.callThroughput, stats.eventByteStats, openExp)}
@@ -3602,45 +3642,45 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
     <!-- 1. Messages — type cards + size bar chart -->
     ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
 
-    <!-- 2. Latency — distribution cards + chart -->
+    <!-- 2. Latency — chart first, then a single merged row of distribution stats -->
     ${latency
       ? html`
           <div class="pm-net-section-title" style="margin-top:14px;">
             Latency · ${latency.label}
           </div>
-          <div class="pm-net-stat-grid">
-            ${renderNetStatCard(
-              "Min",
-              formatMs(latency.stats.minMs),
-              "best sample",
-              openExp(`${latency.latencyKey}-min`),
-            )}
-            ${renderNetStatCard(
-              "Avg",
-              formatMs(latency.stats.avgMs),
-              `${latency.stats.count} samples`,
-              openExp(`${latency.latencyKey}-avg`),
-            )}
-            ${renderNetStatCard(
-              "p50",
-              formatMs(latency.stats.p50Ms),
-              "median",
-              openExp(`${latency.latencyKey}-p50`),
-            )}
-            ${renderNetStatCard(
-              "p95",
-              formatMs(latency.stats.p95Ms),
-              "tail",
-              openExp(`${latency.latencyKey}-p95`),
-            )}
-            ${renderNetStatCard(
-              "Peak",
-              formatMs(latency.stats.peakMs),
-              "worst sample",
-              openExp(`${latency.latencyKey}-peak`),
-            )}
-          </div>
           ${renderLatencyChartSvg(latency.label, latency.stats, meta.color, timeWindow)}
+          ${renderNetStatRow([
+            {
+              title: "Min",
+              value: formatMs(latency.stats.minMs),
+              sub: "best sample",
+              onClick: openExp(`${latency.latencyKey}-min`),
+            },
+            {
+              title: "Avg",
+              value: formatMs(latency.stats.avgMs),
+              sub: `${latency.stats.count} samples`,
+              onClick: openExp(`${latency.latencyKey}-avg`),
+            },
+            {
+              title: "p50",
+              value: formatMs(latency.stats.p50Ms),
+              sub: "median",
+              onClick: openExp(`${latency.latencyKey}-p50`),
+            },
+            {
+              title: "p95",
+              value: formatMs(latency.stats.p95Ms),
+              sub: "tail",
+              onClick: openExp(`${latency.latencyKey}-p95`),
+            },
+            {
+              title: "Peak",
+              value: formatMs(latency.stats.peakMs),
+              sub: "worst sample",
+              onClick: openExp(`${latency.latencyKey}-peak`),
+            },
+          ])}
         `
       : html`
           <div class="pm-net-section-title" style="margin-top:14px;">Latency</div>
@@ -3731,32 +3771,32 @@ function renderWireThroughputStatsSection(
       ? html`<div class="pm-chart-empty" style="height:60px;line-height:60px;">
           No per-message latency available yet on this direction.
         </div>`
-      : html`<div class="pm-net-stat-grid">
-          ${renderNetStatCard(
-            "Min",
-            `${formatBytes(tptMin)}/s`,
-            "slowest message",
-            openExp("throughput-min"),
-          )}
-          ${renderNetStatCard(
-            "Peak",
-            `${formatBytes(tptPeak)}/s`,
-            "fastest message",
-            openExp("throughput-peak"),
-          )}
-          ${renderNetStatCard(
-            "Average",
-            `${formatBytes(tptAvg)}/s`,
-            `over ${tptCount} messages`,
-            openExp("throughput-avg"),
-          )}
-          ${renderNetStatCard(
-            "Median",
-            `${formatBytes(tptMedian)}/s`,
-            "p50",
-            openExp("throughput-median"),
-          )}
-        </div>`}
+      : renderNetStatRow([
+          {
+            title: "Min",
+            value: `${formatBytes(tptMin)}/s`,
+            sub: "slowest message",
+            onClick: openExp("throughput-min"),
+          },
+          {
+            title: "Peak",
+            value: `${formatBytes(tptPeak)}/s`,
+            sub: "fastest message",
+            onClick: openExp("throughput-peak"),
+          },
+          {
+            title: "Average",
+            value: `${formatBytes(tptAvg)}/s`,
+            sub: `over ${tptCount} messages`,
+            onClick: openExp("throughput-avg"),
+          },
+          {
+            title: "Median",
+            value: `${formatBytes(tptMedian)}/s`,
+            sub: "p50",
+            onClick: openExp("throughput-median"),
+          },
+        ])}
     <div class="pm-net-subsection-title" style="margin-top:10px;">
       Per-message bytes · ${messageCount} ${messageCount === 1 ? "message" : "messages"}
     </div>
@@ -3764,38 +3804,38 @@ function renderWireThroughputStatsSection(
       ? html`<div class="pm-chart-empty" style="height:60px;line-height:60px;">
           No messages on this direction yet.
         </div>`
-      : html`<div class="pm-net-stat-grid">
-          ${renderNetStatCard(
-            "Min",
-            formatBytes(minBytes),
-            "smallest frame",
-            openExp("throughput-bytes-min"),
-          )}
-          ${renderNetStatCard(
-            "Max",
-            formatBytes(maxBytes),
-            "largest frame",
-            openExp("throughput-bytes-max"),
-          )}
-          ${renderNetStatCard(
-            "Average",
-            formatBytes(avgBytes),
-            `over ${messageCount} messages`,
-            openExp("throughput-bytes-avg"),
-          )}
-          ${renderNetStatCard(
-            "Median",
-            formatBytes(medianBytes),
-            "p50",
-            openExp("throughput-bytes-median"),
-          )}
-          ${renderNetStatCard(
-            "Total",
-            formatBytes(totalBytes),
-            "all frames summed",
-            openExp("throughput-total"),
-          )}
-        </div>`}
+      : renderNetStatRow([
+          {
+            title: "Min",
+            value: formatBytes(minBytes),
+            sub: "smallest frame",
+            onClick: openExp("throughput-bytes-min"),
+          },
+          {
+            title: "Max",
+            value: formatBytes(maxBytes),
+            sub: "largest frame",
+            onClick: openExp("throughput-bytes-max"),
+          },
+          {
+            title: "Average",
+            value: formatBytes(avgBytes),
+            sub: `over ${messageCount} messages`,
+            onClick: openExp("throughput-bytes-avg"),
+          },
+          {
+            title: "Median",
+            value: formatBytes(medianBytes),
+            sub: "p50",
+            onClick: openExp("throughput-bytes-median"),
+          },
+          {
+            title: "Total",
+            value: formatBytes(totalBytes),
+            sub: "all frames summed",
+            onClick: openExp("throughput-total"),
+          },
+        ])}
   `;
 }
 
@@ -3826,92 +3866,104 @@ function renderAgentLlmThroughputSection(
       ${byt.count === 1 ? "event" : "events"}
     </div>
     <div class="pm-net-subsection-title">Per-call generation throughput</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Min",
-        tpt.count > 0 ? `${formatBytes(tpt.minBytesPerSec ?? 0)}/s` : "—",
-        "slowest call",
-        openExp("agentllm-throughput-min"),
-      )}
-      ${renderNetStatCard(
-        "Peak",
-        tpt.count > 0 ? `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s` : "—",
-        "fastest call",
-        openExp("agentllm-throughput-peak"),
-      )}
-      ${renderNetStatCard(
-        "Average",
-        tpt.count > 0 ? `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s` : "—",
-        tpt.count > 0 ? `over ${tpt.count} calls` : "no measurable calls",
-        openExp("agentllm-throughput-avg"),
-      )}
-      ${renderNetStatCard(
-        "Median",
-        tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
-        "p50",
-        openExp("agentllm-throughput-median"),
-      )}
-    </div>
+    ${renderNetStatRow([
+      {
+        title: "Min",
+        value: tpt.count > 0 ? `${formatBytes(tpt.minBytesPerSec ?? 0)}/s` : "—",
+        sub: "slowest call",
+        onClick: openExp("agentllm-throughput-min"),
+      },
+      {
+        title: "Peak",
+        value: tpt.count > 0 ? `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s` : "—",
+        sub: "fastest call",
+        onClick: openExp("agentllm-throughput-peak"),
+      },
+      {
+        title: "Average",
+        value: tpt.count > 0 ? `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s` : "—",
+        sub: tpt.count > 0 ? `over ${tpt.count} calls` : "no measurable calls",
+        onClick: openExp("agentllm-throughput-avg"),
+      },
+      {
+        title: "Median",
+        value: tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
+        sub: "p50",
+        onClick: openExp("agentllm-throughput-median"),
+      },
+    ])}
     <div class="pm-net-subsection-title" style="margin-top:10px;">Per-event bytes</div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard(
-        "Min",
-        formatBytes(byt.minBytes ?? 0),
-        "smallest event",
-        openExp("agentllm-bytes-min"),
-      )}
-      ${renderNetStatCard(
-        "Max",
-        formatBytes(byt.maxBytes ?? 0),
-        "largest event",
-        openExp("agentllm-bytes-max"),
-      )}
-      ${renderNetStatCard(
-        "Average",
-        formatBytes(byt.avgBytes ?? 0),
-        `over ${byt.count} events`,
-        openExp("agentllm-bytes-avg"),
-      )}
-      ${renderNetStatCard(
-        "Median",
-        formatBytes(byt.p50Bytes ?? 0),
-        "p50",
-        openExp("agentllm-bytes-median"),
-      )}
-      ${renderNetStatCard(
-        "Total",
-        formatBytes(byt.totalBytes),
-        "all event payloads summed",
-        openExp("agentllm-bytes-total"),
-      )}
-    </div>
+    ${renderNetStatRow([
+      {
+        title: "Min",
+        value: formatBytes(byt.minBytes ?? 0),
+        sub: "smallest event",
+        onClick: openExp("agentllm-bytes-min"),
+      },
+      {
+        title: "Max",
+        value: formatBytes(byt.maxBytes ?? 0),
+        sub: "largest event",
+        onClick: openExp("agentllm-bytes-max"),
+      },
+      {
+        title: "Average",
+        value: formatBytes(byt.avgBytes ?? 0),
+        sub: `over ${byt.count} events`,
+        onClick: openExp("agentllm-bytes-avg"),
+      },
+      {
+        title: "Median",
+        value: formatBytes(byt.p50Bytes ?? 0),
+        sub: "p50",
+        onClick: openExp("agentllm-bytes-median"),
+      },
+      {
+        title: "Total",
+        value: formatBytes(byt.totalBytes),
+        sub: "all event payloads summed",
+        onClick: openExp("agentllm-bytes-total"),
+      },
+    ])}
   `;
 }
 
-function renderNetStatCard(
-  title: string,
-  value: string,
-  sub: string,
-  onClick: () => void,
+/**
+ * Render a horizontal "merged" stat row — one full-width card containing
+ * several sibling metrics for the same dimension (e.g. min | avg | p50 | p95
+ * | peak), separated by vertical lines. Each cell is independently clickable
+ * (mouse + keyboard) and opens the same explainer overlay as the old
+ * one-card-per-metric layout.
+ */
+function renderNetStatRow(
+  cells: Array<{ title: string; value: string; sub: string; onClick: () => void }>,
 ): TemplateResult {
   return html`
-    <button
-      type="button"
-      class="pm-net-stat-card"
-      role="button"
-      title="点击查看说明"
-      @click=${onClick}
-      @keydown=${(e: KeyboardEvent) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-    >
-      <div class="pm-net-stat-card-title">${title}<span class="pm-ucard-info">ⓘ</span></div>
-      <div class="pm-net-stat-card-value">${value}</div>
-      <div class="pm-net-stat-card-sub">${sub}</div>
-    </button>
+    <div class="pm-net-stat-row">
+      ${cells.map(
+        (c) => html`
+          <button
+            type="button"
+            class="pm-net-stat-row-cell"
+            role="button"
+            title="点击查看说明"
+            @click=${c.onClick}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                c.onClick();
+              }
+            }}
+          >
+            <div class="pm-net-stat-row-cell-title">
+              ${c.title}<span class="pm-ucard-info">ⓘ</span>
+            </div>
+            <div class="pm-net-stat-row-cell-value">${c.value}</div>
+            <div class="pm-net-stat-row-cell-sub">${c.sub}</div>
+          </button>
+        `,
+      )}
+    </div>
   `;
 }
 
@@ -4265,7 +4317,10 @@ const STYLES = /* css */ `
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 4px 10px;
+    /* No vertical padding — the protocol-monitor sub-tab row is the very
+       first thing inside the page; let it sit flush against the global
+       search/nav bar above instead of adding a 4px breathing-room band. */
+    padding: 0 10px;
     border-bottom: 1px solid #d4d8e8;
     flex-shrink: 0;
     background: #ffffff;
@@ -4379,7 +4434,9 @@ const STYLES = /* css */ `
   .pm-pane {
     flex: 1;
     overflow-y: auto;
-    padding: 10px;
+    /* No top padding — sit flush against the sub-tab bar above. The user
+       found the prior 10px gap wasted vertical space on every monitor view. */
+    padding: 0 10px 10px;
   }
   .pm-terminology-pane {
     display: flex;
@@ -4673,7 +4730,6 @@ const STYLES = /* css */ `
   }
   .pm-usage-banner {
     padding: 8px;
-    border-bottom: 1px solid #d4d8e8;
     flex-shrink: 0;
   }
   .pm-right-cols {
@@ -4734,7 +4790,10 @@ const STYLES = /* css */ `
   .pm-net-direction-content {
     flex: 1;
     overflow-y: auto;
-    padding: 10px 12px 14px;
+    /* Tight top padding — the directional tabs above are already a clear
+       boundary, no need for an extra 10px breathing band before the first
+       section title. */
+    padding: 4px 12px 14px;
   }
   .pm-net-direction-header {
     display: flex;
@@ -4784,6 +4843,84 @@ const STYLES = /* css */ `
     grid-template-columns: repeat(2, 1fr);
     gap: 6px;
     margin-bottom: 10px;
+  }
+  /* Single full-width "merged" card with vertical separators between cells.
+     Used wherever a section reports several variants of the same metric
+     (Latency: min | avg | p50 | p95 | peak; Throughput: min | peak | avg |
+     median; etc.) so the user reads a single visual unit instead of a
+     fragmented grid of tiny cards. */
+  .pm-net-stat-row {
+    display: flex;
+    width: 100%;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #ffffff;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .pm-net-stat-row-cell {
+    flex: 1;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #e5e7eb;
+    padding: 6px 10px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: background-color 0.08s;
+    min-width: 0;
+  }
+  .pm-net-stat-row-cell:last-child {
+    border-right: none;
+  }
+  .pm-net-stat-row-cell:hover {
+    background: #f3f4f6;
+  }
+  .pm-net-stat-row-cell-title {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6b7280;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .pm-net-stat-row-cell-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1a1a2e;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pm-net-stat-row-cell-sub {
+    font-size: 10px;
+    color: #6b7280;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pm-usage-details {
+    flex-shrink: 0;
+    border-bottom: 1px solid #d4d8e8;
+  }
+  .pm-usage-summary {
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    color: #1a1a2e;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 6px 10px;
+    background: #f8fafc;
+    user-select: none;
+    list-style: revert;
+  }
+  .pm-usage-summary:hover {
+    background: #f1f3f9;
   }
   .pm-net-stat-card {
     text-align: left;
@@ -5416,17 +5553,23 @@ const STYLES = /* css */ `
     border-radius: 6px;
     padding: 8px 10px;
     background: #ffffff;
-    /* Cap at 3/4 of the parent (direction content) so on ultra-wide
-       monitors the chart doesn't span the entire panel; aspect-ratio
-       on the inner svg makes the height shrink proportionally. Cards
-       and legend siblings are unaffected, they keep their full width. */
-    max-width: 75%;
+    /* All charts span the full width of the parent direction-content panel
+       — the user found the previous 75% cap was wasting horizontal real
+       estate next to the cards (which are now collapsed by default anyway). */
+    max-width: 100%;
   }
   .pm-chart-block--full {
-    /* Full-width variant for the Messages bar chart (the section's headline
-       chart, intentionally allowed to span the panel even when other charts
-       are capped). */
+    /* Backwards-compat alias, no longer needed since pm-chart-block is now
+       full-width by default. Kept so old call sites keep working. */
     max-width: 100%;
+  }
+  .pm-chart-block--short {
+    /* Used by the Messages bar chart only — the user wanted that specific
+       chart at 3/4 the height of the others (it's a headline chart that
+       sits above the section's cards/legend, not a deep-dive view). */
+  }
+  .pm-chart-block--short .pm-chart-svg--tall {
+    aspect-ratio: 460 / 195;
   }
   .pm-chart-header {
     display: flex;
