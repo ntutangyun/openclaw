@@ -1649,11 +1649,12 @@ function buildNetworkExplainerContent(
     };
   }
 
-  // Agent ↔ Model throughput section cards (per-call generation throughput +
-  // per-event payload bytes).
-  if (key.startsWith("agentllm-throughput-") || key.startsWith("agentllm-bytes-")) {
+  // Agent ↔ Model throughput section cards (per-call generation throughput).
+  // Per-event-bytes cards were removed because the Events-by-category cards
+  // above the chart already cover the same min/max/total information per
+  // category — no need for a separate "summed across all categories" row.
+  if (key.startsWith("agentllm-throughput-")) {
     const tpt = net.agentLlm.callThroughput;
-    const byt = net.agentLlm.eventByteStats;
     const labels: Record<string, { title: string; value: string; sub: string }> = {
       "agentllm-throughput-min": {
         title: "Min generation throughput",
@@ -1675,52 +1676,21 @@ function buildNetworkExplainerContent(
         value: tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
         sub: "p50 across calls",
       },
-      "agentllm-bytes-min": {
-        title: "Min per-event payload",
-        value: formatBytes(byt.minBytes ?? 0),
-        sub: "smallest event in store",
-      },
-      "agentllm-bytes-max": {
-        title: "Max per-event payload",
-        value: formatBytes(byt.maxBytes ?? 0),
-        sub: "largest event in store",
-      },
-      "agentllm-bytes-avg": {
-        title: "Average per-event payload",
-        value: formatBytes(byt.avgBytes ?? 0),
-        sub: `${byt.count} events`,
-      },
-      "agentllm-bytes-median": {
-        title: "Median per-event payload",
-        value: formatBytes(byt.p50Bytes ?? 0),
-        sub: "p50 across events",
-      },
-      "agentllm-bytes-total": {
-        title: "Total event bytes",
-        value: formatBytes(byt.totalBytes),
-        sub: `${byt.count} events`,
-      },
     };
     const entry = labels[key];
     if (!entry) {
       return null;
     }
-    const isThroughput = key.startsWith("agentllm-throughput-");
     return {
       title: `Agent ↔ Model · ${entry.title}`,
       stats: [
         { label: "Value", value: entry.value },
         { label: "Detail", value: entry.sub },
       ],
-      intro: isThroughput
-        ? html`Per-LLM-call generation throughput =
-            <code>responseBytes / generationDurationMs × 1000</code>. Each call contributes one
-            sample once it has streamed at least two SSE deltas (so there's a measurable duration
-            between first and last token).`
-        : html`Per-event payload size distribution. Every recorded agent↔llm event (request, SSE
-          delta, tool call, tool result, lifecycle end) contributes one sample sourced from the
-          10000-entry event store — decoupled from the trace ring buffer so SSE-heavy sessions don't
-          evict sparser categories.`,
+      intro: html`Per-LLM-call generation throughput =
+        <code>responseBytes / generationDurationMs × 1000</code>. Each call contributes one sample
+        once it has streamed at least two SSE deltas (so there's a measurable duration between first
+        and last token).`,
       sections: [],
     };
   }
@@ -3844,19 +3814,18 @@ function renderWireThroughputStatsSection(
 }
 
 /**
- * Render the Throughput section for the agent|model tab. Per-message
- * throughput is derived from per-LLM-call generation rate (responseBytes /
- * generationDurationMs); per-message bytes is the raw event-bar payload
- * distribution (every event in the unified store contributes one sample).
+ * Render the Throughput section for the agent|model tab. Per-LLM-call
+ * generation throughput only (per-event bytes was removed because the
+ * Events-by-category cards above the chart already show min/max/total per
+ * category, which subsumed and visually overlapped this row).
  */
 function renderAgentLlmThroughputSection(
   callThroughput: ThroughputDirectionStats,
-  eventByteStats: PayloadByteStats,
+  _eventByteStats: PayloadByteStats,
   openExp: (key: string) => () => void,
 ): TemplateResult {
   const tpt = callThroughput;
-  const byt = eventByteStats;
-  if (tpt.count === 0 && byt.count === 0) {
+  if (tpt.count === 0) {
     return html`
       <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
       <div class="pm-chart-empty" style="height:80px;line-height:80px;">
@@ -3866,67 +3835,33 @@ function renderAgentLlmThroughputSection(
   }
   return html`
     <div class="pm-net-section-title" style="margin-top:14px;">
-      Throughput · ${tpt.count} ${tpt.count === 1 ? "call" : "calls"} · ${byt.count}
-      ${byt.count === 1 ? "event" : "events"}
+      Throughput · ${tpt.count} ${tpt.count === 1 ? "call" : "calls"}
     </div>
     <div class="pm-net-subsection-title">Per-call generation throughput</div>
     ${renderNetStatRow([
       {
         title: "Min",
-        value: tpt.count > 0 ? `${formatBytes(tpt.minBytesPerSec ?? 0)}/s` : "—",
+        value: `${formatBytes(tpt.minBytesPerSec ?? 0)}/s`,
         sub: "slowest call",
         onClick: openExp("agentllm-throughput-min"),
       },
       {
         title: "Peak",
-        value: tpt.count > 0 ? `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s` : "—",
+        value: `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s`,
         sub: "fastest call",
         onClick: openExp("agentllm-throughput-peak"),
       },
       {
         title: "Average",
-        value: tpt.count > 0 ? `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s` : "—",
-        sub: tpt.count > 0 ? `over ${tpt.count} calls` : "no measurable calls",
+        value: `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s`,
+        sub: `over ${tpt.count} calls`,
         onClick: openExp("agentllm-throughput-avg"),
       },
       {
         title: "Median",
-        value: tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
+        value: `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s`,
         sub: "p50",
         onClick: openExp("agentllm-throughput-median"),
-      },
-    ])}
-    <div class="pm-net-subsection-title" style="margin-top:10px;">Per-event bytes</div>
-    ${renderNetStatRow([
-      {
-        title: "Min",
-        value: formatBytes(byt.minBytes ?? 0),
-        sub: "smallest event",
-        onClick: openExp("agentllm-bytes-min"),
-      },
-      {
-        title: "Max",
-        value: formatBytes(byt.maxBytes ?? 0),
-        sub: "largest event",
-        onClick: openExp("agentllm-bytes-max"),
-      },
-      {
-        title: "Average",
-        value: formatBytes(byt.avgBytes ?? 0),
-        sub: `over ${byt.count} events`,
-        onClick: openExp("agentllm-bytes-avg"),
-      },
-      {
-        title: "Median",
-        value: formatBytes(byt.p50Bytes ?? 0),
-        sub: "p50",
-        onClick: openExp("agentllm-bytes-median"),
-      },
-      {
-        title: "Total",
-        value: formatBytes(byt.totalBytes),
-        sub: "all event payloads summed",
-        onClick: openExp("agentllm-bytes-total"),
       },
     ])}
   `;
