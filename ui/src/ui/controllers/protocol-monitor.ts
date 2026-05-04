@@ -374,6 +374,28 @@ export type AgentLlmStats = {
   cards: AgentLlmEventCard[];
   /** One bar per recorded event; drives the unified chart. */
   bars: AgentLlmEventBar[];
+  /**
+   * Per-LLM-call generation throughput. One sample per LLM call:
+   * `bytesPerSec = responseBytes / generationDurationMs * 1000`,
+   * `rawBytes = responseBytes`. Used by the Throughput section's
+   * per-message-throughput stats (min/peak/avg/median bytes/sec).
+   */
+  callThroughput: ThroughputDirectionStats;
+  /**
+   * Per-event payload-size distribution (each bar contributes one sample).
+   * Used by the Throughput section's per-message-bytes stats.
+   */
+  eventByteStats: PayloadByteStats;
+};
+
+/** Distribution of per-message payload sizes (in bytes). */
+export type PayloadByteStats = {
+  count: number;
+  totalBytes: number;
+  minBytes: number | null;
+  maxBytes: number | null;
+  avgBytes: number | null;
+  p50Bytes: number | null;
 };
 
 /**
@@ -681,6 +703,33 @@ export function isIngestBlocklisted(
   }
   return false;
 }
+
+/**
+ * Narrower filter applied ONLY to the per-direction Messages store. The full
+ * `DEFAULT_INGEST_BLOCKLIST` keeps the trace ring buffer focused on agentic
+ * task traffic; the wire-pair message-size bar chart is a different question:
+ * "what kinds of frames are actually moving on this WebSocket?". For that, we
+ * want to surface health pings, presence ticks, polls etc. so the chart
+ * isn't almost-empty when no agent task is running. Only true measurement
+ * mechanism that the protocol monitor itself depends on stays excluded —
+ * leaving those in would be self-referential and would dominate the chart.
+ */
+export const MESSAGES_SELF_REFERENTIAL_BLOCKLIST = new Set<string>([
+  // The protocol monitor's own RPCs and rebroadcast events.
+  "protocol-traces.list",
+  "protocol-traces.clear",
+  "protocol-traces.rx-report",
+  "protocol.trace",
+  "protocol.rx.samples",
+  // The dedicated ping protocol (high frequency, used to derive latency).
+  "ping.peer-to-gw",
+  "ping.gw-to-peer",
+  "ping.gw-to-peer.ack",
+  "ping.metrics",
+  "ping.metrics-report",
+  // Clock-sync mechanism (high frequency, used to derive sentAt offsets).
+  "time.sync",
+]);
 
 /** Default disabled message types for cleaner agentic task view. */
 export const DEFAULT_DISABLED_TYPES = new Set([
@@ -1281,6 +1330,34 @@ function buildMessagesDirection(buf: MessageEntry[]): MessagesDirection {
   };
 }
 
+/**
+ * Distribution of per-message payload sizes. `sizes` is the raw `payloadSize`
+ * (bytes) for each message — this builder doesn't care about throughput
+ * (bytes/sec), just the byte size of each individual frame.
+ */
+export function buildPayloadByteStats(sizes: number[]): PayloadByteStats {
+  if (sizes.length === 0) {
+    return {
+      count: 0,
+      totalBytes: 0,
+      minBytes: null,
+      maxBytes: null,
+      avgBytes: null,
+      p50Bytes: null,
+    };
+  }
+  const sorted = sizes.slice().toSorted((a, b) => a - b);
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  return {
+    count: sorted.length,
+    totalBytes: sum,
+    minBytes: sorted[0] ?? null,
+    maxBytes: sorted[sorted.length - 1] ?? null,
+    avgBytes: sum / sorted.length,
+    p50Bytes: sorted[Math.floor(sorted.length * 0.5)] ?? null,
+  };
+}
+
 function buildThroughputStats(samples: ThroughputSample[]): ThroughputDirectionStats {
   if (samples.length === 0) {
     return {
@@ -1478,6 +1555,12 @@ function recordMessageFromTrace(t: ProtocolTraceRecord): void {
     return;
   }
   if (isOperatorPairTrace(t) && !isShownInOperatorPair(t)) {
+    return;
+  }
+  // Narrower blocklist than the full ingest filter — keep health/presence/
+  // poll/heartbeat traces visible in the message-size bar chart, drop only
+  // the self-referential measurement mechanism.
+  if (isIngestBlocklisted(t, MESSAGES_SELF_REFERENTIAL_BLOCKLIST)) {
     return;
   }
   let buf: MessageEntry[] | null = null;
@@ -1843,22 +1926,38 @@ function buildAgentLlmStats(): AgentLlmStats {
     cards.push(c);
   }
 
-  // Per-call TTFT samples from llmCallStore — sorted by requestTs.
+  // Per-call TTFT samples + per-call generation throughput. One sample per
+  // LLM call: TTFT = firstAssistantTs − requestTs; throughput =
+  // responseBytes / generationDurationMs * 1000 (only when the call streamed
+  // ≥ 2 SSE events, so there's a measurable duration). callThroughput drives
+  // the agent|model Throughput section's per-message-throughput stats.
   const ttftSamples: LatencySample[] = [];
+  const callThroughputSamples: ThroughputSample[] = [];
   for (const call of llmCallStore.values()) {
     if (call.firstAssistantTs === null) {
       continue;
     }
     const ttftMs = call.firstAssistantTs - call.requestTs;
-    if (ttftMs <= 0) {
-      continue;
+    if (ttftMs > 0) {
+      ttftSamples.push({
+        ts: call.requestTs,
+        latencyMs: ttftMs,
+        model: call.model ?? undefined,
+      });
     }
-    ttftSamples.push({
-      ts: call.requestTs,
-      latencyMs: ttftMs,
-      model: call.model ?? undefined,
-    });
+    if (call.lastAssistantTs !== null && call.responseBytes > 0 && call.responseEventCount >= 2) {
+      const genMs = call.lastAssistantTs - call.firstAssistantTs;
+      if (genMs > 0) {
+        callThroughputSamples.push({
+          ts: call.requestTs,
+          bytesPerSec: (call.responseBytes / genMs) * 1000,
+          rawBytes: call.responseBytes,
+        });
+      }
+    }
   }
+
+  const eventSizes = agentLlmEventStore.map((e) => e.size).filter((s) => s > 0);
 
   return {
     ttft: buildLatencyStats(ttftSamples.toSorted((a, b) => a.ts - b.ts)),
@@ -1867,6 +1966,8 @@ function buildAgentLlmStats(): AgentLlmStats {
     totalBytes,
     cards,
     bars: agentLlmEventStore.slice().toSorted((a, b) => a.ts - b.ts),
+    callThroughput: buildThroughputStats(callThroughputSamples.toSorted((a, b) => a.ts - b.ts)),
+    eventByteStats: buildPayloadByteStats(eventSizes),
   };
 }
 
@@ -2104,8 +2205,16 @@ export async function loadProtocolTraces(host: ProtocolMonitorHost) {
     // store from the bulk batch. The live event handler will continue to
     // add new traces — both stores dedupe by trace id so a reconnect-driven
     // re-load doesn't double-count.
-    for (const t of filtered) {
+    //
+    // Messages store sees the un-filtered batch (it has its own narrower
+    // self-referential blocklist) so the message-size bar chart can show
+    // health/presence/poll traffic that the trace ring buffer drops. LLM
+    // stores only act on agent↔llm edges, which the wider filter doesn't
+    // intersect, so feeding them `filtered` is fine.
+    for (const t of incoming) {
       recordMessageFromTrace(t);
+    }
+    for (const t of filtered) {
       recordLlmCallFromTrace(t);
       recordAgentLlmEventFromTrace(t);
     }
@@ -2127,12 +2236,16 @@ export function handleProtocolTraceEvent(host: ProtocolMonitorHost, payload: unk
   if (record.event === "protocol.trace") {
     return;
   }
+  // Record into the messages store BEFORE the trace-buffer blocklist so the
+  // message-size bar chart sees the wider set (health, presence, polls,
+  // heartbeats etc.). recordMessageFromTrace applies its own narrower
+  // self-referential filter.
+  recordMessageFromTrace(record);
   if (isIngestBlocklisted(record)) {
     return;
   }
   const next = [...host.protocolTraces, record];
   host.protocolTraces = next.length > MAX_VISIBLE ? next.slice(next.length - MAX_VISIBLE) : next;
-  recordMessageFromTrace(record);
   recordLlmCallFromTrace(record);
   recordAgentLlmEventFromTrace(record);
 }

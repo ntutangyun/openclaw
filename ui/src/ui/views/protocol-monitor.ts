@@ -11,6 +11,8 @@ import type {
   MessageBar,
   MessagesDirection,
   NetworkStats,
+  PayloadByteStats,
+  ThroughputDirectionStats,
   ThroughputSample,
   LatencyStats,
   LatencySample,
@@ -1408,6 +1410,97 @@ function buildNetworkExplainerContent(
         ],
       };
 
+    case "throughput-min":
+      return {
+        title: `${meta.shortLabel} · Min Throughput`,
+        stats: [
+          {
+            label: "Min",
+            value: `${formatBytes(samples.length > 0 ? Math.min(...samples.map((s) => s.bytesPerSec)) : 0)}/s`,
+          },
+          { label: "Samples", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上,<em>所有单条 message</em> 的 throughput
+          中最小的一个。 通常对应一条 payload 很小但单向延迟相对偏高的 message。`,
+        sections: [],
+      };
+
+    case "throughput-median":
+      return {
+        title: `${meta.shortLabel} · Median Throughput`,
+        stats: [
+          {
+            label: "Median",
+            value: `${formatBytes(median(samples.map((s) => s.bytesPerSec)) ?? 0)}/s`,
+          },
+          { label: "Samples", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上 per-message throughput 的中位数 (p50)。 比 average
+        更能反映 "常态" 下链路的真实吞吐 —— 不被极端样本拖动。`,
+        sections: [],
+      };
+
+    case "throughput-bytes-min":
+      return {
+        title: `${meta.shortLabel} · Min Payload`,
+        stats: [
+          {
+            label: "Min",
+            value: formatBytes(
+              samples.length > 0 ? Math.min(...samples.map((s) => s.rawBytes)) : 0,
+            ),
+          },
+          { label: "Messages", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上单条 message payload 的最小值。`,
+        sections: [],
+      };
+
+    case "throughput-bytes-max":
+      return {
+        title: `${meta.shortLabel} · Max Payload`,
+        stats: [
+          {
+            label: "Max",
+            value: formatBytes(
+              samples.length > 0 ? Math.max(...samples.map((s) => s.rawBytes)) : 0,
+            ),
+          },
+          { label: "Messages", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上单条 message payload 的最大值 ——
+        链路上跑过的最大帧。`,
+        sections: [],
+      };
+
+    case "throughput-bytes-avg":
+      return {
+        title: `${meta.shortLabel} · Avg Payload`,
+        stats: [
+          {
+            label: "Avg",
+            value: formatBytes(samples.length > 0 ? totalBytes / samples.length : 0),
+          },
+          { label: "Total", value: formatBytes(totalBytes) },
+          { label: "Messages", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上单条 message payload 的算术平均 = total bytes /
+        message count。`,
+        sections: [],
+      };
+
+    case "throughput-bytes-median":
+      return {
+        title: `${meta.shortLabel} · Median Payload`,
+        stats: [
+          { label: "Median", value: formatBytes(median(samples.map((s) => s.rawBytes)) ?? 0) },
+          { label: "Messages", value: String(samples.length) },
+        ],
+        intro: html`${directionLabel} 这条方向上单条 message payload 的中位数。 比 average 更能反映
+        "常态消息有多大" —— 一条特别大的 message 不会把这个数字拉走。`,
+        sections: [],
+      };
+
     case "throughput-last":
       return {
         title: `${meta.shortLabel} · Last Activity`,
@@ -1553,6 +1646,82 @@ function buildNetworkExplainerContent(
           </p>`,
         },
       ],
+    };
+  }
+
+  // Agent ↔ Model throughput section cards (per-call generation throughput +
+  // per-event payload bytes).
+  if (key.startsWith("agentllm-throughput-") || key.startsWith("agentllm-bytes-")) {
+    const tpt = net.agentLlm.callThroughput;
+    const byt = net.agentLlm.eventByteStats;
+    const labels: Record<string, { title: string; value: string; sub: string }> = {
+      "agentllm-throughput-min": {
+        title: "Min generation throughput",
+        value: tpt.count > 0 ? `${formatBytes(tpt.minBytesPerSec ?? 0)}/s` : "—",
+        sub: "slowest LLM call",
+      },
+      "agentllm-throughput-peak": {
+        title: "Peak generation throughput",
+        value: tpt.count > 0 ? `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s` : "—",
+        sub: "fastest LLM call",
+      },
+      "agentllm-throughput-avg": {
+        title: "Average generation throughput",
+        value: tpt.count > 0 ? `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s` : "—",
+        sub: `${tpt.count} calls`,
+      },
+      "agentllm-throughput-median": {
+        title: "Median generation throughput",
+        value: tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
+        sub: "p50 across calls",
+      },
+      "agentllm-bytes-min": {
+        title: "Min per-event payload",
+        value: formatBytes(byt.minBytes ?? 0),
+        sub: "smallest event in store",
+      },
+      "agentllm-bytes-max": {
+        title: "Max per-event payload",
+        value: formatBytes(byt.maxBytes ?? 0),
+        sub: "largest event in store",
+      },
+      "agentllm-bytes-avg": {
+        title: "Average per-event payload",
+        value: formatBytes(byt.avgBytes ?? 0),
+        sub: `${byt.count} events`,
+      },
+      "agentllm-bytes-median": {
+        title: "Median per-event payload",
+        value: formatBytes(byt.p50Bytes ?? 0),
+        sub: "p50 across events",
+      },
+      "agentllm-bytes-total": {
+        title: "Total event bytes",
+        value: formatBytes(byt.totalBytes),
+        sub: `${byt.count} events`,
+      },
+    };
+    const entry = labels[key];
+    if (!entry) {
+      return null;
+    }
+    const isThroughput = key.startsWith("agentllm-throughput-");
+    return {
+      title: `Agent ↔ Model · ${entry.title}`,
+      stats: [
+        { label: "Value", value: entry.value },
+        { label: "Detail", value: entry.sub },
+      ],
+      intro: isThroughput
+        ? html`Per-LLM-call generation throughput =
+            <code>responseBytes / generationDurationMs × 1000</code>. Each call contributes one
+            sample once it has streamed at least two SSE deltas (so there's a measurable duration
+            between first and last token).`
+        : html`Per-event payload size distribution. Every recorded agent↔llm event (request, SSE
+          delta, tool call, tool result, lifecycle end) contributes one sample sourced from the
+          10000-entry event store — decoupled from the trace ring buffer so SSE-heavy sessions don't
+          evict sparser categories.`,
+      sections: [],
     };
   }
 
@@ -2839,9 +3008,11 @@ function computeGlobalTimeWindow(net: NetworkStats): TimeWindow | undefined {
   pushSeries(net.operatorGatewayMessages.reverse.bars);
   pushSeries(net.gatewayNodeMessages.forward.bars);
   pushSeries(net.gatewayNodeMessages.reverse.bars);
-  // Agent ↔ Model: per-call TTFT samples + the unified event bars.
+  // Agent ↔ Model: per-call TTFT samples + per-call generation throughput +
+  // the unified event bars.
   pushSeries(net.agentLlm.ttft.samples);
   pushSeries(net.agentLlm.bars);
+  pushSeries(net.agentLlm.callThroughput.samples);
   if (tsValues.length === 0) {
     return undefined;
   }
@@ -3144,33 +3315,8 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
       <strong>${meta.longLabel}</strong>
     </div>
 
-    <!-- Overview cards: TTFT (per-call) + totals -->
-    <div class="pm-net-section-title">
-      TTFT · ${ttft.count} ${ttft.count === 1 ? "call" : "calls"} · ${stats.totalEvents} events
-    </div>
-    <div class="pm-net-stat-grid">
-      ${renderNetStatCard("TTFT min", formatMs(ttft.minMs), "best", openExp("lat-ttft-min"))}
-      ${renderNetStatCard(
-        "TTFT avg",
-        formatMs(ttft.avgMs),
-        `${ttft.count} samples`,
-        openExp("lat-ttft-avg"),
-      )}
-      ${renderNetStatCard("TTFT p50", formatMs(ttft.p50Ms), "median", openExp("lat-ttft-p50"))}
-      ${renderNetStatCard("TTFT p95", formatMs(ttft.p95Ms), "tail", openExp("lat-ttft-p95"))}
-      ${renderNetStatCard("TTFT peak", formatMs(ttft.peakMs), "worst", openExp("lat-ttft-peak"))}
-      ${renderNetStatCard(
-        "Total bytes",
-        formatBytes(stats.totalBytes),
-        `${stats.totalCalls} ${stats.totalCalls === 1 ? "call" : "calls"}`,
-        openExp("llm-overview-total"),
-      )}
-    </div>
-
-    <!-- Per-category cards (count + min/max bytes per event type) -->
-    <div class="pm-net-section-title" style="margin-top:14px;">
-      Events by category · ${stats.totalEvents} total
-    </div>
+    <!-- 1. Events by category — per-category cards + unified bar chart + legend -->
+    <div class="pm-net-section-title">Events by category · ${stats.totalEvents} total</div>
     <div class="pm-message-cards">
       ${stats.cards.map((c) => {
         const cat = c.category;
@@ -3192,10 +3338,7 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
         `;
       })}
     </div>
-
-    <!-- Unified bar chart: every event during the session -->
     ${renderAgentLlmEventChartSvg(stats.bars, colorMap, timeWindow)}
-
     <div class="pm-message-legend">
       ${stats.cards.map((c) => {
         const cat = c.category;
@@ -3208,6 +3351,26 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
         `;
       })}
     </div>
+
+    <!-- 2. TTFT — distribution cards (per-call latency) -->
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      TTFT · ${ttft.count} ${ttft.count === 1 ? "call" : "calls"}
+    </div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard("Min", formatMs(ttft.minMs), "best", openExp("lat-ttft-min"))}
+      ${renderNetStatCard(
+        "Avg",
+        formatMs(ttft.avgMs),
+        `${ttft.count} samples`,
+        openExp("lat-ttft-avg"),
+      )}
+      ${renderNetStatCard("p50", formatMs(ttft.p50Ms), "median", openExp("lat-ttft-p50"))}
+      ${renderNetStatCard("p95", formatMs(ttft.p95Ms), "tail", openExp("lat-ttft-p95"))}
+      ${renderNetStatCard("Peak", formatMs(ttft.peakMs), "worst", openExp("lat-ttft-peak"))}
+    </div>
+
+    <!-- 3. Throughput — metrics only (no chart) -->
+    ${renderAgentLlmThroughputSection(stats.callThroughput, stats.eventByteStats, openExp)}
   `;
 }
 
@@ -3379,21 +3542,14 @@ function handleAgentLlmBarHover(
 }
 
 function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
-  // Agent ↔ Model has its own dedicated 5-section layout (Requests, TTFT,
-  // SSE, Tools, Complete Responses) — see renderAgentLlmContent below.
+  // Agent ↔ Model has its own dedicated 3-section layout (Events by category,
+  // TTFT, Throughput) — see renderAgentLlmContent below.
   if (props.networkDirection === "agent-llm") {
     return renderAgentLlmContent(net, props);
   }
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
   const latency = selectDirectionLatency(net, props.networkDirection);
-
-  const peak = samples.length > 0 ? Math.max(...samples.map((s) => s.bytesPerSec)) : 0;
-  const avg =
-    samples.length > 0 ? samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length : 0;
-  const totalBytes = samples.reduce((a, s) => a + s.rawBytes, 0);
-  const lastSample = samples[samples.length - 1];
-  const lastTs = lastSample?.ts;
 
   const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
 
@@ -3410,9 +3566,15 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
       <strong>${meta.longLabel}</strong>
     </div>
 
+    <!-- 1. Messages — type cards + size bar chart -->
+    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
+
+    <!-- 2. Latency — distribution cards + chart -->
     ${latency
       ? html`
-          <div class="pm-net-section-title">Latency · ${latency.label}</div>
+          <div class="pm-net-section-title" style="margin-top:14px;">
+            Latency · ${latency.label}
+          </div>
           <div class="pm-net-stat-grid">
             ${renderNetStatCard(
               "Min",
@@ -3448,43 +3610,206 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
           ${renderLatencyChartSvg(latency.label, latency.stats, meta.color, timeWindow)}
         `
       : html`
+          <div class="pm-net-section-title" style="margin-top:14px;">Latency</div>
           <div class="pm-net-no-latency">
             该方向没有独立测量的 latency 指标。Operator ↔ Gateway 这一段链路的耗时
             在协议层不会被单独打点;如果需要观察端到端响应时间,请看
-            <strong>Agent → Model</strong> 或 <strong>Model → Agent</strong> 标签页。
+            <strong>Agent → Model</strong> 标签页。
           </div>
         `}
-    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
 
-    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    <!-- 3. Throughput — metrics only (no chart) -->
+    ${renderWireThroughputStatsSection(samples, openExp)}
+  `;
+}
+
+/**
+ * Render the Throughput section as a metrics-only block (no chart). Two
+ * groups: per-message throughput (bytes/sec, derived from each message's
+ * payloadBytes / oneWayMs) and per-message bytes (raw payload sizes).
+ */
+function renderWireThroughputStatsSection(
+  samples: ThroughputSample[],
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  const count = samples.length;
+  if (count === 0) {
+    return html`
+      <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+      <div class="pm-chart-empty" style="height:80px;line-height:80px;">
+        Waiting for first measured message on this direction.
+      </div>
+    `;
+  }
+  const bytesPerSecValues = samples.map((s) => s.bytesPerSec);
+  const sortedTpt = bytesPerSecValues.slice().toSorted((a, b) => a - b);
+  const tptSum = sortedTpt.reduce((a, b) => a + b, 0);
+  const tptMin = sortedTpt[0] ?? 0;
+  const tptPeak = sortedTpt[sortedTpt.length - 1] ?? 0;
+  const tptAvg = tptSum / count;
+  const tptMedian = sortedTpt[Math.floor(count * 0.5)] ?? 0;
+
+  const byteValues = samples.map((s) => s.rawBytes);
+  const sortedBytes = byteValues.slice().toSorted((a, b) => a - b);
+  const totalBytes = sortedBytes.reduce((a, b) => a + b, 0);
+  const minBytes = sortedBytes[0] ?? 0;
+  const maxBytes = sortedBytes[sortedBytes.length - 1] ?? 0;
+  const avgBytes = totalBytes / count;
+  const medianBytes = sortedBytes[Math.floor(count * 0.5)] ?? 0;
+
+  return html`
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Throughput · ${count} ${count === 1 ? "message" : "messages"}
+    </div>
+    <div class="pm-net-subsection-title">Per-message throughput</div>
     <div class="pm-net-stat-grid">
       ${renderNetStatCard(
+        "Min",
+        `${formatBytes(tptMin)}/s`,
+        "slowest message",
+        openExp("throughput-min"),
+      )}
+      ${renderNetStatCard(
         "Peak",
-        `${formatBytes(peak)}/s`,
-        `${samples.length} samples`,
+        `${formatBytes(tptPeak)}/s`,
+        "fastest message",
         openExp("throughput-peak"),
       )}
       ${renderNetStatCard(
         "Average",
-        `${formatBytes(avg)}/s`,
-        samples.length > 0 ? `over ${samples.length} messages` : "no samples",
+        `${formatBytes(tptAvg)}/s`,
+        `over ${count} messages`,
         openExp("throughput-avg"),
       )}
       ${renderNetStatCard(
-        "Total Bytes",
-        formatBytes(totalBytes),
-        "since session start",
-        openExp("throughput-total"),
-      )}
-      ${renderNetStatCard(
-        "Last Activity",
-        lastTs ? new Date(lastTs).toLocaleTimeString("en-US", { hour12: false }) : "—",
-        lastSample ? `${formatBytes(lastSample.bytesPerSec)}/s` : "no traffic yet",
-        openExp("throughput-last"),
+        "Median",
+        `${formatBytes(tptMedian)}/s`,
+        "p50",
+        openExp("throughput-median"),
       )}
     </div>
+    <div class="pm-net-subsection-title" style="margin-top:10px;">Per-message bytes</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Min",
+        formatBytes(minBytes),
+        "smallest payload",
+        openExp("throughput-bytes-min"),
+      )}
+      ${renderNetStatCard(
+        "Max",
+        formatBytes(maxBytes),
+        "largest payload",
+        openExp("throughput-bytes-max"),
+      )}
+      ${renderNetStatCard(
+        "Average",
+        formatBytes(avgBytes),
+        `over ${count} messages`,
+        openExp("throughput-bytes-avg"),
+      )}
+      ${renderNetStatCard(
+        "Median",
+        formatBytes(medianBytes),
+        "p50",
+        openExp("throughput-bytes-median"),
+      )}
+      ${renderNetStatCard(
+        "Total",
+        formatBytes(totalBytes),
+        "all payloads summed",
+        openExp("throughput-total"),
+      )}
+    </div>
+  `;
+}
 
-    ${renderSingleLineThroughputChart(meta.longLabel, samples, meta.color, timeWindow)}
+/**
+ * Render the Throughput section for the agent|model tab. Per-message
+ * throughput is derived from per-LLM-call generation rate (responseBytes /
+ * generationDurationMs); per-message bytes is the raw event-bar payload
+ * distribution (every event in the unified store contributes one sample).
+ */
+function renderAgentLlmThroughputSection(
+  callThroughput: ThroughputDirectionStats,
+  eventByteStats: PayloadByteStats,
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  const tpt = callThroughput;
+  const byt = eventByteStats;
+  if (tpt.count === 0 && byt.count === 0) {
+    return html`
+      <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+      <div class="pm-chart-empty" style="height:80px;line-height:80px;">
+        Waiting for first measurable LLM call on this direction.
+      </div>
+    `;
+  }
+  return html`
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Throughput · ${tpt.count} ${tpt.count === 1 ? "call" : "calls"} · ${byt.count}
+      ${byt.count === 1 ? "event" : "events"}
+    </div>
+    <div class="pm-net-subsection-title">Per-call generation throughput</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Min",
+        tpt.count > 0 ? `${formatBytes(tpt.minBytesPerSec ?? 0)}/s` : "—",
+        "slowest call",
+        openExp("agentllm-throughput-min"),
+      )}
+      ${renderNetStatCard(
+        "Peak",
+        tpt.count > 0 ? `${formatBytes(tpt.peakBytesPerSec ?? 0)}/s` : "—",
+        "fastest call",
+        openExp("agentllm-throughput-peak"),
+      )}
+      ${renderNetStatCard(
+        "Average",
+        tpt.count > 0 ? `${formatBytes(tpt.avgBytesPerSec ?? 0)}/s` : "—",
+        tpt.count > 0 ? `over ${tpt.count} calls` : "no measurable calls",
+        openExp("agentllm-throughput-avg"),
+      )}
+      ${renderNetStatCard(
+        "Median",
+        tpt.count > 0 ? `${formatBytes(tpt.p50BytesPerSec ?? 0)}/s` : "—",
+        "p50",
+        openExp("agentllm-throughput-median"),
+      )}
+    </div>
+    <div class="pm-net-subsection-title" style="margin-top:10px;">Per-event bytes</div>
+    <div class="pm-net-stat-grid">
+      ${renderNetStatCard(
+        "Min",
+        formatBytes(byt.minBytes ?? 0),
+        "smallest event",
+        openExp("agentllm-bytes-min"),
+      )}
+      ${renderNetStatCard(
+        "Max",
+        formatBytes(byt.maxBytes ?? 0),
+        "largest event",
+        openExp("agentllm-bytes-max"),
+      )}
+      ${renderNetStatCard(
+        "Average",
+        formatBytes(byt.avgBytes ?? 0),
+        `over ${byt.count} events`,
+        openExp("agentllm-bytes-avg"),
+      )}
+      ${renderNetStatCard(
+        "Median",
+        formatBytes(byt.p50Bytes ?? 0),
+        "p50",
+        openExp("agentllm-bytes-median"),
+      )}
+      ${renderNetStatCard(
+        "Total",
+        formatBytes(byt.totalBytes),
+        "all event payloads summed",
+        openExp("agentllm-bytes-total"),
+      )}
+    </div>
   `;
 }
 
@@ -3515,197 +3840,13 @@ function renderNetStatCard(
   `;
 }
 
-function renderSingleLineThroughputChart(
-  title: string,
-  samples: ThroughputSample[],
-  color: string,
-  timeWindow?: TimeWindow,
-): TemplateResult {
-  const PAD_L = 64;
-  const PAD_R = 24;
-  const PAD_T = 14;
-  const PAD_B = 28;
-  const W = 460;
-  const H = 260;
-  const plotW = W - PAD_L - PAD_R;
-  const plotH = H - PAD_T - PAD_B;
-  const PIXEL_HEIGHT = 260;
-
-  if (samples.length < 2) {
-    return html`
-      <div class="pm-chart-block">
-        <div class="pm-chart-empty" style="height:${PIXEL_HEIGHT}px;line-height:${PIXEL_HEIGHT}px;">
-          ${samples.length === 0
-            ? "尚无数据 — 等待该方向第一笔流量。"
-            : "等待第二个采样桶以绘制曲线…"}
-        </div>
-      </div>
-    `;
+/** Median of an array of numbers (p50). Returns null when empty. */
+function median(values: number[]): number | null {
+  if (values.length === 0) {
+    return null;
   }
-
-  const peak = Math.max(...samples.map((s) => s.bytesPerSec), 1);
-  const avg = samples.reduce((a, s) => a + s.bytesPerSec, 0) / samples.length;
-  const minTs = timeWindow?.minTs ?? samples[0].ts;
-  const maxTs = timeWindow?.maxTs ?? samples[samples.length - 1].ts;
-  const tsRange = maxTs - minTs || 1;
-  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
-  const toY = (v: number) => PAD_T + plotH - (v / peak) * plotH;
-  const linePoints = samples.map((p) => `${toX(p.ts)},${toY(p.bytesPerSec)}`).join(" ");
-  const areaPoints =
-    `${toX(samples[0].ts)},${PAD_T + plotH} ` +
-    linePoints +
-    ` ${toX(samples[samples.length - 1].ts)},${PAD_T + plotH}`;
-
-  const yGridCount = 4;
-  const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
-    const val = (peak / yGridCount) * (i + 1);
-    return { y: toY(val), label: formatBytes(val) + "/s" };
-  });
-  const xTickCount = 5;
-  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
-    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
-    return { x: toX(ts), label: chartTimeLabel(ts) };
-  });
-  const avgY = toY(avg);
-  const chartId = `chart-dir-${title.replace(/\W/g, "")}`;
-
-  return html`
-    <div class="pm-chart-block">
-      <div
-        class="pm-chart-wrap"
-        @mousemove=${(e: MouseEvent) =>
-          handleThroughputHover(e, samples, minTs, tsRange, peak, PAD_L, plotW, plotH, PAD_T, H, W)}
-        @mouseleave=${handleChartLeave}
-      >
-        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
-          ${yGridLines.map(
-            (g) => svg`
-              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
-                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
-              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
-                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
-            `,
-          )}
-          <line
-            x1="${PAD_L}"
-            y1="${PAD_T + plotH}"
-            x2="${W - PAD_R}"
-            y2="${PAD_T + plotH}"
-            stroke="#c4c9d6"
-            stroke-width="0.6"
-          />
-          ${xTicks.map(
-            (t) => svg`
-              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
-                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
-            `,
-          )}
-          <line
-            x1="${PAD_L}"
-            y1="${avgY}"
-            x2="${W - PAD_R}"
-            y2="${avgY}"
-            stroke="${color}"
-            stroke-width="0.7"
-            stroke-dasharray="5,4"
-            opacity="0.5"
-          />
-          <text
-            x="${W - PAD_R + 2}"
-            y="${avgY + 4}"
-            fill="${color}"
-            font-size="10"
-            font-family="monospace"
-            opacity="0.75"
-          >
-            avg
-          </text>
-          <polygon points="${areaPoints}" fill="${color}" opacity="0.18" />
-          <polyline
-            points="${linePoints}"
-            fill="none"
-            stroke="${color}"
-            stroke-width="2"
-            stroke-linejoin="round"
-            vector-effect="non-scaling-stroke"
-          />
-          ${samples.map(
-            (s) => svg`
-              <circle cx="${toX(s.ts)}" cy="${toY(s.bytesPerSec)}" r="3"
-                fill="${color}" stroke="#ffffff" stroke-width="1" opacity="0.9" />
-            `,
-          )}
-        </svg>
-        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
-        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
-      </div>
-    </div>
-  `;
-}
-
-function handleThroughputHover(
-  e: MouseEvent,
-  samples: ThroughputSample[],
-  minTs: number,
-  tsRange: number,
-  peak: number,
-  padL: number,
-  plotW: number,
-  plotH: number,
-  padT: number,
-  chartH: number,
-  chartW: number,
-) {
-  const wrap = e.currentTarget as HTMLElement;
-  const rect = wrap.getBoundingClientRect();
-  const mouseX = e.clientX - rect.left;
-  const svgW = rect.width;
-
-  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
-  if (xRatio < 0 || xRatio > 1) {
-    handleChartLeave(e);
-    return;
-  }
-  const hoverTs = minTs + xRatio * tsRange;
-
-  let nearest = samples[0];
-  let nearestDist = Infinity;
-  for (const s of samples) {
-    const d = Math.abs(s.ts - hoverTs);
-    if (d < nearestDist) {
-      nearestDist = d;
-      nearest = s;
-    }
-  }
-
-  const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
-  const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
-  if (!tip || !cross || !nearest) {
-    return;
-  }
-
-  const nearestXPct = ((nearest.ts - minTs) / tsRange) * 100;
-  const padLPct = (padL / chartW) * 100;
-  const plotWPct = (plotW / chartW) * 100;
-  const crossLeftPct = padLPct + (nearestXPct / 100) * plotWPct;
-
-  cross.style.display = "block";
-  cross.style.left = `${crossLeftPct}%`;
-
-  tip.style.display = "block";
-  const time = new Date(nearest.ts).toLocaleTimeString("en-US", {
-    hour12: false,
-    fractionalSecondDigits: 1,
-  });
-  tip.innerHTML =
-    `<b>${formatBytes(nearest.bytesPerSec)}/s</b><br/>` +
-    `<span style="color:#6b7280;">bucket:</span> ${formatBytes(nearest.rawBytes)}<br/>` +
-    `<span style="color:#9ca3af;">${time}</span>`;
-
-  const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
-  tip.style.left = `${tipLeft}%`;
-  const nearestYPct = padT + plotH - (nearest.bytesPerSec / peak) * plotH;
-  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
+  const sorted = values.slice().toSorted((a, b) => a - b);
+  return sorted[Math.floor(sorted.length * 0.5)] ?? null;
 }
 
 function chartTimeLabel(ts: number): string {
@@ -3738,9 +3879,13 @@ function renderLatencyChartSvg(
 ): TemplateResult {
   const { samples } = stats;
   if (samples.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:260px;line-height:260px;">
-      Waiting for data...
-    </div>`;
+    return html`
+      <div class="pm-chart-block">
+        <div class="pm-chart-empty" style="height:260px;line-height:260px;">
+          Waiting for data...
+        </div>
+      </div>
+    `;
   }
 
   const PAD_L = 64;
@@ -3791,49 +3936,50 @@ function renderLatencyChartSvg(
   const chartId = `lat-${label.replace(/\W/g, "")}`;
 
   return html`
-    <div
-      class="pm-chart-wrap"
-      @mousemove=${(e: MouseEvent) =>
-        handleLatencyChartHover(
-          e,
-          samples,
-          minTs,
-          tsRange,
-          maxVal,
-          PAD_L,
-          plotW,
-          plotH,
-          PAD_T,
-          H,
-          W,
-        )}
-      @mouseleave=${handleChartLeave}
-    >
-      <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
-        ${yGridLines.map(
-          (g) => svg`
+    <div class="pm-chart-block">
+      <div
+        class="pm-chart-wrap"
+        @mousemove=${(e: MouseEvent) =>
+          handleLatencyChartHover(
+            e,
+            samples,
+            minTs,
+            tsRange,
+            maxVal,
+            PAD_L,
+            plotW,
+            plotH,
+            PAD_T,
+            H,
+            W,
+          )}
+        @mouseleave=${handleChartLeave}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${yGridLines.map(
+            (g) => svg`
             <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
               stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
             <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
               fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
           `,
-        )}
-        <line
-          x1="${PAD_L}"
-          y1="${PAD_T + plotH}"
-          x2="${W - PAD_R}"
-          y2="${PAD_T + plotH}"
-          stroke="#c4c9d6"
-          stroke-width="0.6"
-        />
-        ${xTicks.map(
-          (t) => svg`
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
             <text x="${t.x}" y="${H - 8}" text-anchor="middle"
               fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
           `,
-        )}
-        ${refLines.map(
-          (r) => svg`
+          )}
+          ${refLines.map(
+            (r) => svg`
             <line x1="${PAD_L}" y1="${toY(r.val)}" x2="${W - PAD_R}" y2="${toY(r.val)}"
               stroke="${color}" stroke-width="${r.weight}"
               stroke-dasharray="${r.dash}" opacity="${r.opacity}" />
@@ -3841,25 +3987,26 @@ function renderLatencyChartSvg(
               fill="${color}" font-size="10" font-family="monospace"
               font-weight="600" opacity="${Math.min(1, r.opacity + 0.1)}">${r.label}</text>
           `,
-        )}
-        <polygon points="${areaPoints}" fill="${color}" opacity="0.15" />
-        <polyline
-          points="${linePoints}"
-          fill="none"
-          stroke="${color}"
-          stroke-width="1.5"
-          stroke-linejoin="round"
-          vector-effect="non-scaling-stroke"
-        />
-        ${samples.map(
-          (s) => svg`
+          )}
+          <polygon points="${areaPoints}" fill="${color}" opacity="0.15" />
+          <polyline
+            points="${linePoints}"
+            fill="none"
+            stroke="${color}"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"
+          />
+          ${samples.map(
+            (s) => svg`
             <circle cx="${toX(s.ts)}" cy="${toY(s.latencyMs)}" r="3.5"
               fill="${color}" stroke="#ffffff" stroke-width="1" opacity="0.95" />
           `,
-        )}
-      </svg>
-      <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
-      <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+          )}
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
     </div>
   `;
 }
@@ -4510,6 +4657,14 @@ const STYLES = /* css */ `
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 6px;
+  }
+  .pm-net-subsection-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 4px 0 4px;
   }
   .pm-net-stat-grid {
     display: grid;
