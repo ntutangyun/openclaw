@@ -88,6 +88,15 @@ export type ProtocolMonitorProps = {
   exportMode?: boolean;
   /** Wall-clock ms of when the snapshot was taken. Only used when exportMode. */
   exportCapturedAt?: number;
+  /**
+   * Optional re-render hook. Called by view-local interactive widgets that
+   * mutate module-level state Lit can't observe directly (e.g. the Messages
+   * bar chart's wheel-zoom range, kept in `messagesChartZoom`). When omitted
+   * (or in the export viewer where re-renders aren't useful), those widgets
+   * still update the DOM directly so the visual stays in sync until the next
+   * natural re-render.
+   */
+  onRequestUpdate?: () => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -3041,11 +3050,28 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
   return map;
 }
 
+/**
+ * Module-level x-axis zoom state for the Messages bar chart, keyed by the
+ * direction tab (op-to-gw, gw-to-op, node-to-gw, gw-to-node). Each entry is
+ * the user's currently chosen visible time range; absent = auto (use the
+ * computed timeWindow). Lives at module scope so it persists across Lit
+ * re-renders and across tab switches.
+ *
+ * The zoom only affects the x-axis (time) — the y-axis (bar height = bytes)
+ * stays auto-scaled to the visible bars so the bars within the zoom window
+ * are always sized relative to each other, not to off-screen extremes.
+ */
+const messagesChartZoom = new Map<string, { minTs: number; maxTs: number }>();
+
+/** Min visible time span (ms) — clamps zoom-in so we don't over-scroll. */
+const MIN_ZOOM_SPAN_MS = 50;
+
 function renderMessagesBarChartSvg(
   data: MessagesDirection,
   colorMap: Map<string, string>,
-  timeWindow?: TimeWindow,
-  _fullWidth: boolean = false,
+  timeWindow: TimeWindow | undefined,
+  zoomKey: string,
+  onRequestUpdate?: () => void,
 ): TemplateResult {
   // pm-chart-block is full-width with the shorter (460/195) aspect ratio
   // applied globally to .pm-chart-svg--tall, so no per-call class is needed.
@@ -3070,11 +3096,33 @@ function renderMessagesBarChartSvg(
   const bars = data.bars;
   const localMin = bars[0]?.ts ?? 0;
   const localMax = bars.length > 1 ? (bars[bars.length - 1]?.ts ?? localMin + 1) : localMin + 1;
-  const minTs = timeWindow?.minTs ?? localMin;
-  const maxTs = timeWindow?.maxTs ?? localMax;
-  const tsRange = Math.max(1, maxTs - minTs);
-  const maxSize = Math.max(...bars.map((b) => b.size), 1);
-  const toX = (ts: number) => PAD_L + ((ts - minTs) / tsRange) * plotW;
+  const autoMinTs = timeWindow?.minTs ?? localMin;
+  const autoMaxTs = timeWindow?.maxTs ?? localMax;
+  const zoom = messagesChartZoom.get(zoomKey);
+  // Clamp a stale zoom to the data bounds (e.g. user reset traces while zoomed
+  // in — the saved range may now lie entirely outside the new data). If the
+  // clamp would collapse the range to nothing, drop the zoom and fall back to
+  // auto.
+  let viewMinTs = autoMinTs;
+  let viewMaxTs = autoMaxTs;
+  let isZoomed = false;
+  if (zoom) {
+    const clampedMin = Math.max(zoom.minTs, autoMinTs);
+    const clampedMax = Math.min(zoom.maxTs, autoMaxTs);
+    if (clampedMax - clampedMin >= MIN_ZOOM_SPAN_MS) {
+      viewMinTs = clampedMin;
+      viewMaxTs = clampedMax;
+      isZoomed = true;
+    } else {
+      messagesChartZoom.delete(zoomKey);
+    }
+  }
+  const tsRange = Math.max(1, viewMaxTs - viewMinTs);
+  // Filter to bars actually inside the visible range. Out-of-range bars don't
+  // contribute to maxSize either so the y-axis stays scaled to what's visible.
+  const visibleBars = isZoomed ? bars.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : bars;
+  const maxSize = Math.max(...visibleBars.map((b) => b.size), 1);
+  const toX = (ts: number) => PAD_L + ((ts - viewMinTs) / tsRange) * plotW;
   const toY = (s: number) => PAD_T + plotH - (s / maxSize) * plotH;
   const yGridCount = 4;
   const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
@@ -3083,22 +3131,56 @@ function renderMessagesBarChartSvg(
   });
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
-    const ts = minTs + (tsRange / (xTickCount - 1)) * i;
+    const ts = viewMinTs + (tsRange / (xTickCount - 1)) * i;
     return { x: toX(ts), label: chartTimeLabel(ts) };
   });
   // Each bar is a 2 px-wide vertical rect from baseline up to the size value.
   const barWidth = 2;
   const chartId = `bars-${(bars[0]?.ts ?? 0).toString(36)}`;
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    handleBarChartZoom(e, zoomKey, viewMinTs, viewMaxTs, autoMinTs, autoMaxTs, PAD_L, plotW, W);
+    onRequestUpdate?.();
+  };
+  const onDblClick = (e: MouseEvent) => {
+    e.preventDefault();
+    if (messagesChartZoom.has(zoomKey)) {
+      messagesChartZoom.delete(zoomKey);
+      onRequestUpdate?.();
+    }
+  };
   return html`
     <div class="${blockClass}">
+      <div class="pm-chart-zoom-bar">
+        <span class="pm-chart-zoom-hint">
+          ${isZoomed
+            ? html`<strong>Zoomed:</strong> ${chartTimeLabel(viewMinTs)} –
+                ${chartTimeLabel(viewMaxTs)} · ${visibleBars.length} of ${bars.length} bars`
+            : html`<span class="pm-muted"
+                >Scroll on the chart to zoom on time, double-click to reset</span
+              >`}
+        </span>
+        ${isZoomed
+          ? html`<button
+              type="button"
+              class="pm-chart-zoom-reset"
+              @click=${() => {
+                messagesChartZoom.delete(zoomKey);
+                onRequestUpdate?.();
+              }}
+            >
+              Reset zoom
+            </button>`
+          : nothing}
+      </div>
       <div
         class="pm-chart-wrap"
         @mousemove=${(e: MouseEvent) =>
           handleBarChartHover(
             e,
-            bars,
+            visibleBars,
             colorMap,
-            minTs,
+            viewMinTs,
             tsRange,
             maxSize,
             PAD_L,
@@ -3109,6 +3191,8 @@ function renderMessagesBarChartSvg(
             W,
           )}
         @mouseleave=${handleChartLeave}
+        @wheel=${onWheel}
+        @dblclick=${onDblClick}
       >
         <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
           ${yGridLines.map(
@@ -3133,7 +3217,7 @@ function renderMessagesBarChartSvg(
                 fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
             `,
           )}
-          ${bars.map((b) => {
+          ${visibleBars.map((b) => {
             const x = toX(b.ts) - barWidth / 2;
             const y = toY(b.size);
             const h = PAD_T + plotH - y;
@@ -3217,12 +3301,97 @@ function handleBarChartHover(
   tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
 }
 
+/**
+ * Wheel-zoom on the messages bar chart's x-axis. Zooms in (deltaY < 0) /
+ * out (deltaY > 0) around the cursor's time position so the bar under the
+ * cursor stays under the cursor through the zoom step. Updates the module-
+ * level `messagesChartZoom` map for the given key; the caller is expected to
+ * trigger a re-render so the chart picks up the new range.
+ *
+ * Pan with shift+wheel: shifts the visible range left/right by ~10% per
+ * tick. Auto-resets to no-zoom if the user zooms out past the data bounds.
+ */
+function handleBarChartZoom(
+  e: WheelEvent,
+  zoomKey: string,
+  curMinTs: number,
+  curMaxTs: number,
+  autoMinTs: number,
+  autoMaxTs: number,
+  padL: number,
+  plotW: number,
+  chartW: number,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+  // Cursor's position within the plot area, [0, 1]. Outside the plot area we
+  // anchor at 0.5 (center) so axis-label hovers still produce a sensible zoom.
+  const xRatioRaw = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  const xRatio = xRatioRaw >= 0 && xRatioRaw <= 1 ? xRatioRaw : 0.5;
+  const curSpan = curMaxTs - curMinTs;
+  const autoSpan = autoMaxTs - autoMinTs;
+  if (e.shiftKey) {
+    // Pan: shift the visible range by 10% of the current span per wheel tick.
+    // Direction follows scroll wheel sign (deltaY > 0 = scroll down = pan
+    // forward in time, mirroring how OS scroll typically maps to "forward").
+    const dir = Math.sign(e.deltaY) || 1;
+    const delta = curSpan * 0.1 * dir;
+    let nextMin = curMinTs + delta;
+    let nextMax = curMaxTs + delta;
+    if (nextMin < autoMinTs) {
+      nextMax += autoMinTs - nextMin;
+      nextMin = autoMinTs;
+    }
+    if (nextMax > autoMaxTs) {
+      nextMin -= nextMax - autoMaxTs;
+      nextMax = autoMaxTs;
+    }
+    nextMin = Math.max(nextMin, autoMinTs);
+    nextMax = Math.min(nextMax, autoMaxTs);
+    if (nextMax - nextMin >= MIN_ZOOM_SPAN_MS) {
+      messagesChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
+    }
+    return;
+  }
+  // Zoom: scale the visible span by 0.8 (zoom in) / 1.25 (zoom out) per tick,
+  // anchored at the cursor's current ts so the bar under the cursor is fixed.
+  const factor = e.deltaY < 0 ? 0.8 : 1.25;
+  const cursorTs = curMinTs + xRatio * curSpan;
+  let nextSpan = curSpan * factor;
+  // Cap at the auto span — zooming out past the data bounds reverts to auto.
+  if (nextSpan >= autoSpan) {
+    messagesChartZoom.delete(zoomKey);
+    return;
+  }
+  if (nextSpan < MIN_ZOOM_SPAN_MS) {
+    nextSpan = MIN_ZOOM_SPAN_MS;
+  }
+  let nextMin = cursorTs - xRatio * nextSpan;
+  let nextMax = cursorTs + (1 - xRatio) * nextSpan;
+  // Clamp into the auto bounds, sliding the window so the span stays the same
+  // (so the cursor's anchored ts may shift slightly when near the edges).
+  if (nextMin < autoMinTs) {
+    nextMax += autoMinTs - nextMin;
+    nextMin = autoMinTs;
+  }
+  if (nextMax > autoMaxTs) {
+    nextMin -= nextMax - autoMaxTs;
+    nextMax = autoMaxTs;
+  }
+  nextMin = Math.max(nextMin, autoMinTs);
+  nextMax = Math.min(nextMax, autoMaxTs);
+  messagesChartZoom.set(zoomKey, { minTs: nextMin, maxTs: nextMax });
+}
+
 function renderMessagesSection(
   net: NetworkStats,
   direction: NetworkDirection,
   color: string,
   openExp: (key: string) => () => void,
-  timeWindow?: TimeWindow,
+  timeWindow: TimeWindow | undefined,
+  onRequestUpdate: (() => void) | undefined,
 ): TemplateResult | typeof nothing {
   const data = selectDirectionMessages(net, direction);
   if (!data) {
@@ -3250,7 +3419,13 @@ function renderMessagesSection(
       Messages · ${totalCount} total · ${data.cards.length}
       ${data.cards.length === 1 ? "type" : "types"}
     </div>
-    ${renderMessagesBarChartSvg(data, colorMap, timeWindow, /* fullWidth */ true)}
+    ${renderMessagesBarChartSvg(
+      data,
+      colorMap,
+      timeWindow,
+      `messages-${direction}`,
+      onRequestUpdate,
+    )}
     <div class="pm-message-legend">
       ${data.cards.map(
         (c) => html`
@@ -3614,7 +3789,14 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
     </div>
 
     <!-- 1. Messages — type cards + size bar chart -->
-    ${renderMessagesSection(net, props.networkDirection, meta.color, openExp, timeWindow)}
+    ${renderMessagesSection(
+      net,
+      props.networkDirection,
+      meta.color,
+      openExp,
+      timeWindow,
+      props.onRequestUpdate,
+    )}
 
     <!-- 2. Latency — chart first, then a single merged row of distribution stats -->
     ${latency
@@ -5506,6 +5688,40 @@ const STYLES = /* css */ `
     /* Backwards-compat: the global pm-chart-svg--tall aspect ratio is now
        460/195, so this modifier is a no-op. Kept to avoid breaking any
        external HTML exports that reference the class name. */
+  }
+  .pm-chart-zoom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    margin-bottom: 2px;
+    min-height: 18px;
+  }
+  .pm-chart-zoom-hint {
+    color: #4b5563;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pm-chart-zoom-hint strong {
+    color: #1a1a2e;
+  }
+  .pm-chart-zoom-reset {
+    background: #ffffff;
+    color: #1a1a2e;
+    border: 1px solid #d4d8e8;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    flex-shrink: 0;
+  }
+  .pm-chart-zoom-reset:hover {
+    background: #eef0f6;
+    border-color: #93a3c0;
   }
   .pm-chart-header {
     display: flex;

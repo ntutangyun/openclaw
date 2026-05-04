@@ -2583,6 +2583,7 @@ export function renderApp(state: AppViewState) {
                   }
                   state.protocolDisabledTypes = next;
                 },
+                onRequestUpdate: requestHostUpdate,
               }),
             )
           : nothing}
