@@ -163,6 +163,10 @@ function mount(snapshot: ProtocolMonitorExportSnapshot) {
           state.disabledTypes = next;
           draw();
         },
+        // Wire the bar-chart wheel-zoom hook so the exported viewer re-renders
+        // when the user scrolls on a chart. Without this, the wheel handler
+        // mutates the module-level zoom map but nothing visually updates.
+        onRequestUpdate: () => draw(),
       }),
       host,
     );
