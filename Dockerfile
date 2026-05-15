@@ -21,6 +21,12 @@ ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 # install on low-spec hosts (Jetson, etc.). onnxruntime + numpy stay because
 # markitdown hard-requires `magika` for file-type detection.
 ARG OPENCLAW_MARKITDOWN_EXTRAS=all
+# Mirrors for building in China (empty = use default registries).
+# Set OPENCLAW_NPM_REGISTRY to e.g. https://registry.npmmirror.com to use the
+# Taobao npm mirror; set OPENCLAW_PIP_INDEX_URL to e.g.
+# https://pypi.tuna.tsinghua.edu.cn/simple for the Tsinghua PyPI mirror.
+ARG OPENCLAW_NPM_REGISTRY=""
+ARG OPENCLAW_PIP_INDEX_URL=""
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -95,6 +101,9 @@ COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 # step is slow. See `multi-user-support/manage.sh cache-warm` for a one-time
 # seed that pre-populates the BuildKit cache from the host's own pnpm store.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    if [ -n "${OPENCLAW_NPM_REGISTRY}" ]; then \
+      echo "registry=${OPENCLAW_NPM_REGISTRY}" >> .npmrc; \
+    fi && \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
@@ -214,7 +223,10 @@ COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 # Use a shared Corepack home so the non-root `node` user does not need a
 # first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
-RUN install -d -m 0755 "$COREPACK_HOME" && \
+RUN if [ -n "${OPENCLAW_NPM_REGISTRY}" ]; then \
+      npm config set registry "${OPENCLAW_NPM_REGISTRY}" -g; \
+    fi && \
+    install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
     for attempt in 1 2 3 4 5; do \
       if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
@@ -249,7 +261,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv && \
     python3 -m venv /opt/python-tools && \
-    /opt/python-tools/bin/pip install --no-cache-dir \
+    PIP_INDEX_ARGS=""; \
+    if [ -n "${OPENCLAW_PIP_INDEX_URL}" ]; then \
+      PIP_INDEX_ARGS="-i ${OPENCLAW_PIP_INDEX_URL}"; \
+    fi && \
+    /opt/python-tools/bin/pip install --no-cache-dir $PIP_INDEX_ARGS \
       "markitdown[${OPENCLAW_MARKITDOWN_EXTRAS}]" python-docx python-pptx && \
     ln -sf /opt/python-tools/bin/markitdown /usr/local/bin/markitdown && \
     ln -sf /opt/python-tools/bin/python3 /usr/local/bin/python-tools && \

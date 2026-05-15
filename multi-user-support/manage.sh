@@ -16,6 +16,15 @@ DEFAULT_IMAGE="${OPENCLAW_IMAGE:-openclaw:local}"
 # Port allocation: each user gets a pair (gateway, bridge) starting from a base
 BASE_GATEWAY_PORT="${OPENCLAW_MULTI_BASE_PORT:-19000}"
 
+# China-friendly mirrors (overridable via env vars).
+# Docker Hub proxy: used as a prefix for base images, e.g. <mirror>/library/node:24-bookworm.
+# Common options: docker.1ms.run, docker.m.daocloud.io.
+CHINA_DOCKER_MIRROR="${OPENCLAW_CHINA_DOCKER_MIRROR:-docker.1ms.run}"
+# npm registry mirror (pnpm install, corepack prepare).
+CHINA_NPM_REGISTRY="${OPENCLAW_CHINA_NPM_REGISTRY:-https://registry.npmmirror.com}"
+# PyPI mirror index (pip install markitdown, python-docx, python-pptx).
+CHINA_PIP_INDEX="${OPENCLAW_CHINA_PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") <command> [options]
@@ -23,6 +32,7 @@ Usage: $(basename "$0") <command> [options]
 Setup:
   setup                                             Build Docker image and prepare environment
   rebuild                                           Rebuild Docker image (e.g. after git pull)
+  rebuild-china                                     Rebuild with China-friendly mirrors
   cache-warm                                        Pre-seed the BuildKit pnpm cache from the host pnpm
                                                     store (~/.local/share/pnpm/store). Run once before
                                                     the first rebuild to avoid a cold 12-min pnpm fetch.
@@ -576,6 +586,80 @@ cmd_rebuild() {
 
   echo ""
   echo "==> Rebuild complete ($DEFAULT_IMAGE)"
+
+  # Count running users
+  local running=0
+  while IFS= read -r name; do
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^openclaw-${name}-gateway$"; then
+      running=$((running + 1))
+    fi
+  done < <(all_usernames)
+
+  if (( running > 0 )); then
+    echo ""
+    echo "  $running user gateway(s) running on the old image."
+    echo "  Restart them to use the new image:"
+    echo "    $(basename "$0") stop-all && $(basename "$0") start-all"
+  fi
+}
+
+# Rebuild with China-friendly mirrors.
+#
+# Overrides the Docker Hub base images to pull through a Chinese Docker
+# registry proxy (default: docker.1ms.run, overridable via
+# OPENCLAW_CHINA_DOCKER_MIRROR).  Also sets the npm registry to npmmirror.com
+# (Taobao mirror) and the pip index to the Tsinghua PyPI mirror, so every
+# package download during the build goes through domestic mirrors.
+#
+# The digests pinned in the default Dockerfile are dropped because they are
+# registry-specific; the build relies on the :24-bookworm tag instead.
+#
+# If you have Docker daemon registry-mirrors configured in
+# /etc/docker/daemon.json, the Docker Hub proxy step may be redundant for
+# image pulls — but the build-arg override still helps when daemon mirrors
+# are not set up or are unreliable.
+cmd_rebuild_china() {
+  local dockerfile="$REPO_ROOT/Dockerfile"
+  if [[ ! -f "$dockerfile" ]]; then
+    fail "Dockerfile not found at $dockerfile. Make sure this folder is inside the openclaw repo."
+  fi
+
+  local node_image="${CHINA_DOCKER_MIRROR}/library/node:24-bookworm"
+  local node_slim_image="${CHINA_DOCKER_MIRROR}/library/node:24-bookworm-slim"
+
+  echo "==> Building Docker image with China mirrors: $DEFAULT_IMAGE"
+  echo "    Docker mirror: ${CHINA_DOCKER_MIRROR}"
+  echo "    npm registry:  ${CHINA_NPM_REGISTRY}"
+  echo "    pip index:     ${CHINA_PIP_INDEX}"
+  echo ""
+
+  docker build \
+    --network=host \
+    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS:-}" \
+    --build-arg "OPENCLAW_VARIANT=${OPENCLAW_VARIANT:-default}" \
+    --build-arg "OPENCLAW_MARKITDOWN_EXTRAS=${OPENCLAW_MARKITDOWN_EXTRAS:-docx,pptx}" \
+    --build-arg "OPENCLAW_DOCKER_APT_UPGRADE=${OPENCLAW_DOCKER_APT_UPGRADE:-0}" \
+    --build-arg "OPENCLAW_NODE_BOOKWORM_IMAGE=${node_image}" \
+    --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE=${node_slim_image}" \
+    --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST=" \
+    --build-arg "OPENCLAW_NPM_REGISTRY=${CHINA_NPM_REGISTRY}" \
+    --build-arg "OPENCLAW_PIP_INDEX_URL=${CHINA_PIP_INDEX}" \
+    -t "$DEFAULT_IMAGE" \
+    -f "$dockerfile" \
+    "$REPO_ROOT"
+
+  write_setup_marker
+
+  echo ""
+  echo "==> Rebuild complete ($DEFAULT_IMAGE)"
+  echo ""
+  echo "To improve reliability, consider configuring Docker daemon registry mirrors:"
+  echo "  sudo tee /etc/docker/daemon.json <<'EOF'"
+  echo "  {"
+  echo "    \"registry-mirrors\": [\"https://${CHINA_DOCKER_MIRROR}\"]"
+  echo "  }"
+  echo "  EOF"
+  echo "  sudo systemctl restart docker"
 
   # Count running users
   local running=0
@@ -1949,9 +2033,10 @@ command="$1"
 shift
 
 case "$command" in
-  setup)     cmd_setup ;;
-  rebuild)   cmd_rebuild ;;
-  cache-warm) cmd_cache_warm ;;
+  setup)          cmd_setup ;;
+  rebuild)        cmd_rebuild ;;
+  rebuild-china)  cmd_rebuild_china ;;
+  cache-warm)     cmd_cache_warm ;;
   add)       cmd_add "$@"; echo ""; cmd_info "${1:-}" ;;
   remove)    cmd_remove "${1:?Username required}" ;;
   start)     cmd_start "${1:?Username required}"; echo ""; cmd_info "${1}" ;;
