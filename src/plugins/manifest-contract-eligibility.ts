@@ -5,12 +5,16 @@ import type { PluginManifestContractListKey, PluginManifestRecord } from "./mani
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
+  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
 
 export function isManifestPluginAvailableForControlPlane(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index">;
-  plugin: Pick<PluginManifestRecord, "id" | "origin" | "enabledByDefault">;
+  plugin: Pick<
+    PluginManifestRecord,
+    "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+  >;
   config?: OpenClawConfig;
 }): boolean {
   if (params.plugin.origin === "bundled") {
@@ -68,22 +72,44 @@ export function loadManifestContractSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataManifestView {
-  const env = params.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  if (current) {
-    return current;
-  }
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params.config ?? {},
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const snapshot = loadManifestMetadataSnapshot(params);
   return {
     index: snapshot.index,
     plugins: snapshot.plugins,
   };
+}
+
+export function loadManifestMetadataRegistry(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataRegistryView {
+  const snapshot = loadManifestMetadataSnapshot(params);
+  return {
+    index: snapshot.index,
+    manifestRegistry: snapshot.manifestRegistry,
+  };
+}
+
+export function loadManifestMetadataSnapshot(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataSnapshot {
+  const config = params.config ?? {};
+  const env = params.env ?? process.env;
+  const current = getCurrentPluginMetadataSnapshot({
+    config,
+    env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+  });
+  if (current) {
+    return current;
+  }
+  return loadPluginMetadataSnapshot({
+    config,
+    env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
 }

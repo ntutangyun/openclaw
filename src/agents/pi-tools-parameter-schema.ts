@@ -75,6 +75,10 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 type FlattenableVariantKey = "anyOf" | "oneOf";
 type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
 
+function isSchemaRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
   key: TopLevelConditionalKey,
@@ -108,10 +112,8 @@ function hasTopLevelObjectSchema(
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
   return (
-    "type" in schemaRecord &&
-    "properties" in schemaRecord &&
-    schemaRecord.properties != null &&
-    typeof schemaRecord.properties === "object" &&
+    schemaRecord.type === "object" &&
+    isSchemaRecord(schemaRecord.properties) &&
     conditionalKey === null
   );
 }
@@ -122,27 +124,104 @@ function isObjectLikeSchemaMissingType(
 ): boolean {
   return (
     !("type" in schemaRecord) &&
-    (typeof schemaRecord.properties === "object" || Array.isArray(schemaRecord.required)) &&
+    (isSchemaRecord(schemaRecord.properties) || Array.isArray(schemaRecord.required)) &&
     conditionalKey === null
   );
 }
 
-function isTypedSchemaMissingProperties(
+function isTypedObjectSchemaMissingValidProperties(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  if (!("type" in schemaRecord) || conditionalKey !== null) {
-    return false;
-  }
-  if (!("properties" in schemaRecord)) {
-    return true;
-  }
-  const props = schemaRecord.properties;
-  return props == null || typeof props !== "object" || Array.isArray(props);
+  return (
+    schemaRecord.type === "object" &&
+    !isSchemaRecord(schemaRecord.properties) &&
+    conditionalKey === null
+  );
 }
 
 function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
   return Object.keys(schemaRecord).length === 0;
+}
+
+function normalizeArraySchemasMissingItems(schema: unknown): unknown {
+  if (!isSchemaRecord(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const nextSchema: Record<string, unknown> = { ...schema };
+  if (nextSchema.type === "array" && nextSchema.items === undefined) {
+    nextSchema.items = {};
+    changed = true;
+  }
+
+  const normalizeSchemaValue = (key: string): void => {
+    if (!(key in nextSchema)) {
+      return;
+    }
+    const value = nextSchema[key];
+    if (Array.isArray(value)) {
+      const normalized = value.map(normalizeArraySchemasMissingItems);
+      if (normalized.some((entry, index) => entry !== value[index])) {
+        nextSchema[key] = normalized;
+        changed = true;
+      }
+      return;
+    }
+
+    const normalized = normalizeArraySchemasMissingItems(value);
+    if (normalized !== value) {
+      nextSchema[key] = normalized;
+      changed = true;
+    }
+  };
+
+  for (const key of [
+    "items",
+    "contains",
+    "additionalProperties",
+    "propertyNames",
+    "not",
+    "if",
+    "then",
+    "else",
+  ]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of [
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+  ]) {
+    const value = nextSchema[key];
+    if (!isSchemaRecord(value)) {
+      continue;
+    }
+    let entriesChanged = false;
+    const normalizedEntries: Array<[string, unknown]> = Object.entries(value).map(
+      ([entryKey, entryValue]) => {
+        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue);
+        if (normalizedEntryValue !== entryValue) {
+          entriesChanged = true;
+        }
+        return [entryKey, normalizedEntryValue];
+      },
+    );
+    if (entriesChanged) {
+      nextSchema[key] = Object.fromEntries(normalizedEntries);
+      changed = true;
+    }
+  }
+
+  return changed ? nextSchema : schema;
 }
 
 export function normalizeToolParameterSchema(
@@ -170,13 +249,14 @@ export function normalizeToolParameterSchema(
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): TSchema {
+    const normalizedSchema = normalizeArraySchemasMissingItems(s);
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
+      return cleanSchemaForGemini(normalizedSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords) as TSchema;
+      return stripUnsupportedSchemaKeywords(normalizedSchema, unsupportedToolSchemaKeywords) as TSchema;
     }
-    return s as TSchema;
+    return normalizedSchema as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);
@@ -187,10 +267,14 @@ export function normalizeToolParameterSchema(
   }
 
   if (isObjectLikeSchemaMissingType(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning({ ...schemaRecord, type: "object" });
+    return applyProviderCleaning({
+      ...schemaRecord,
+      type: "object",
+      properties: isSchemaRecord(schemaRecord.properties) ? schemaRecord.properties : {},
+    });
   }
 
-  if (isTypedSchemaMissingProperties(schemaRecord, conditionalKey)) {
+  if (isTypedObjectSchemaMissingValidProperties(schemaRecord, conditionalKey)) {
     return applyProviderCleaning({ ...schemaRecord, properties: {} });
   }
 

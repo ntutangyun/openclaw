@@ -1,17 +1,3 @@
-import {
-  type ClockSyncMetrics,
-  type ClockSyncSample,
-  computeClockSyncSample,
-  pickBestSample,
-  PING_INTERVAL_MS,
-  type PingOneWaySample,
-  type RxLatencySample,
-  RX_REPORT_BUFFER_CAP,
-  RX_REPORT_INTERVAL_MS,
-  TIME_SYNC_BURST_INTERVAL_MS,
-  TIME_SYNC_BURST_SAMPLES,
-  TIME_SYNC_PERIODIC_INTERVAL_MS,
-} from "../../../src/gateway/clock-sync.js";
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -24,6 +10,7 @@ import {
   formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
+  readPairingConnectErrorDetails,
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   isRetryableGatewayStartupUnavailableError,
@@ -85,6 +72,14 @@ export function resolveGatewayErrorDetailCode(
   return readConnectErrorDetailCode(error?.details);
 }
 
+function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
+  const pairingDetails = readPairingConnectErrorDetails(details);
+  return (
+    pairingDetails?.pauseReconnect === false ||
+    pairingDetails?.recommendedNextStep === "wait_then_retry"
+  );
+}
+
 /**
  * Auth errors that won't resolve without user action — don't auto-reconnect.
  *
@@ -98,6 +93,12 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     return false;
   }
   const code = resolveGatewayErrorDetailCode(error);
+  if (
+    code === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+    shouldContinueReconnectForPairingRequired(error.details)
+  ) {
+    return false;
+  }
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
@@ -105,19 +106,33 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
   );
 }
 
+function isLoopbackIPv4Host(host: string): boolean {
+  const octets = host.split(".");
+  if (octets.length !== 4 || octets[0] !== "127") {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    return value >= 0 && value <= 255;
+  });
+}
+
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
     const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost =
-      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
-    const isLoopbackIPv4 = host.startsWith("127.");
+    const isLoopbackHost = host === "localhost" || host === "::1" || host === "[::1]";
+    const isLoopbackIPv4 = isLoopbackIPv4Host(host);
     if (isLoopbackHost || isLoopbackIPv4) {
       return true;
     }
@@ -143,14 +158,15 @@ export type GatewayHelloOk = {
     scopes: string[];
     issuedAtMs?: number;
   };
-  canvasHostUrl?: string;
+  pluginSurfaceUrls?: Record<string, string>;
   policy?: { tickIntervalMs?: number };
 };
 
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
-  method?: string;
+  method: string;
+  startedAtMs: number;
 };
 
 type SelectedConnectAuth = {
@@ -159,6 +175,7 @@ type SelectedConnectAuth = {
   authPassword?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
+  storedScopes?: string[];
   canFallbackToShared: boolean;
 };
 
@@ -195,8 +212,8 @@ export type GatewayConnectClientInfo = {
 };
 
 export type GatewayConnectParams = {
-  minProtocol: 3;
-  maxProtocol: 3;
+  minProtocol: 4;
+  maxProtocol: 4;
   client: GatewayConnectClientInfo;
   role: string;
   scopes: string[];
@@ -241,13 +258,27 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayRequestTiming) => void;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
 
+export type GatewayRequestTiming = {
+  id: string;
+  method: string;
+  ok: boolean;
+  durationMs: number;
+  startedAtMs: number;
+  endedAtMs: number;
+  errorCode?: string;
+};
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 const STARTUP_RETRY_CLOSE_CODE = 4013;
+const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
+const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
+const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -261,6 +292,77 @@ function buildGatewayConnectAuth(
     deviceToken: selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken,
     password: selectedAuth.authPassword,
   };
+}
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : String(err);
+}
+
+function getErrorName(err: unknown): string | undefined {
+  if (err instanceof Error && err.name) {
+    return err.name;
+  }
+  if (err && typeof err === "object" && "name" in err) {
+    const name = (err as { name?: unknown }).name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  }
+  return undefined;
+}
+
+function isBrowserWebSocketSecurityError(err: unknown): boolean {
+  const name = getErrorName(err)?.toLowerCase();
+  const message = getErrorMessage(err).toLowerCase();
+  return (
+    name === "securityerror" ||
+    message.includes("security error") ||
+    message.includes("mixed content") ||
+    message.includes("insecure websocket")
+  );
+}
+
+function formatBrowserWebSocketConstructorError(err: unknown, url: string): GatewayErrorInfo {
+  const securityError = isBrowserWebSocketSecurityError(err);
+  const browserMessage = getErrorMessage(err);
+  const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
+  if (securityError) {
+    return {
+      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+      message:
+        "Browser refused the Gateway WebSocket for security reasons." +
+        (isPlaintextWs
+          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
+          : " Check the Gateway WebSocket URL and browser security policy."),
+      details: {
+        code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+        browserErrorName: getErrorName(err),
+        browserMessage,
+      },
+    };
+  }
+  return {
+    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
+    details: {
+      code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+      browserErrorName: getErrorName(err),
+      browserMessage,
+    },
+  };
+}
+
+function resolveControlUiConnectScopes(selectedAuth: SelectedConnectAuth): string[] {
+  const isUsingStoredDeviceToken =
+    Boolean(selectedAuth.storedToken) &&
+    (selectedAuth.resolvedDeviceToken === selectedAuth.storedToken ||
+      selectedAuth.authDeviceToken === selectedAuth.storedToken);
+  if (
+    isUsingStoredDeviceToken &&
+    selectedAuth.storedScopes &&
+    selectedAuth.storedScopes.length > 0
+  ) {
+    return [...selectedAuth.storedScopes];
+  }
+  return [...CONTROL_UI_OPERATOR_SCOPES];
 }
 
 async function buildGatewayConnectDevice(params: {
@@ -309,8 +411,6 @@ export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): bo
   );
 }
 
-type TimeSyncResponse = { peerT0: number; gatewayT1: number; gatewayT2: number };
-
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
@@ -324,24 +424,6 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
-  // Clock-sync state. `clockOffsetMs` is applied to outbound `sentAt` so the
-  // gateway's `oneWayLatencyMs = capturedAt - sentAt` formula stays correct
-  // regardless of OS clock skew between this browser and the gateway host.
-  private clockOffsetMs = 0;
-  private clockSyncTimer: number | null = null;
-  private clockSyncInFlight = false;
-  private lastClockSyncMetrics: ClockSyncMetrics | null = null;
-  // Rx-latency capture state. Each inbound frame with `sentAt` produces a
-  // sample; periodic flushes batch them to `protocol-traces.rx-report` so the
-  // gateway can chart the gateway→operator direction (which it can't measure
-  // from its own clock alone).
-  private rxSamples: RxLatencySample[] = [];
-  private rxReportTimer: number | null = null;
-  private rxReportInFlight = false;
-  // Dedicated ping-protocol state for protocol-monitor latency. Independent
-  // of time.sync / rx-samples; uses single-clock RTT measurements.
-  private pingTimer: number | null = null;
-  private pingInFlight = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private eventListeners = new Set<GatewayEventListener>();
 
@@ -355,9 +437,6 @@ export class GatewayBrowserClient {
   stop() {
     this.closed = true;
     this.clearConnectTimer();
-    this.stopClockSyncSchedule();
-    this.stopRxReportSchedule();
-    this.stopPingSchedule();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -375,7 +454,26 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-    const ws = new WebSocket(this.opts.url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(this.opts.url);
+    } catch (err) {
+      const error = formatBrowserWebSocketConstructorError(err, this.opts.url);
+      this.ws = null;
+      this.pendingConnectError = undefined;
+      this.pendingDeviceTokenRetry = false;
+      this.pendingStartupReconnectDelayMs = null;
+      this.flushPending(new Error(error.message));
+      this.opts.onClose?.({
+        code: BROWSER_WEBSOCKET_CLOSE_CODE,
+        reason:
+          error.code === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+            ? "security error"
+            : "websocket error",
+        error,
+      });
+      return;
+    }
     const generation = ++this.connectGeneration;
     this.ws = ws;
     ws.addEventListener("open", () => this.queueConnect(ws, generation));
@@ -393,14 +491,6 @@ export class GatewayBrowserClient {
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
-      // The next gateway process may be a fresh restart with a slightly
-      // different clock; reset offset rather than carrying a stale value.
-      this.stopClockSyncSchedule();
-      this.stopRxReportSchedule();
-      this.stopPingSchedule();
-      this.rxSamples = [];
-      this.clockOffsetMs = 0;
-      this.lastClockSyncMetrics = null;
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
         this.scheduleReconnect();
@@ -409,11 +499,10 @@ export class GatewayBrowserClient {
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-      if (
-        connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
-        this.deviceTokenRetryBudgetUsed &&
-        !this.pendingDeviceTokenRetry
-      ) {
+      if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+        if (this.pendingDeviceTokenRetry) {
+          this.scheduleReconnect();
+        }
         return;
       }
       if (!isNonRecoverableAuthError(connectError)) {
@@ -443,10 +532,34 @@ export class GatewayBrowserClient {
   }
 
   private flushPending(err: Error) {
-    for (const [, p] of this.pending) {
+    for (const [id, p] of this.pending) {
+      this.emitRequestTiming(id, p, false, "CLIENT_CLOSED");
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  private nowMs(): number {
+    return typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  private emitRequestTiming(id: string, pending: Pending, ok: boolean, errorCode?: string): void {
+    const endedAtMs = this.nowMs();
+    try {
+      this.opts.onRequestTiming?.({
+        id,
+        method: pending.method,
+        ok,
+        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+        startedAtMs: pending.startedAtMs,
+        endedAtMs,
+        errorCode,
+      });
+    } catch (err) {
+      console.error("[gateway] request timing handler error:", err);
+    }
   }
 
   private buildConnectClient(): GatewayConnectClientInfo {
@@ -461,8 +574,8 @@ export class GatewayBrowserClient {
 
   private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
     return {
-      minProtocol: 3,
-      maxProtocol: 3,
+      minProtocol: 4,
+      maxProtocol: 4,
       client: plan.client,
       role: plan.role,
       scopes: plan.scopes,
@@ -476,7 +589,6 @@ export class GatewayBrowserClient {
 
   private async buildConnectPlan(connectNonce: string | null): Promise<ConnectPlan> {
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const scopes = [...CONTROL_UI_OPERATOR_SCOPES];
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
@@ -499,6 +611,7 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
       });
     }
+    const scopes = resolveControlUiConnectScopes(selectedAuth);
 
     return {
       role,
@@ -541,9 +654,6 @@ export class GatewayBrowserClient {
     }
     this.backoffMs = 800;
     this.opts.onHello?.(hello);
-    this.startClockSyncSchedule();
-    this.startRxReportSchedule();
-    this.startPingSchedule();
   }
 
   private handleConnectFailure(err: unknown, plan: ConnectPlan, ws: WebSocket, generation: number) {
@@ -642,7 +752,7 @@ export class GatewayBrowserClient {
       return;
     }
 
-    const frame = parsed as { type?: unknown; sentAt?: unknown };
+    const frame = parsed as { type?: unknown };
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
       if (evt.event === "connect.challenge") {
@@ -653,10 +763,6 @@ export class GatewayBrowserClient {
           void this.sendConnect(ws, generation);
         }
         return;
-      }
-      this.captureRxSample(frame.sentAt, "event", undefined, evt.event, evt.payload);
-      if (evt.event === "ping.gw-to-peer") {
-        this.handlePingGwToPeerEvent(evt.payload);
       }
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
@@ -682,11 +788,12 @@ export class GatewayBrowserClient {
       if (!pending) {
         return;
       }
-      this.captureRxSample(frame.sentAt, "res", pending.method, undefined, res.payload);
       this.pending.delete(res.id);
       if (res.ok) {
+        this.emitRequestTiming(res.id, pending, true);
         pending.resolve(res.payload);
       } else {
+        this.emitRequestTiming(res.id, pending, false, res.error?.code);
         pending.reject(
           new GatewayRequestError({
             code: res.error?.code ?? "UNAVAILABLE",
@@ -730,6 +837,7 @@ export class GatewayBrowserClient {
       authPassword,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
+      storedScopes: storedEntry?.scopes ?? undefined,
       canFallbackToShared: Boolean(storedToken && explicitGatewayToken),
     };
   }
@@ -750,250 +858,13 @@ export class GatewayBrowserClient {
       return Promise.reject(new Error("gateway not connected"));
     }
     const id = generateUUID();
-    // Shift sentAt into the gateway's clock frame using the cached offset so
-    // the gateway-side `oneWayLatencyMs = capturedAt - sentAt` stays accurate.
-    // Before the first time.sync completes this is a no-op (offset = 0). The
-    // offset can be a `.5` value from `((t1-t0)+(t2-t3))/2`; round so the
-    // wire-level `sentAt` stays integer (`Type.Integer` rejects fractions).
-    const frame = {
-      type: "req",
-      id,
-      method,
-      params,
-      sentAt: Math.round(Date.now() + this.clockOffsetMs),
-    };
+    const frame = { type: "req", id, method, params };
+    const startedAtMs = this.nowMs();
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method });
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method, startedAtMs });
     });
     ws.send(JSON.stringify(frame));
     return p;
-  }
-
-  private captureRxSample(
-    sentAt: unknown,
-    kind: string,
-    method: string | undefined,
-    event: string | undefined,
-    payload: unknown,
-  ) {
-    if (typeof sentAt !== "number") {
-      return;
-    }
-    const peerNow = Date.now();
-    const adjustedTs = Math.round(peerNow + this.clockOffsetMs);
-    const latencyMs = adjustedTs - sentAt;
-    if (latencyMs < 0 || latencyMs >= 60_000) {
-      return;
-    }
-    let payloadSize: number | undefined;
-    if (payload !== undefined && payload !== null) {
-      try {
-        payloadSize = JSON.stringify(payload).length;
-      } catch {
-        payloadSize = undefined;
-      }
-    } else {
-      payloadSize = 0;
-    }
-    this.rxSamples.push({ ts: adjustedTs, latencyMs, kind, method, event, payloadSize });
-    if (this.rxSamples.length > RX_REPORT_BUFFER_CAP) {
-      this.rxSamples.splice(0, this.rxSamples.length - RX_REPORT_BUFFER_CAP);
-    }
-  }
-
-  private startRxReportSchedule() {
-    this.stopRxReportSchedule();
-    this.rxReportTimer = window.setInterval(() => {
-      void this.flushRxSamples();
-    }, RX_REPORT_INTERVAL_MS);
-  }
-
-  private stopRxReportSchedule() {
-    if (this.rxReportTimer !== null) {
-      window.clearInterval(this.rxReportTimer);
-      this.rxReportTimer = null;
-    }
-  }
-
-  private startPingSchedule() {
-    this.stopPingSchedule();
-    this.pingTimer = window.setInterval(() => {
-      void this.runPingCycle();
-    }, PING_INTERVAL_MS);
-  }
-
-  private stopPingSchedule() {
-    if (this.pingTimer !== null) {
-      window.clearInterval(this.pingTimer);
-      this.pingTimer = null;
-    }
-  }
-
-  private async runPingCycle(): Promise<void> {
-    if (this.pingInFlight || this.closed) {
-      return;
-    }
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    this.pingInFlight = true;
-    try {
-      const peerT0 = Date.now();
-      const result = await this.request<{
-        peerT0: number;
-        gatewayProcessingMs: number;
-      }>("ping.peer-to-gw", { peerT0 });
-      const peerT3 = Date.now();
-      if (result && typeof result.gatewayProcessingMs === "number") {
-        const wireRttMs = Math.max(0, peerT3 - peerT0 - result.gatewayProcessingMs);
-        // Forward (peer → gateway) one-way is half the round trip in this
-        // direction. RTT was measured with a single peer clock so the value
-        // is mechanically honest within this ping.
-        const sample: PingOneWaySample = { ts: peerT3, oneWayMs: wireRttMs / 2 };
-        await this.request("ping.metrics-report", { samples: [sample] }).catch(() => {
-          // best-effort
-        });
-      }
-    } catch {
-      // Expected during reconnect/race; next 5s tick will retry.
-    } finally {
-      this.pingInFlight = false;
-    }
-  }
-
-  private handlePingGwToPeerEvent(payload: unknown): void {
-    const peerT1 = Date.now();
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const data = payload as { pingId?: unknown; gatewayT0?: unknown };
-    if (typeof data.pingId !== "string" || typeof data.gatewayT0 !== "number") {
-      return;
-    }
-    const pingId = data.pingId;
-    const gatewayT0 = data.gatewayT0;
-    const peerT2 = Date.now();
-    void this.request("ping.gw-to-peer.ack", {
-      pingId,
-      gatewayT0,
-      peerProcessingMs: Math.max(0, peerT2 - peerT1),
-    }).catch(() => {
-      // best-effort
-    });
-  }
-
-  private async flushRxSamples(): Promise<void> {
-    if (this.rxReportInFlight || this.closed) {
-      return;
-    }
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (this.rxSamples.length === 0) {
-      return;
-    }
-    const batch = this.rxSamples.splice(0);
-    this.rxReportInFlight = true;
-    try {
-      await this.request("protocol-traces.rx-report", { samples: batch });
-    } catch {
-      // Telemetry only — drop on failure rather than building unbounded queue.
-    } finally {
-      this.rxReportInFlight = false;
-    }
-  }
-
-  private startClockSyncSchedule() {
-    this.stopClockSyncSchedule();
-    void this.runClockSyncBurst();
-    this.clockSyncTimer = window.setInterval(() => {
-      if (this.closed) {
-        return;
-      }
-      void this.runClockSyncBurst();
-    }, TIME_SYNC_PERIODIC_INTERVAL_MS);
-  }
-
-  private stopClockSyncSchedule() {
-    if (this.clockSyncTimer !== null) {
-      window.clearInterval(this.clockSyncTimer);
-      this.clockSyncTimer = null;
-    }
-  }
-
-  private async runClockSyncBurst(): Promise<void> {
-    if (this.clockSyncInFlight || this.closed) {
-      return;
-    }
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    this.clockSyncInFlight = true;
-    try {
-      const samples: ClockSyncSample[] = [];
-      let bestSoFar: ClockSyncSample | null = null;
-      for (let i = 0; i < TIME_SYNC_BURST_SAMPLES; i++) {
-        if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-          break;
-        }
-        try {
-          const peerT0 = Date.now();
-          const result = await this.request<TimeSyncResponse>("time.sync", {
-            peerT0,
-            prevSync: this.lastClockSyncMetrics ?? undefined,
-          });
-          const peerT3 = Date.now();
-          if (
-            result &&
-            typeof result.gatewayT1 === "number" &&
-            typeof result.gatewayT2 === "number"
-          ) {
-            const sample = computeClockSyncSample(
-              peerT0,
-              result.gatewayT1,
-              result.gatewayT2,
-              peerT3,
-            );
-            // Discard implausible samples (negative or absurdly long RTTs that
-            // can only mean we caught a system suspend or wall-clock jump).
-            if (sample.rttMs < 60_000) {
-              samples.push(sample);
-              // Update incrementally so the offset improves before the burst
-              // finishes — early outbound frames get a usable offset within
-              // ~one RTT instead of waiting ~one second for the full burst.
-              if (!bestSoFar || sample.rttMs < bestSoFar.rttMs) {
-                bestSoFar = sample;
-                this.clockOffsetMs = sample.offsetMs;
-                this.lastClockSyncMetrics = {
-                  offsetMs: sample.offsetMs,
-                  networkRttMs: sample.networkRttMs,
-                  gatewayProcessingMs: sample.gatewayProcessingMs,
-                };
-              }
-            }
-          }
-        } catch {
-          // Expected during reconnect/race conditions; the next burst will
-          // retry. Do not log to avoid console spam in the browser.
-        }
-        if (i < TIME_SYNC_BURST_SAMPLES - 1) {
-          await new Promise<void>((resolve) =>
-            window.setTimeout(resolve, TIME_SYNC_BURST_INTERVAL_MS),
-          );
-        }
-      }
-      const final = pickBestSample(samples);
-      if (final) {
-        this.clockOffsetMs = final.offsetMs;
-        this.lastClockSyncMetrics = {
-          offsetMs: final.offsetMs,
-          networkRttMs: final.networkRttMs,
-          gatewayProcessingMs: final.gatewayProcessingMs,
-        };
-      }
-    } finally {
-      this.clockSyncInFlight = false;
-    }
   }
 
   addEventListener(listener: GatewayEventListener): () => void {

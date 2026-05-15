@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
@@ -9,14 +8,18 @@ import {
   type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
-import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+} from "@earendil-works/pi-coding-agent";
+import { derivePromptTokens } from "../../agents/usage.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
+import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
+import { readRegularFile } from "../../infra/fs-safe.js";
 
 type ForkSourceTranscript = {
   cwd: string;
@@ -26,10 +29,40 @@ type ForkSourceTranscript = {
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
 };
 
+const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
+
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
+}
+
+function maxPositiveTokenCount(...values: Array<number | undefined>): number | undefined {
+  let max: number | undefined;
+  for (const value of values) {
+    const normalized = resolvePositiveTokenCount(value);
+    if (typeof normalized === "number" && (max === undefined || normalized > max)) {
+      max = normalized;
+    }
+  }
+  return max;
+}
+
+async function estimateParentTranscriptTokensFromBytes(params: {
+  parentEntry: StoreSessionEntry;
+  storePath: string;
+}): Promise<number | undefined> {
+  try {
+    const filePath = resolveSessionFilePath(
+      params.parentEntry.sessionId,
+      params.parentEntry,
+      resolveSessionFilePathOptions({ storePath: params.storePath }),
+    );
+    const stat = await fs.stat(filePath);
+    return resolvePositiveTokenCount(Math.ceil(stat.size / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN));
+  } catch {
+    return undefined;
+  }
 }
 
 export async function resolveParentForkTokenCountRuntime(params: {
@@ -41,26 +74,36 @@ export async function resolveParentForkTokenCountRuntime(params: {
     return freshPersistedTokens;
   }
 
+  const cachedTokens = resolvePositiveTokenCount(params.parentEntry.totalTokens);
+  const byteEstimateTokens = await estimateParentTranscriptTokensFromBytes(params);
   try {
-    const transcriptMessages = (await readSessionMessagesAsync(
+    const usage = await readLatestRecentSessionUsageFromTranscriptAsync(
       params.parentEntry.sessionId,
       params.storePath,
       params.parentEntry.sessionFile,
-    )) as AgentMessage[];
-    if (transcriptMessages.length > 0) {
-      const estimatedTokens = estimateMessagesTokens(transcriptMessages);
-      const transcriptTokens = resolvePositiveTokenCount(
-        Number.isFinite(estimatedTokens) ? Math.ceil(estimatedTokens) : undefined,
+      undefined,
+      1024 * 1024,
+    );
+    const promptTokens = resolvePositiveTokenCount(
+      derivePromptTokens({
+        input: usage?.inputTokens,
+        cacheRead: usage?.cacheRead,
+        cacheWrite: usage?.cacheWrite,
+      }),
+    );
+    const outputTokens = resolvePositiveTokenCount(usage?.outputTokens);
+    if (typeof promptTokens === "number") {
+      return maxPositiveTokenCount(
+        promptTokens + (outputTokens ?? 0),
+        cachedTokens,
+        byteEstimateTokens,
       );
-      if (typeof transcriptTokens === "number") {
-        return transcriptTokens;
-      }
     }
   } catch {
-    // Fall back to cached totals when the parent transcript cannot be read.
+    // Fall back to cached totals when recent transcript usage cannot be read.
   }
 
-  return resolvePositiveTokenCount(params.parentEntry.totalTokens);
+  return maxPositiveTokenCount(cachedTokens, byteEstimateTokens);
 }
 
 function isSessionEntry(entry: FileEntry): entry is PiSessionEntry {
@@ -127,7 +170,7 @@ function collectBranchLabels(params: {
 async function readForkSourceTranscript(
   parentSessionFile: string,
 ): Promise<ForkSourceTranscript | null> {
-  const raw = await fs.readFile(parentSessionFile, "utf-8");
+  const raw = (await readRegularFile({ filePath: parentSessionFile })).buffer.toString("utf-8");
   const fileEntries = parseSessionEntries(raw);
   migrateSessionEntries(fileEntries);
   const header =
@@ -239,15 +282,6 @@ async function writeBranchedSession(params: {
   return { sessionId, sessionFile };
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
@@ -258,7 +292,7 @@ export async function forkSessionFromParentRuntime(params: {
     params.parentEntry,
     { agentId: params.agentId, sessionsDir: params.sessionsDir },
   );
-  if (!parentSessionFile || !(await fileExists(parentSessionFile))) {
+  if (!parentSessionFile) {
     return null;
   }
   try {

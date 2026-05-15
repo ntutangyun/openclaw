@@ -1,8 +1,9 @@
 import http from "node:http";
 import { URL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -13,7 +14,11 @@ import {
   requestBodyErrorToText,
 } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
-import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  normalizeVoiceCallConfig,
+  resolveVoiceCallEffectiveConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
@@ -73,12 +78,30 @@ function sanitizeTranscriptForLog(value: string): string {
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
-function buildRequestUrl(
-  requestUrl: string | undefined,
-  requestHost: string | undefined,
-  fallbackHost = "localhost",
-): URL {
-  return new URL(requestUrl ?? "/", `http://${requestHost ?? fallbackHost}`);
+function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
+  const metadata = call.metadata ?? {};
+  const recent = Array.isArray(metadata.recentTalkEvents)
+    ? metadata.recentTalkEvents.filter(
+        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
+          !!entry && typeof entry === "object" && !Array.isArray(entry),
+      )
+    : [];
+  recent.push({
+    at: event.timestamp,
+    type: event.type,
+    sessionId: event.sessionId,
+    turnId: event.turnId,
+  });
+  call.metadata = {
+    ...metadata,
+    lastTalkEventAt: event.timestamp,
+    lastTalkEventType: event.type,
+    recentTalkEvents: recent.slice(-10),
+  };
+}
+
+function buildRequestUrl(requestUrl: string | undefined): URL {
+  return new URL(requestUrl ?? "/", "http://localhost");
 }
 
 function normalizeProxyIp(value: string | undefined): string | undefined {
@@ -319,6 +342,7 @@ export class VoiceCallWebhookServer {
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,
       providerConfig,
+      cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
       preStartTimeoutMs: streaming.preStartTimeoutMs,
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
@@ -395,6 +419,12 @@ export class VoiceCallWebhookServer {
       onPartialTranscript: (callId, partial) => {
         const safePartial = sanitizeTranscriptForLog(partial);
         console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
+      },
+      onTalkEvent: (providerCallId, _streamSid, event) => {
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (call) {
+          appendRecentTalkEventMetadata(call, event);
+        }
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
@@ -569,7 +599,7 @@ export class VoiceCallWebhookServer {
 
   private getUpgradePathname(request: http.IncomingMessage): string | null {
     try {
-      return buildRequestUrl(request.url, request.headers.host).pathname;
+      return buildRequestUrl(request.url).pathname;
     } catch {
       return null;
     }
@@ -610,7 +640,7 @@ export class VoiceCallWebhookServer {
     req: http.IncomingMessage,
     webhookPath: string,
   ): Promise<WebhookResponsePayload> {
-    const url = buildRequestUrl(req.url, req.headers.host);
+    const url = buildRequestUrl(req.url);
 
     if (url.pathname === "/voice/hold-music") {
       return {
@@ -766,7 +796,7 @@ export class VoiceCallWebhookServer {
 
   private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
     try {
-      const pathname = buildRequestUrl(req.url, req.headers.host).pathname;
+      const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
       return Boolean(pattern && pathname.startsWith(pattern));
     } catch {
@@ -873,12 +903,16 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
+      const numberRouteKey =
+        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+      const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({
-        voiceConfig: this.config,
+        voiceConfig: effectiveConfig,
         coreConfig: this.coreConfig,
         agentRuntime: this.agentRuntime,
         callId,
+        sessionKey: call.sessionKey,
         from: call.from,
         transcript: call.transcript,
         userMessage,

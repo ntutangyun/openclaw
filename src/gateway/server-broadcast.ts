@@ -32,6 +32,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   presence: [],
   shutdown: [],
   tick: [],
+  "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
@@ -43,30 +44,19 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.message": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
-  "protocol.trace": [READ_SCOPE],
-  // Protocol monitor — peer-reported reverse-direction rx samples.
-  "protocol.rx.samples": [READ_SCOPE],
-  // Dedicated ping protocol for protocol-monitor latency.
-  // - ping.gw-to-peer is a targeted ping the gateway sends to a single peer
-  //   (operator OR node) and must reach BOTH role types because nodes also
-  //   ACK pings. Uses an empty scope-required list so any role is allowed,
-  //   and the role check below treats node-role specially via NODE_ALLOWED_EVENTS.
-  // - ping.metrics is the gateway's broadcast of new ping samples to UIs;
-  //   operator clients with read scope get it (parallel to protocol.trace).
-  "ping.gw-to-peer": [],
-  "ping.metrics": [READ_SCOPE],
 };
 
 // Events that node-role sessions must receive even when the event's operator
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>([
-  "voicewake.changed",
-  "voicewake.routing.changed",
-  // Nodes need to ACK gateway-initiated pings so the gateway can measure
-  // gw→node reverse-direction latency.
-  "ping.gw-to-peer",
-]);
+const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+
+function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
+  const fieldJSON = JSON.stringify({ [name]: value });
+  const keyJSON = JSON.stringify(name);
+  const prefix = `{${keyJSON}:`;
+  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+}
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
@@ -124,13 +114,32 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         dropIfSlow: opts?.dropIfSlow,
         presenceVersion: opts?.stateVersion?.presence,
         healthVersion: opts?.stateVersion?.health,
-        payload,
       };
       if (event === "agent") {
         Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
       }
       logWs("out", "event", logMeta);
     }
+    let frameBase:
+      | {
+          eventJSON: string;
+          payloadFragment: string;
+          stateVersionFragment: string;
+        }
+      | undefined;
+    const getFrameBase = () => {
+      if (!frameBase) {
+        frameBase = {
+          eventJSON: JSON.stringify(event),
+          payloadFragment: serializeFrameField("payload", payload),
+          stateVersionFragment:
+            opts?.stateVersion === undefined
+              ? ""
+              : serializeFrameField("stateVersion", opts.stateVersion),
+        };
+      }
+      return frameBase;
+    };
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
@@ -170,17 +179,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
         }
-        const frame = JSON.stringify({
-          type: "event",
-          event,
-          payload,
-          seq: eventSeq,
-          stateVersion: opts?.stateVersion,
-          // Stamp peer-receivable wall-clock so the operator/node can compute
-          // gateway→peer one-way latency (peer subtracts after applying its
-          // cached time.sync offset). See `protocol-traces.rx-report`.
-          sentAt: Date.now(),
-        });
+        const base = getFrameBase();
+        const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
+        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;
         c.socket.send(frame);
       } catch {
         /* ignore */

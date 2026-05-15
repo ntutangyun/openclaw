@@ -7,6 +7,7 @@ import {
 } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -38,6 +39,7 @@ import {
 } from "./subagent-announce-output.js";
 import {
   callGateway,
+  dispatchGatewayMethodInProcess,
   isEmbeddedPiRunActive,
   getRuntimeConfig,
   waitForEmbeddedPiRunEnd,
@@ -49,25 +51,26 @@ import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
+  dispatchGatewayMethodInProcess,
   getRuntimeConfig,
   loadSubagentRegistryRuntime,
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
-let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-announce.registry.runtime.js")
-> | null = null;
+const subagentRegistryRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-announce.registry.runtime.js"),
+);
 
 function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-announce.registry.runtime.js");
-  return subagentRegistryRuntimePromise;
+  return subagentRegistryRuntimeLoader.load();
 }
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
@@ -186,9 +189,9 @@ async function wakeSubagentRunAfterDescendants(params: {
       operation: "descendant wake agent call",
       signal: params.signal,
       run: async () =>
-        await subagentAnnounceDeps.callGateway({
-          method: "agent",
-          params: {
+        await subagentAnnounceDeps.dispatchGatewayMethodInProcess(
+          "agent",
+          {
             sessionKey: params.childSessionKey,
             message: wakeMessage,
             deliver: false,
@@ -200,8 +203,10 @@ async function wakeSubagentRunAfterDescendants(params: {
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
-          timeoutMs: announceTimeoutMs,
-        }),
+          {
+            timeoutMs: announceTimeoutMs,
+          },
+        ),
     });
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
@@ -600,11 +605,30 @@ export async function runSubagentAnnounceFlow(params: {
 }
 
 export const __testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
+  setDepsForTest(
+    overrides?: Partial<SubagentAnnounceDeps> & {
+      callGateway?: typeof callGateway;
+    },
+  ) {
+    const callGatewayOverride = overrides?.callGateway;
+    const dispatchGatewayMethodInProcessOverride =
+      overrides?.dispatchGatewayMethodInProcess ??
+      (callGatewayOverride
+        ? ((async (method, agentParams, options) =>
+            await callGatewayOverride({
+              method,
+              params: agentParams,
+              expectFinal: options?.expectFinal,
+              timeoutMs: options?.timeoutMs,
+            })) satisfies typeof dispatchGatewayMethodInProcess)
+        : undefined);
     subagentAnnounceDeps = overrides
       ? {
           ...defaultSubagentAnnounceDeps,
           ...overrides,
+          ...(dispatchGatewayMethodInProcessOverride
+            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
+            : {}),
         }
       : defaultSubagentAnnounceDeps;
   },

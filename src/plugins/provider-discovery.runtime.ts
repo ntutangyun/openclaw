@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
@@ -56,12 +56,14 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
-    envVars.some((name) => {
-      const value = env[name]?.trim();
-      return value !== undefined && value !== "";
-    }),
-  );
+  const envVars = [
+    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+  ];
+  return envVars.some((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value !== "";
+  });
 }
 
 function dedupeSorted(values: Iterable<string>): string[] {
@@ -80,7 +82,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
 }): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
+    loadManifestMetadataSnapshot({
       config: params.config ?? {},
       env: params.env ?? process.env,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

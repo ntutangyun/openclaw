@@ -1,5 +1,6 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -51,6 +52,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
+  config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -101,18 +103,19 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId } = await appendSessionTranscriptMessage({
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
       useRawWhenLinear: true,
+      config: params.config,
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
-      message: messageBody,
+      message: appendedMessage,
       messageId,
     });
-    return { ok: true, messageId, message: messageBody };
+    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

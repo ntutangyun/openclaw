@@ -134,7 +134,7 @@ export function ensureObject(
   return next;
 }
 
-export function normalizeKnownProvider(
+function normalizeKnownProvider(
   value: unknown,
   providers: Array<{ id: string }>,
 ): string | undefined {
@@ -234,7 +234,11 @@ export async function resolveRuntimeWebProviderSurface<
   ) {
     configuredBundledPluginId = undefined;
   }
-  if (params.rawProvider && !configuredBundledPluginId) {
+  if (
+    params.rawProvider &&
+    !configuredBundledPluginId &&
+    !allProviders.some((provider) => provider.id === params.rawProvider)
+  ) {
     const resolveManifestContractOwnerPluginId = await loadResolveManifestContractOwnerPluginId();
     configuredBundledPluginId = resolveManifestContractOwnerPluginId({
       contract: params.contract,

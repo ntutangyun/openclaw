@@ -43,7 +43,7 @@ const log = createSubsystemLogger("gateway/sessions-history-sse");
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
     return null;
@@ -61,7 +61,7 @@ function shouldStreamSse(req: IncomingMessage): boolean {
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  return new URL(req.url ?? "/", "http://localhost");
 }
 
 function resolveLimit(req: IncomingMessage): number | undefined {
@@ -168,7 +168,10 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile)
+      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+          mode: "full",
+          reason: "session history cursor pagination",
+        })
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -324,8 +327,20 @@ export async function handleSessionHistoryHttpRequest(
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,
+            messageSeq: update.messageSeq,
           });
           if (!nextEvent) {
+            return;
+          }
+          if (nextEvent.shouldRefresh) {
+            sentHistory = await sseState.refreshAsync();
+            sseWrite(res, "history", {
+              sessionKey: target.canonicalKey,
+              ...sentHistory,
+            });
+            return;
+          }
+          if (nextEvent.message === undefined) {
             return;
           }
           sentHistory = sseState.snapshot();

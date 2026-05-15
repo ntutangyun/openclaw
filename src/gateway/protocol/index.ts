@@ -61,24 +61,48 @@ import {
   ChannelsStopParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
+  type TalkEvent,
+  TalkEventSchema,
+  type TalkCatalogParams,
+  TalkCatalogParamsSchema,
+  type TalkCatalogResult,
+  TalkCatalogResultSchema,
+  type TalkClientCreateParams,
+  TalkClientCreateParamsSchema,
+  type TalkClientCreateResult,
+  TalkClientCreateResultSchema,
+  type TalkClientToolCallParams,
+  TalkClientToolCallParamsSchema,
+  type TalkClientToolCallResult,
+  TalkClientToolCallResultSchema,
   type TalkConfigParams,
   TalkConfigParamsSchema,
   type TalkConfigResult,
   TalkConfigResultSchema,
-  type TalkRealtimeRelayAudioParams,
-  TalkRealtimeRelayAudioParamsSchema,
-  type TalkRealtimeRelayMarkParams,
-  TalkRealtimeRelayMarkParamsSchema,
-  type TalkRealtimeRelayOkResult,
-  TalkRealtimeRelayOkResultSchema,
-  type TalkRealtimeRelayStopParams,
-  TalkRealtimeRelayStopParamsSchema,
-  type TalkRealtimeRelayToolResultParams,
-  TalkRealtimeRelayToolResultParamsSchema,
-  type TalkRealtimeSessionParams,
-  TalkRealtimeSessionParamsSchema,
-  type TalkRealtimeSessionResult,
-  TalkRealtimeSessionResultSchema,
+  type TalkSessionAppendAudioParams,
+  TalkSessionAppendAudioParamsSchema,
+  type TalkSessionCancelOutputParams,
+  TalkSessionCancelOutputParamsSchema,
+  type TalkSessionCancelTurnParams,
+  TalkSessionCancelTurnParamsSchema,
+  type TalkSessionCloseParams,
+  TalkSessionCloseParamsSchema,
+  type TalkSessionCreateParams,
+  TalkSessionCreateParamsSchema,
+  type TalkSessionCreateResult,
+  TalkSessionCreateResultSchema,
+  type TalkSessionJoinParams,
+  TalkSessionJoinParamsSchema,
+  type TalkSessionJoinResult,
+  TalkSessionJoinResultSchema,
+  type TalkSessionOkResult,
+  TalkSessionOkResultSchema,
+  type TalkSessionSubmitToolResultParams,
+  TalkSessionSubmitToolResultParamsSchema,
+  type TalkSessionTurnResult,
+  TalkSessionTurnResultSchema,
+  type TalkSessionTurnParams,
+  TalkSessionTurnParamsSchema,
   type TalkSpeakParams,
   TalkSpeakParamsSchema,
   type TalkSpeakResult,
@@ -122,6 +146,8 @@ import {
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
+  type CronGetParams,
+  CronGetParamsSchema,
   type CronJob,
   CronJobSchema,
   type CronListParams,
@@ -168,9 +194,25 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginsSessionActionParams,
+  type PluginsSessionActionResult,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
+  type EnvironmentSummary,
+  EnvironmentSummarySchema,
+  type EnvironmentsListParams,
+  EnvironmentsListParamsSchema,
+  type EnvironmentsListResult,
+  EnvironmentsListResultSchema,
+  type EnvironmentsStatusParams,
+  EnvironmentsStatusParamsSchema,
+  type EnvironmentsStatusResult,
+  EnvironmentsStatusResultSchema,
+  type EnvironmentStatus,
+  EnvironmentStatusSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -228,6 +270,8 @@ import {
   NodeRenameParamsSchema,
   type PollParams,
   PollParamsSchema,
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
   PushTestParamsSchema,
@@ -256,6 +300,8 @@ import {
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCleanupParams,
+  SessionsCleanupParamsSchema,
   type SessionsCompactionBranchParams,
   SessionsCompactionBranchParamsSchema,
   type SessionsCompactionGetParams,
@@ -268,6 +314,8 @@ import {
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsDescribeParams,
+  SessionsDescribeParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -280,10 +328,6 @@ import {
   SessionsPluginPatchParamsSchema,
   type SessionsPreviewParams,
   SessionsPreviewParamsSchema,
-  type SessionsPurgeParams,
-  SessionsPurgeParamsSchema,
-  type SessionsPurgeResult,
-  SessionsPurgeResultSchema,
   type SessionsResetParams,
   SessionsResetParamsSchema,
   type SessionsResolveParams,
@@ -292,6 +336,20 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskSummary,
+  TaskSummarySchema,
+  type TasksCancelParams,
+  TasksCancelParamsSchema,
+  type TasksCancelResult,
+  TasksCancelResultSchema,
+  type TasksGetParams,
+  TasksGetParamsSchema,
+  type TasksGetResult,
+  TasksGetResultSchema,
+  type TasksListParams,
+  TasksListParamsSchema,
+  type TasksListResult,
+  TasksListResultSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -309,6 +367,12 @@ import {
   SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
+  type SkillsUploadBeginParams,
+  SkillsUploadBeginParamsSchema,
+  type SkillsUploadChunkParams,
+  SkillsUploadChunkParamsSchema,
+  type SkillsUploadCommitParams,
+  SkillsUploadCommitParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
   type ToolsCatalogParams,
@@ -328,33 +392,6 @@ import {
   TalkModeParamsSchema,
   type TickEvent,
   TickEventSchema,
-  type PingGwToPeerAckParams,
-  PingGwToPeerAckParamsSchema,
-  type PingGwToPeerAckResult,
-  PingGwToPeerAckResultSchema,
-  type PingGwToPeerEvent,
-  PingGwToPeerEventSchema,
-  type PingMetricsEvent,
-  PingMetricsEventSchema,
-  type PingMetricsReportParams,
-  PingMetricsReportParamsSchema,
-  type PingMetricsReportResult,
-  PingMetricsReportResultSchema,
-  type PingPeerToGwParams,
-  PingPeerToGwParamsSchema,
-  type PingPeerToGwResult,
-  PingPeerToGwResultSchema,
-  type PingSample,
-  type ProtocolRxSamplesEvent,
-  ProtocolRxSamplesEventSchema,
-  type ProtocolTracesRxReportParams,
-  ProtocolTracesRxReportParamsSchema,
-  type ProtocolTracesRxReportResult,
-  ProtocolTracesRxReportResultSchema,
-  type TimeSyncParams,
-  TimeSyncParamsSchema,
-  type TimeSyncResult,
-  TimeSyncResultSchema,
   type UpdateRunParams,
   UpdateRunParamsSchema,
   type WakeParams,
@@ -438,6 +475,12 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateEnvironmentsListParams = ajv.compile<EnvironmentsListParams>(
+  EnvironmentsListParamsSchema,
+);
+export const validateEnvironmentsStatusParams = ajv.compile<EnvironmentsStatusParams>(
+  EnvironmentsStatusParamsSchema,
+);
 export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -475,8 +518,14 @@ export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCleanupParams = ajv.compile<SessionsCleanupParams>(
+  SessionsCleanupParamsSchema,
+);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
+);
+export const validateSessionsDescribeParams = ajv.compile<SessionsDescribeParams>(
+  SessionsDescribeParamsSchema,
 );
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
@@ -519,8 +568,9 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
-export const validateSessionsPurgeParams =
-  ajv.compile<SessionsPurgeParams>(SessionsPurgeParamsSchema);
+export const validateTasksListParams = ajv.compile<TasksListParams>(TasksListParamsSchema);
+export const validateTasksGetParams = ajv.compile<TasksGetParams>(TasksGetParamsSchema);
+export const validateTasksCancelParams = ajv.compile<TasksCancelParams>(TasksCancelParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -537,25 +587,57 @@ export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNext
 export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
+export const validateTalkEvent = ajv.compile<TalkEvent>(TalkEventSchema);
+export const validateTalkCatalogParams = ajv.compile<TalkCatalogParams>(TalkCatalogParamsSchema);
+export const validateTalkCatalogResult = ajv.compile<TalkCatalogResult>(TalkCatalogResultSchema);
 export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
 export const validateTalkConfigResult = ajv.compile<TalkConfigResult>(TalkConfigResultSchema);
-export const validateTalkRealtimeSessionParams = ajv.compile<TalkRealtimeSessionParams>(
-  TalkRealtimeSessionParamsSchema,
+export const validateTalkClientCreateParams = ajv.compile<TalkClientCreateParams>(
+  TalkClientCreateParamsSchema,
 );
-export const validateTalkRealtimeSessionResult = ajv.compile<TalkRealtimeSessionResult>(
-  TalkRealtimeSessionResultSchema,
+export const validateTalkClientCreateResult = ajv.compile<TalkClientCreateResult>(
+  TalkClientCreateResultSchema,
 );
-export const validateTalkRealtimeRelayAudioParams = ajv.compile<TalkRealtimeRelayAudioParams>(
-  TalkRealtimeRelayAudioParamsSchema,
+export const validateTalkClientToolCallParams = ajv.compile<TalkClientToolCallParams>(
+  TalkClientToolCallParamsSchema,
 );
-export const validateTalkRealtimeRelayMarkParams = ajv.compile<TalkRealtimeRelayMarkParams>(
-  TalkRealtimeRelayMarkParamsSchema,
+export const validateTalkClientToolCallResult = ajv.compile<TalkClientToolCallResult>(
+  TalkClientToolCallResultSchema,
 );
-export const validateTalkRealtimeRelayStopParams = ajv.compile<TalkRealtimeRelayStopParams>(
-  TalkRealtimeRelayStopParamsSchema,
+export const validateTalkSessionCreateParams = ajv.compile<TalkSessionCreateParams>(
+  TalkSessionCreateParamsSchema,
 );
-export const validateTalkRealtimeRelayToolResultParams =
-  ajv.compile<TalkRealtimeRelayToolResultParams>(TalkRealtimeRelayToolResultParamsSchema);
+export const validateTalkSessionCreateResult = ajv.compile<TalkSessionCreateResult>(
+  TalkSessionCreateResultSchema,
+);
+export const validateTalkSessionJoinParams = ajv.compile<TalkSessionJoinParams>(
+  TalkSessionJoinParamsSchema,
+);
+export const validateTalkSessionJoinResult = ajv.compile<TalkSessionJoinResult>(
+  TalkSessionJoinResultSchema,
+);
+export const validateTalkSessionAppendAudioParams = ajv.compile<TalkSessionAppendAudioParams>(
+  TalkSessionAppendAudioParamsSchema,
+);
+export const validateTalkSessionTurnParams = ajv.compile<TalkSessionTurnParams>(
+  TalkSessionTurnParamsSchema,
+);
+export const validateTalkSessionCancelTurnParams = ajv.compile<TalkSessionCancelTurnParams>(
+  TalkSessionCancelTurnParamsSchema,
+);
+export const validateTalkSessionCancelOutputParams = ajv.compile<TalkSessionCancelOutputParams>(
+  TalkSessionCancelOutputParamsSchema,
+);
+export const validateTalkSessionTurnResult = ajv.compile<TalkSessionTurnResult>(
+  TalkSessionTurnResultSchema,
+);
+export const validateTalkSessionSubmitToolResultParams =
+  ajv.compile<TalkSessionSubmitToolResultParams>(TalkSessionSubmitToolResultParamsSchema);
+export const validateTalkSessionCloseParams = ajv.compile<TalkSessionCloseParams>(
+  TalkSessionCloseParamsSchema,
+);
+export const validateTalkSessionOkResult =
+  ajv.compile<TalkSessionOkResult>(TalkSessionOkResultSchema);
 export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakParamsSchema);
 export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
@@ -577,11 +659,21 @@ export const validateToolsInvokeParams = ajv.compile<ToolsInvokeParams>(ToolsInv
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
+export const validateSkillsUploadBeginParams = ajv.compile<SkillsUploadBeginParams>(
+  SkillsUploadBeginParamsSchema,
+);
+export const validateSkillsUploadChunkParams = ajv.compile<SkillsUploadChunkParams>(
+  SkillsUploadChunkParamsSchema,
+);
+export const validateSkillsUploadCommitParams = ajv.compile<SkillsUploadCommitParams>(
+  SkillsUploadCommitParamsSchema,
+);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
+export const validateCronGetParams = ajv.compile<CronGetParams>(CronGetParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
 export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdateParamsSchema);
 export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
@@ -629,6 +721,12 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsSessionActionParams = ajv.compile<PluginsSessionActionParams>(
+  PluginsSessionActionParamsSchema,
+);
+export const validatePluginsSessionActionResult = ajv.compile<PluginsSessionActionResult>(
+  PluginsSessionActionResultSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -643,18 +741,6 @@ export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInject
 export const validateChatEvent = ajv.compile(ChatEventSchema);
 export const validateUpdateStatusParams = ajv.compile<UpdateStatusParams>(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
-export const validateTimeSyncParams = ajv.compile<TimeSyncParams>(TimeSyncParamsSchema);
-export const validateTimeSyncResult = ajv.compile<TimeSyncResult>(TimeSyncResultSchema);
-export const validateProtocolTracesRxReportParams = ajv.compile<ProtocolTracesRxReportParams>(
-  ProtocolTracesRxReportParamsSchema,
-);
-export const validatePingPeerToGwParams = ajv.compile<PingPeerToGwParams>(PingPeerToGwParamsSchema);
-export const validatePingGwToPeerAckParams = ajv.compile<PingGwToPeerAckParams>(
-  PingGwToPeerAckParamsSchema,
-);
-export const validatePingMetricsReportParams = ajv.compile<PingMetricsReportParams>(
-  PingMetricsReportParamsSchema,
-);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
@@ -705,6 +791,12 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  EnvironmentStatusSchema,
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -738,7 +830,9 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
+  SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
@@ -752,13 +846,18 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
-  SessionsPurgeParamsSchema,
-  SessionsPurgeResultSchema,
   SessionsUsageParamsSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  TaskSummarySchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -776,30 +875,29 @@ export {
   WizardNextResultSchema,
   WizardStartResultSchema,
   WizardStatusResultSchema,
+  TalkEventSchema,
+  TalkCatalogParamsSchema,
+  TalkCatalogResultSchema,
+  TalkClientCreateParamsSchema,
+  TalkClientCreateResultSchema,
+  TalkClientToolCallParamsSchema,
+  TalkClientToolCallResultSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
-  TalkRealtimeSessionParamsSchema,
-  TalkRealtimeSessionResultSchema,
-  TalkRealtimeRelayAudioParamsSchema,
-  TalkRealtimeRelayMarkParamsSchema,
-  TalkRealtimeRelayStopParamsSchema,
-  TalkRealtimeRelayToolResultParamsSchema,
-  TalkRealtimeRelayOkResultSchema,
+  TalkSessionAppendAudioParamsSchema,
+  TalkSessionCancelOutputParamsSchema,
+  TalkSessionCancelTurnParamsSchema,
+  TalkSessionCreateParamsSchema,
+  TalkSessionCreateResultSchema,
+  TalkSessionJoinParamsSchema,
+  TalkSessionJoinResultSchema,
+  TalkSessionTurnParamsSchema,
+  TalkSessionTurnResultSchema,
+  TalkSessionSubmitToolResultParamsSchema,
+  TalkSessionCloseParamsSchema,
+  TalkSessionOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
-  TimeSyncParamsSchema,
-  TimeSyncResultSchema,
-  ProtocolRxSamplesEventSchema,
-  ProtocolTracesRxReportParamsSchema,
-  ProtocolTracesRxReportResultSchema,
-  PingGwToPeerAckParamsSchema,
-  PingGwToPeerAckResultSchema,
-  PingGwToPeerEventSchema,
-  PingMetricsEventSchema,
-  PingMetricsReportParamsSchema,
-  PingMetricsReportResultSchema,
-  PingPeerToGwParamsSchema,
-  PingPeerToGwResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
@@ -825,6 +923,8 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
@@ -836,10 +936,14 @@ export {
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
+  SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
+  CronGetParamsSchema,
   CronAddParamsSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
@@ -859,6 +963,8 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
   errorShape,
@@ -903,32 +1009,29 @@ export type {
   WizardNextResult,
   WizardStartResult,
   WizardStatusResult,
+  TalkCatalogParams,
+  TalkCatalogResult,
+  TalkClientCreateParams,
+  TalkClientCreateResult,
+  TalkClientToolCallParams,
+  TalkClientToolCallResult,
   TalkConfigParams,
   TalkConfigResult,
-  TalkRealtimeSessionParams,
-  TalkRealtimeSessionResult,
-  TalkRealtimeRelayAudioParams,
-  TalkRealtimeRelayMarkParams,
-  TalkRealtimeRelayStopParams,
-  TalkRealtimeRelayToolResultParams,
-  TalkRealtimeRelayOkResult,
+  TalkSessionAppendAudioParams,
+  TalkSessionCancelOutputParams,
+  TalkSessionCancelTurnParams,
+  TalkSessionCreateParams,
+  TalkSessionCreateResult,
+  TalkSessionJoinParams,
+  TalkSessionJoinResult,
+  TalkSessionTurnParams,
+  TalkSessionTurnResult,
+  TalkSessionSubmitToolResultParams,
+  TalkSessionCloseParams,
+  TalkSessionOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
   TalkModeParams,
-  TimeSyncParams,
-  TimeSyncResult,
-  ProtocolRxSamplesEvent,
-  ProtocolTracesRxReportParams,
-  ProtocolTracesRxReportResult,
-  PingGwToPeerAckParams,
-  PingGwToPeerAckResult,
-  PingGwToPeerEvent,
-  PingMetricsEvent,
-  PingMetricsReportParams,
-  PingMetricsReportResult,
-  PingPeerToGwParams,
-  PingPeerToGwResult,
-  PingSample,
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsStartParams,
@@ -962,6 +1065,8 @@ export type {
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  PluginsSessionActionParams,
+  PluginsSessionActionResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
@@ -975,8 +1080,17 @@ export type {
   SkillsSearchResult,
   SkillsDetailParams,
   SkillsDetailResult,
+  SkillsUploadBeginParams,
+  SkillsUploadChunkParams,
+  SkillsUploadCommitParams,
   SkillsInstallParams,
   SkillsUpdateParams,
+  EnvironmentStatus,
+  EnvironmentSummary,
+  EnvironmentsListParams,
+  EnvironmentsListResult,
+  EnvironmentsStatusParams,
+  EnvironmentsStatusResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,
@@ -992,19 +1106,27 @@ export type {
   NodePendingEnqueueParams,
   NodePendingEnqueueResult,
   SessionsListParams,
+  SessionsCleanupParams,
   SessionsPreviewParams,
+  SessionsDescribeParams,
   SessionsResolveParams,
   SessionsPatchParams,
   SessionsPatchResult,
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
-  SessionsPurgeParams,
-  SessionsPurgeResult,
   SessionsUsageParams,
+  TaskSummary,
+  TasksListParams,
+  TasksListResult,
+  TasksGetParams,
+  TasksGetResult,
+  TasksCancelParams,
+  TasksCancelResult,
   CronJob,
   CronListParams,
   CronStatusParams,
+  CronGetParams,
   CronAddParams,
   CronUpdateParams,
   CronRemoveParams,

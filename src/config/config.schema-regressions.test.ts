@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it("accepts session write-lock acquire timeout", () => {
+    const res = validateConfigObject({
+      session: {
+        writeLock: {
+          acquireTimeoutMs: 60_000,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -202,7 +214,9 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+      const issuePaths = res.issues.map((issue) => issue.path);
+      expect(issuePaths).toContain("agents.defaults.pdfMaxBytesMb");
+      expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
     }
   });
 

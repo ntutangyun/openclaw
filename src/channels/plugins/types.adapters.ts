@@ -24,6 +24,7 @@ export type {
   ChannelOutboundPayloadContext,
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,
+  ChannelDeliveryCapabilities,
 } from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,
@@ -387,13 +388,6 @@ export type ChannelHeartbeatAdapter = {
     threadId?: string | number | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<void> | void;
-  resolveRecipients?: (params: {
-    cfg: OpenClawConfig;
-    opts?: { to?: string; all?: boolean; accountId?: string };
-  }) => {
-    recipients: string[];
-    source: string;
-  };
 };
 
 type ChannelDirectorySelfParams = {

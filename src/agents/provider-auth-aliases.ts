@@ -1,12 +1,14 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -118,15 +120,34 @@ export function resolveProviderAuthAliasMap(
   if (cached) {
     return cached;
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env,
-    includeDisabled: true,
-  });
+  const config = params?.config ?? {};
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+      allowWorkspaceScopedSnapshot: true,
+    }) ??
+    (() => {
+      if (normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
+        return undefined;
+      }
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return currentSnapshot;
+    })() ??
+    loadPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+    });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }
