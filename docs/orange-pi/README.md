@@ -45,12 +45,29 @@ rotary_embedding, `fuse_norm_quant: false`).
 
 ### Download models
 
-Models are cached via ModelScope. With `VLLM_USE_MODELSCOPE=True`, vLLM
-auto-downloads on first serve. Alternatively, pre-download inside the container:
+Models are cached at `/root/.cache/modelscope/hub/models/`. With
+`VLLM_USE_MODELSCOPE=True`, vLLM auto-downloads on first serve.
+To pre-download inside the container:
 
 ```bash
 pip install modelscope
+
+# Qwen3 (legacy)
+modelscope download --model Qwen/Qwen3-0___6B
+
+# Qwen3.5 (dense)
+modelscope download --model Qwen/Qwen3___5-0___8B
+modelscope download --model Qwen/Qwen3___5-2B
+modelscope download --model Qwen/Qwen3___5-4B
+modelscope download --model Qwen/Qwen3___5-9B
+
+# Qwen3.6 (dense)
 modelscope download --model Qwen/Qwen3___6-27B
+modelscope download --model Qwen/Qwen3___6-27B-FP8
+
+# Qwen3.6 (MoE)
+modelscope download --model Qwen/Qwen3___6-35B-A3B
+modelscope download --model Qwen/Qwen3___6-35B-A3B-FP8
 ```
 
 ### Benchmark
