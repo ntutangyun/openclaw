@@ -643,6 +643,8 @@ cmd_rebuild_china() {
     --build-arg "OPENCLAW_NODE_BOOKWORM_IMAGE=${node_image}" \
     --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE=${node_slim_image}" \
     --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST=" \
+    --build-arg "OPENCLAW_PNPM_FETCH_TIMEOUT=60000" \
+    --build-arg "OPENCLAW_PNPM_FETCH_RETRIES=3" \
     --build-arg "OPENCLAW_BUN_IMAGE=${bun_image}" \
     --build-arg "OPENCLAW_NPM_REGISTRY=${CHINA_NPM_REGISTRY}" \
     --build-arg "OPENCLAW_PIP_INDEX_URL=${CHINA_PIP_INDEX}" \

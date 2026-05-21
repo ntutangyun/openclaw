@@ -564,6 +564,8 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     toolCalls: 0,
     toolResults: 0,
     errors: 0,
+    assistantErrors: 0,
+    toolErrors: 0,
   };
   const toolUsageMap = new Map<string, number>();
   const modelUsageMap = new Map<string, SessionModelUsage>();
@@ -622,10 +624,12 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     if (entry.toolResultCounts.total > 0) {
       messageCounts.toolResults += entry.toolResultCounts.total;
       messageCounts.errors += entry.toolResultCounts.errors;
+      messageCounts.toolErrors += entry.toolResultCounts.errors;
     }
 
     if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
       messageCounts.errors += 1;
+      messageCounts.assistantErrors += 1;
     }
 
     if (ts !== undefined) {
@@ -640,6 +644,8 @@ function buildSessionCostSummaryFromCacheEntry(params: {
         toolCalls: 0,
         toolResults: 0,
         errors: 0,
+        assistantErrors: 0,
+        toolErrors: 0,
       };
       daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
       if (entry.role === "user") {
@@ -650,8 +656,10 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       daily.toolCalls += entry.toolNames.length;
       daily.toolResults += entry.toolResultCounts.total;
       daily.errors += entry.toolResultCounts.errors;
+      daily.toolErrors += entry.toolResultCounts.errors;
       if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
         daily.errors += 1;
+        daily.assistantErrors += 1;
       }
       dailyMessageMap.set(dayKey, daily);
 
@@ -1367,7 +1375,7 @@ async function scanUsageFileForCache(params: {
 
       transcriptEntries?.push({
         timestamp: ts,
-        role: entry.role,
+        role: entry.role === "user" || entry.role === "assistant" ? entry.role : undefined,
         durationMs: entry.durationMs,
         provider: entry.provider,
         model: entry.model,

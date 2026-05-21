@@ -24,6 +24,8 @@ ARG OPENCLAW_MARKITDOWN_EXTRAS=all
 # https://pypi.tuna.tsinghua.edu.cn/simple for the Tsinghua PyPI mirror.
 ARG OPENCLAW_NPM_REGISTRY=""
 ARG OPENCLAW_PIP_INDEX_URL=""
+ARG OPENCLAW_PNPM_FETCH_TIMEOUT=10000
+ARG OPENCLAW_PNPM_FETCH_RETRIES=0
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -65,6 +67,8 @@ FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 ARG OPENCLAW_NPM_REGISTRY
 ARG OPENCLAW_PIP_INDEX_URL
+ARG OPENCLAW_PNPM_FETCH_TIMEOUT
+ARG OPENCLAW_PNPM_FETCH_RETRIES
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
@@ -107,7 +111,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     fi && \
     pnpm_out="$(mktemp)"; \
     (NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --ignore-scripts \
-      --prefer-offline --fetch-timeout=10000 --fetch-retries=0 \
+      --prefer-offline --fetch-timeout=${OPENCLAW_PNPM_FETCH_TIMEOUT} --fetch-retries=${OPENCLAW_PNPM_FETCH_RETRIES} \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc 2>&1 || true) | tee "$pnpm_out"; \

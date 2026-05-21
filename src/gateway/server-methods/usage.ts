@@ -594,6 +594,8 @@ function mergeMessageCounts(
     toolCalls: (left?.toolCalls ?? 0) + (right?.toolCalls ?? 0),
     toolResults: (left?.toolResults ?? 0) + (right?.toolResults ?? 0),
     errors: (left?.errors ?? 0) + (right?.errors ?? 0),
+    assistantErrors: (left?.assistantErrors ?? 0) + (right?.assistantErrors ?? 0),
+    toolErrors: (left?.toolErrors ?? 0) + (right?.toolErrors ?? 0),
   };
 }
 

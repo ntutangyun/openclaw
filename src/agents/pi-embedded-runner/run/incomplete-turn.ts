@@ -51,7 +51,7 @@ type IncompleteTurnAttempt = Pick<
 
 type NoToolCallNudgeAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "clientToolCall"
+  | "clientToolCalls"
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
@@ -653,7 +653,7 @@ export function resolveNoToolCallNudgeInstruction(params: {
   if (
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt
   ) {
