@@ -63,11 +63,13 @@ RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_NPM_REGISTRY
+ARG OPENCLAW_PIP_INDEX_URL
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
-RUN corepack enable
+RUN COREPACK_NPM_REGISTRY="${OPENCLAW_NPM_REGISTRY:-}" corepack enable
 
 WORKDIR /app
 
@@ -103,10 +105,17 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     if [ -n "${OPENCLAW_NPM_REGISTRY}" ]; then \
       echo "registry=${OPENCLAW_NPM_REGISTRY}" >> .npmrc; \
     fi && \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+    pnpm_out="$(mktemp)"; \
+    (NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --ignore-scripts \
+      --prefer-offline --fetch-timeout=10000 --fetch-retries=0 \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc
+      --config.supportedArchitectures.libc=glibc 2>&1 || true) | tee "$pnpm_out"; \
+    if grep -q ', done' "$pnpm_out"; then \
+      echo "==> pnpm install completed successfully"; \
+    else \
+      echo "ERROR: pnpm install did not finish"; exit 1; \
+    fi
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Matrix's native downloader can hit transient release CDN errors while
@@ -156,11 +165,17 @@ FROM build AS runtime-assets
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    CI=true pnpm prune --prod \
+    pnpm_out="$(mktemp)"; \
+    (CI=true pnpm prune --prod --ignore-scripts \
       --config.offline=true \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc && \
+      --config.supportedArchitectures.libc=glibc 2>&1 || true) | tee "$pnpm_out"; \
+    if grep -q ', done' "$pnpm_out"; then \
+      echo "==> pnpm prune completed successfully"; \
+    else \
+      echo "ERROR: pnpm prune did not finish"; exit 1; \
+    fi && \
     node scripts/postinstall-bundled-plugins.mjs && \
     OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
@@ -169,6 +184,8 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
+ARG OPENCLAW_NPM_REGISTRY
+ARG OPENCLAW_PIP_INDEX_URL
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 

@@ -337,6 +337,8 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type SessionsPurgeParams,
+  SessionsPurgeParamsSchema,
   type TaskSummary,
   TaskSummarySchema,
   type TasksCancelParams,
@@ -636,6 +638,8 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateSessionsPurgeParams =
+  lazyCompile<SessionsPurgeParams>(SessionsPurgeParamsSchema);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -915,6 +919,7 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  SessionsPurgeParamsSchema,
   ArtifactSummarySchema,
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
@@ -1185,6 +1190,7 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  SessionsPurgeParams,
   TaskSummary,
   TasksListParams,
   TasksListResult,

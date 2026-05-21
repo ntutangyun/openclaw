@@ -529,7 +529,7 @@ build_image() {
   #     / low-CPU hosts (Jetson) and has no practical security impact as long
   #     as the base image digest is pinned and rebuilt periodically.
   echo "==> Building Docker image: $DEFAULT_IMAGE"
-  docker build \
+  DOCKER_BUILDKIT=1 docker build \
     --network=host \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS:-}" \
     --build-arg "OPENCLAW_VARIANT=${OPENCLAW_VARIANT:-default}" \
@@ -626,6 +626,7 @@ cmd_rebuild_china() {
 
   local node_image="${CHINA_DOCKER_MIRROR}/library/node:24-bookworm"
   local node_slim_image="${CHINA_DOCKER_MIRROR}/library/node:24-bookworm-slim"
+  local bun_image="${CHINA_DOCKER_MIRROR}/oven/bun:1.3.13"
 
   echo "==> Building Docker image with China mirrors: $DEFAULT_IMAGE"
   echo "    Docker mirror: ${CHINA_DOCKER_MIRROR}"
@@ -633,7 +634,7 @@ cmd_rebuild_china() {
   echo "    pip index:     ${CHINA_PIP_INDEX}"
   echo ""
 
-  docker build \
+  DOCKER_BUILDKIT=1 docker build \
     --network=host \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS:-}" \
     --build-arg "OPENCLAW_VARIANT=${OPENCLAW_VARIANT:-default}" \
@@ -642,6 +643,7 @@ cmd_rebuild_china() {
     --build-arg "OPENCLAW_NODE_BOOKWORM_IMAGE=${node_image}" \
     --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE=${node_slim_image}" \
     --build-arg "OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST=" \
+    --build-arg "OPENCLAW_BUN_IMAGE=${bun_image}" \
     --build-arg "OPENCLAW_NPM_REGISTRY=${CHINA_NPM_REGISTRY}" \
     --build-arg "OPENCLAW_PIP_INDEX_URL=${CHINA_PIP_INDEX}" \
     -t "$DEFAULT_IMAGE" \
@@ -723,7 +725,7 @@ RUN --mount=type=bind,from=host-pnpm-store,target=/src,readonly \
     du -sh /dst
 WARMDF
 
-  docker build \
+  DOCKER_BUILDKIT=1 docker build \
     --network=host \
     --build-context "host-pnpm-store=$host_store" \
     -t openclaw-cache-warm-sentinel \
