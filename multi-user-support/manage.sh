@@ -7,7 +7,7 @@ USERS_DIR="$SCRIPT_DIR/users"
 SETUP_MARKER="$SCRIPT_DIR/.setup-done"
 
 # Custom workspace skills are sourced from this directory and bind-mounted
-# read-only at /home/node/.openclaw/workspace/skills inside every user container.
+# read-only at /home/gateway/.openclaw/workspace/skills inside every user container.
 SKILLS_DIR="$SCRIPT_DIR/skills"
 
 # Default image: use the same as the main repo, fallback to published image
@@ -19,11 +19,15 @@ BASE_GATEWAY_PORT="${OPENCLAW_MULTI_BASE_PORT:-19000}"
 # China-friendly mirrors (overridable via env vars).
 # Docker Hub proxy: used as a prefix for base images, e.g. <mirror>/library/node:24-bookworm.
 # Common options: docker.1ms.run, docker.m.daocloud.io.
-CHINA_DOCKER_MIRROR="${OPENCLAW_CHINA_DOCKER_MIRROR:-docker.1ms.run}"
+CHINA_DOCKER_MIRROR="${OPENCLAW_CHINA_DOCKER_MIRROR:-docker.m.daocloud.io}"
 # npm registry mirror (pnpm install, corepack prepare).
 CHINA_NPM_REGISTRY="${OPENCLAW_CHINA_NPM_REGISTRY:-https://registry.npmmirror.com}"
 # PyPI mirror index (pip install markitdown, python-docx, python-pptx).
-CHINA_PIP_INDEX="${OPENCLAW_CHINA_PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+CHINA_PIP_INDEX="${OPENCLAW_CHINA_PIP_INDEX:-https://mirrors.huaweicloud.com/repository/pypi/simple}"
+# Debian apt mirror (apt-get install/update). Only used during rebuild-china.
+# Must use HTTP (not HTTPS) because ca-certificates is installed *by* the first
+# apt-get step, so there are no CA certs to verify TLS at that point.
+CHINA_APT_MIRROR="${OPENCLAW_CHINA_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}"
 
 usage() {
   cat <<EOF
@@ -85,6 +89,24 @@ Environment variables:
                               weekly security patches)
   OLLAMA_HOST                 Ollama API host (default: http://localhost:11434)
   VLLM_HOST                   vLLM API host (default: http://localhost:8000)
+  OPENCLAW_VLLM_QWEN_THINKING_FORMAT
+                              How sync-vllm tells the gateway to toggle qwen3
+                              thinking (default: chat-template). chat-template
+                              sets chat_template_kwargs.enable_thinking (pairs
+                              with vLLM --reasoning-parser qwen3); top-level
+                              sends a top-level enable_thinking field; "-"
+                              omits the param.
+  OPENCLAW_VLLM_SET_DEFAULT   sync-vllm points agents.defaults.model.primary at
+                              the synced vLLM model so the UI shows its context
+                              window immediately (default: 1; set 0 to skip).
+  OPENCLAW_VLLM_DEFAULT_MODEL Pin which model sync-vllm sets as the default
+                              (e.g. vllm/Qwen3.5-4b). Defaults to the first
+                              model returned by /v1/models.
+  OPENCLAW_VLLM_TIMEOUT_SECONDS
+                              Per-provider request timeout written to
+                              models.providers.vllm.timeoutSeconds (default:
+                              180). Surfaces an error instead of a silent stall
+                              if the NPU/engine wedges. Set 0 to omit.
   OPENCLAW_OLLAMA_CTX_CAP     Cap the num_ctx written to openclaw.json by
                               sync-ollama (default: 0 = no cap; use the
                               native context_length reported by /api/show).
@@ -228,24 +250,24 @@ services:
     networks:
       - ${network_name}
     environment:
-      HOME: /home/node
+      HOME: /home/gateway
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: \${OPENCLAW_GATEWAY_TOKEN}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: \${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       # ── Verbose logging & diagnostics ──
       OPENCLAW_LOG_LEVEL: debug
       OPENCLAW_RAW_STREAM: "1"
-      OPENCLAW_RAW_STREAM_PATH: /home/node/.openclaw/logs/raw-stream.jsonl
+      OPENCLAW_RAW_STREAM_PATH: /home/gateway/.openclaw/logs/raw-stream.jsonl
       OPENCLAW_CACHE_TRACE: "1"
-      OPENCLAW_CACHE_TRACE_FILE: /home/node/.openclaw/logs/cache-trace.jsonl
+      OPENCLAW_CACHE_TRACE_FILE: /home/gateway/.openclaw/logs/cache-trace.jsonl
       OPENCLAW_CACHE_TRACE_MESSAGES: "1"
       OPENCLAW_CACHE_TRACE_PROMPT: "1"
       OPENCLAW_CACHE_TRACE_SYSTEM: "1"
       OPENCLAW_DIAGNOSTICS: "*"
     volumes:
-      - ${config_vol}:/home/node/.openclaw
-      - ${workspace_vol}:/home/node/.openclaw/workspace
-      - \${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro
+      - ${config_vol}:/home/gateway/.openclaw
+      - ${workspace_vol}:/home/gateway/.openclaw/workspace
+      - \${OPENCLAW_SKILLS_DIR}:/home/gateway/.openclaw/workspace/skills:ro
     ports:
       - "${gw_port}:18789"
       - "${br_port}:18790"
@@ -298,16 +320,16 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      HOME: /home/node
+      HOME: /home/gateway
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: \${OPENCLAW_GATEWAY_TOKEN}
       OPENCLAW_GATEWAY_URL: ws://openclaw-gateway:18789
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1"
       BROWSER: echo
     volumes:
-      - ${config_vol}:/home/node/.openclaw
-      - ${workspace_vol}:/home/node/.openclaw/workspace
-      - \${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro
+      - ${config_vol}:/home/gateway/.openclaw
+      - ${workspace_vol}:/home/gateway/.openclaw/workspace
+      - \${OPENCLAW_SKILLS_DIR}:/home/gateway/.openclaw/workspace/skills:ro
     stdin_open: true
     tty: true
     init: true
@@ -341,7 +363,7 @@ ensure_tools_deny() {
   local output
   output="$(docker exec "$container" node -e '
     const fs = require("fs");
-    const cfgPath = "/home/node/.openclaw/openclaw.json";
+    const cfgPath = "/home/gateway/.openclaw/openclaw.json";
     if (!fs.existsSync(cfgPath)) process.exit(0);
     const REQUIRED = [
       "sessions_spawn",
@@ -370,43 +392,16 @@ ensure_tools_deny() {
 }
 
 ensure_llm_idle_timeout() {
-  # Backfill agents.defaults.llm.idleTimeoutSeconds into an existing user's
-  # openclaw.json. The upstream default (120s) was calibrated for cloud
-  # providers; self-hosted Ollama on a memory-constrained host (Jetson Orin,
-  # anything that has to swap or cold-reload between turns) regularly exceeds
-  # 120s just loading the model + allocating a large KV cache. See
-  # local_modal_support/qwen3_5/README.md for the measurements.
-  # Helper is idempotent: if the key is already set to any positive value we
-  # leave it alone. Default bumped to 300s.
-  local username="$1"
-  local container="openclaw-${username}-gateway"
-  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
-    return 0
-  fi
-
-  local desired="${OPENCLAW_LLM_IDLE_TIMEOUT_SECONDS:-300}"
-  local output
-  output="$(docker exec "$container" node -e "
-    const fs = require('fs');
-    const cfgPath = '/home/node/.openclaw/openclaw.json';
-    if (!fs.existsSync(cfgPath)) process.exit(0);
-    const desired = Number(process.argv[1]) || 300;
-    let cfg;
-    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
-    catch { process.exit(0); }
-    if (!cfg.agents) cfg.agents = {};
-    if (!cfg.agents.defaults) cfg.agents.defaults = {};
-    if (!cfg.agents.defaults.llm) cfg.agents.defaults.llm = {};
-    const current = cfg.agents.defaults.llm.idleTimeoutSeconds;
-    if (typeof current === 'number' && current > 0) process.exit(0);
-    cfg.agents.defaults.llm.idleTimeoutSeconds = desired;
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
-    console.log('updated');
-  " "$desired" 2>&1)"
-  if [[ "$output" == *updated* ]]; then
-    echo "==> Backfilled agents.defaults.llm.idleTimeoutSeconds=${desired}s for '$username'; recreating gateway to apply..."
-    compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
-  fi
+  # agents.defaults.llm.idleTimeoutSeconds was deprecated 2026-04-27 and
+  # removed from the config schema. The replacement is per-provider:
+  #   models.providers.<id>.timeoutSeconds
+  # Set it during onboarding or via:
+  #   openclaw config set models.providers.<provider>.timeoutSeconds <seconds>
+  #
+  # If a user still has the deprecated key, doctor will migrate it on next
+  # gateway startup. We no longer touch this path to avoid writing an
+  # `agents.defaults.llm` key that the strict schema rejects as unknown.
+  return 0
 }
 
 ensure_agents_skills_allow() {
@@ -414,14 +409,16 @@ ensure_agents_skills_allow() {
   # models (ollama/qwen3.5:4b, ollama/gemma4:e4b) pattern-match on the majority
   # `<location>` template in the `<available_skills>` system-prompt block and
   # substitute the bundled `/app/skills/<name>/SKILL.md` path for workspace
-  # skills, producing ENOENT + a silent terminal turn. Probing in
-  # local_modal_support/qwen3_5/probes/ shows 4/5 wrong-path substitutions with
-  # the default 7-bundled + 1-workspace prompt, vs 4/5 correct reads when the
-  # prompt contains only the workspace skill.
+  # skills, producing ENOENT + a silent terminal turn.
   #
-  # Helper is idempotent: if the key is already set to any array value we leave
-  # it alone. Override via OPENCLAW_AGENTS_SKILLS_ALLOW (comma-separated), or
-  # set to the literal "-" to skip the backfill entirely.
+  # Uses `openclaw config set` to merge properly through the schema validator
+  # instead of raw JSON manipulation, which would create a partial
+  # `agents.defaults` object missing required fields (agentRuntime, heartbeat,
+  # sandbox, ...) and block gateway startup with "agents.defaults: Invalid input".
+  #
+  # Idempotent: if the key is already set to any array value we leave it alone.
+  # Override via OPENCLAW_AGENTS_SKILLS_ALLOW (comma-separated), or set to the
+  # literal "-" to skip the backfill entirely.
   local username="$1"
   local container="openclaw-${username}-gateway"
   if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
@@ -433,24 +430,20 @@ ensure_agents_skills_allow() {
     return 0
   fi
 
+  # Convert comma-separated list to JSON array
+  local skills_json
+  skills_json="$(echo "$desired" | python3 -c "import sys; print(__import__('json').dumps([s.strip() for s in sys.stdin.read().split(',') if s.strip()]))")"
+
+  local config_vol="openclaw-${username}-config"
   local output
-  output="$(docker exec "$container" node -e "
-    const fs = require('fs');
-    const cfgPath = '/home/node/.openclaw/openclaw.json';
-    if (!fs.existsSync(cfgPath)) process.exit(0);
-    const desired = String(process.argv[1] || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (desired.length === 0) process.exit(0);
-    let cfg;
-    try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
-    catch { process.exit(0); }
-    if (!cfg.agents) cfg.agents = {};
-    if (!cfg.agents.defaults) cfg.agents.defaults = {};
-    if (Array.isArray(cfg.agents.defaults.skills)) process.exit(0);
-    cfg.agents.defaults.skills = desired;
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
-    console.log('updated');
-  " "$desired" 2>&1)"
-  if [[ "$output" == *updated* ]]; then
+  output="$(docker run --rm \
+    -v "${config_vol}:/home/gateway/.openclaw" \
+    -e HOME=/home/gateway \
+    --user gateway \
+    "$DEFAULT_IMAGE" \
+    node dist/index.js config set agents.defaults.skills "$skills_json" 2>&1 || true)"
+
+  if echo "$output" | grep -q "updated\|set successfully\|Config updated"; then
     echo "==> Backfilled agents.defaults.skills=[${desired}] for '$username'; recreating gateway to apply..."
     compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
   fi
@@ -488,7 +481,7 @@ ensure_skills_wiring() {
       {
         print
         if ($0 ~ /^      - .+:\/home\/node\/\.openclaw\/workspace$/) {
-          print "      - ${OPENCLAW_SKILLS_DIR}:/home/node/.openclaw/workspace/skills:ro"
+          print "      - ${OPENCLAW_SKILLS_DIR}:/home/gateway/.openclaw/workspace/skills:ro"
         }
       }
     ' "$compose_file" > "$tmp"
@@ -632,6 +625,7 @@ cmd_rebuild_china() {
   echo "    Docker mirror: ${CHINA_DOCKER_MIRROR}"
   echo "    npm registry:  ${CHINA_NPM_REGISTRY}"
   echo "    pip index:     ${CHINA_PIP_INDEX}"
+  echo "    apt mirror:    ${CHINA_APT_MIRROR}"
   echo ""
 
   DOCKER_BUILDKIT=1 docker build \
@@ -648,6 +642,7 @@ cmd_rebuild_china() {
     --build-arg "OPENCLAW_BUN_IMAGE=${bun_image}" \
     --build-arg "OPENCLAW_NPM_REGISTRY=${CHINA_NPM_REGISTRY}" \
     --build-arg "OPENCLAW_PIP_INDEX_URL=${CHINA_PIP_INDEX}" \
+    --build-arg "OPENCLAW_APT_MIRROR=${CHINA_APT_MIRROR}" \
     -t "$DEFAULT_IMAGE" \
     -f "$dockerfile" \
     "$REPO_ROOT"
@@ -781,16 +776,13 @@ EOF
   # Make sure the skills bind-mount is present (idempotent; no-op on fresh add).
   ensure_skills_wiring "$username"
 
-  # Fix volume permissions so the container's node user (uid 1000) can write
+  # Fix volume permissions so the container's gateway user (uid 1000) can write
   echo "==> Fixing volume permissions..."
   compose_cmd "$username" run --rm --user root --entrypoint sh openclaw-cli -c \
-    'mkdir -p /home/node/.openclaw/identity /home/node/.openclaw/agents/main/agent /home/node/.openclaw/agents/main/sessions /home/node/.openclaw/logs && find /home/node/.openclaw -path /home/node/.openclaw/workspace/skills -prune -o -exec chown node:node {} +'
+    'mkdir -p /home/gateway/.openclaw/identity /home/gateway/.openclaw/agents/main/agent /home/gateway/.openclaw/agents/main/sessions /home/gateway/.openclaw/logs && find /home/gateway/.openclaw -path /home/gateway/.openclaw/workspace/skills -prune -o -exec chown gateway:gateway {} +'
 
-  # Start the gateway
-  echo "==> Starting gateway for '$username'..."
-  compose_cmd "$username" up -d openclaw-gateway
-
-  # Run interactive onboarding
+  # Run interactive onboarding FIRST — the gateway must not start until
+  # a valid config exists, otherwise it crash-loops.
   echo ""
   echo "==> Running onboarding for '$username'..."
   compose_cmd "$username" run --rm openclaw-cli onboard --mode local --no-install-daemon
@@ -802,21 +794,21 @@ EOF
 
   # Fix permissions after onboarding (may have created files as root)
   docker run --rm --user root \
-    -v "${config_vol}:/home/node/.openclaw" \
+    -v "${config_vol}:/home/gateway/.openclaw" \
     "$DEFAULT_IMAGE" \
-    chown -R node:node /home/node/.openclaw
+    chown -R gateway:gateway /home/gateway/.openclaw
 
   # Apply all post-onboarding config in a single container run.
   # This replaces 15 separate docker-run calls (each with full Node cold-start)
   # with one lightweight shell invocation that merges JSON via node -e.
   echo "==> Applying post-onboarding config..."
   docker run --rm \
-    -v "${config_vol}:/home/node/.openclaw" \
-    -e HOME=/home/node \
-    --user node \
+    -v "${config_vol}:/home/gateway/.openclaw" \
+    -e HOME=/home/gateway \
+    --user gateway \
     "$DEFAULT_IMAGE" \
     sh -c '
-      CFG=/home/node/.openclaw/openclaw.json
+      CFG=/home/gateway/.openclaw/openclaw.json
 
       # Merge our overrides into whatever onboarding wrote
       node -e "
@@ -865,7 +857,7 @@ EOF
           "level": "debug",
           "consoleLevel": "debug",
           "consoleStyle": "json",
-          "file": "/home/node/.openclaw/logs/gateway.log"
+          "file": "/home/gateway/.openclaw/logs/gateway.log"
         },
         "diagnostics": {
           "enabled": true,
@@ -874,7 +866,7 @@ EOF
       }'"'"'
 
       # Write exec-approvals.json
-      cat > /home/node/.openclaw/exec-approvals.json <<APPROVALS
+      cat > /home/gateway/.openclaw/exec-approvals.json <<APPROVALS
 {
   "version": 1,
   "defaults": {
@@ -889,6 +881,9 @@ APPROVALS
 
   # Recreate gateway to pick up onboarding config
   compose_cmd "$username" up -d --force-recreate openclaw-gateway
+
+  # Start background auto-approve watcher for node pairing requests
+  _start_auto_approve_bg "$username"
 
   echo ""
   echo "User '$username' ready."
@@ -1229,8 +1224,8 @@ cmd_ask_off() {
 
   # Update openclaw.json tools.exec and exec-approvals.json in a single container exec
   docker exec "$container" sh -c '
-    CFG=/home/node/.openclaw/openclaw.json
-    APPROVALS=/home/node/.openclaw/exec-approvals.json
+    CFG=/home/gateway/.openclaw/openclaw.json
+    APPROVALS=/home/gateway/.openclaw/exec-approvals.json
     OVERRIDE=/tmp/exec-override.json
 
     # Merge tools.exec into openclaw.json
@@ -1274,7 +1269,7 @@ APPROVALS
   docker exec "$container" node -e '
     (() => {
       const fs = require("fs");
-      const path = "/home/node/.openclaw/devices/paired.json";
+      const path = "/home/gateway/.openclaw/devices/paired.json";
       const FULL = [
         "operator.admin",
         "operator.read",
@@ -1339,18 +1334,18 @@ The same pair of gateway-side commands covers every task, so the workflow is det
 - **Copy from gateway back to node:**
   \`openclaw nodes copy --node ${node_name} --from ./output.md --to "node:C:\\Users\\<user>\\Desktop\\folder\\output.md" --overwrite\`
 
-Relative paths like \`./working-copy\` resolve inside the gateway workspace (\`/home/node/.openclaw/workspace/\`). Copy the user's Windows path verbatim into \`--path\` / \`--from\` / \`--to\` — do not reformat it.
+Relative paths like \`./working-copy\` resolve inside the gateway workspace (\`/home/gateway/.openclaw/workspace/\`). Copy the user's Windows path verbatim into \`--path\` / \`--from\` / \`--to\` — do not reformat it.
 
 ### Hard rules
 
 - **Do NOT set \`"host": "node"\` on \`exec\` calls.** Do not run \`dir\`, \`type\`, \`mkdir\`, \`findstr\`, \`markitdown\`, Python, or any other command on the Windows node. Pull the files to the gateway, do the work in Linux, push the results back.
-- **Do use \`"host": "gateway"\`** (or leave \`host\` unset — gateway is the default) for every shell command, including \`openclaw nodes ...\`, \`bash\`, \`python\`, \`ls\`, \`cat\`, and any skill script under \`/home/node/.openclaw/workspace/skills/\`.
+- **Do use \`"host": "gateway"\`** (or leave \`host\` unset — gateway is the default) for every shell command, including \`openclaw nodes ...\`, \`bash\`, \`python\`, \`ls\`, \`cat\`, and any skill script under \`/home/gateway/.openclaw/workspace/skills/\`.
 
 ## Environment-Specific Notes
 
 Add your own notes below (cameras, SSH hosts, voices, etc.)
 TOOLS_MD
-    docker cp "$tmp_tools" "${container}:/home/node/.openclaw/workspace/TOOLS.md"
+    docker cp "$tmp_tools" "${container}:/home/gateway/.openclaw/workspace/TOOLS.md"
     rm -f "$tmp_tools"
     echo "  TOOLS.md written to workspace for node '${node_name}'"
   fi
@@ -1399,7 +1394,7 @@ cmd_export_logs() {
 
   # 2. Gateway file log (persisted on config volume)
   echo "  [2/6] Gateway file log..."
-  docker exec "$container" sh -c 'cat /home/node/.openclaw/logs/gateway.log 2>/dev/null' \
+  docker exec "$container" sh -c 'cat /home/gateway/.openclaw/logs/gateway.log 2>/dev/null' \
     > "${export_dir}/gateway.log" 2>/dev/null \
     || echo "    (not found — gateway may use /tmp/openclaw/ if logging.file was not set)"
   # Also grab any rolling logs from /tmp/openclaw/ inside the container
@@ -1408,13 +1403,13 @@ cmd_export_logs() {
 
   # 3. Raw LLM stream
   echo "  [3/6] Raw LLM stream..."
-  docker exec "$container" sh -c 'cat /home/node/.openclaw/logs/raw-stream.jsonl 2>/dev/null' \
+  docker exec "$container" sh -c 'cat /home/gateway/.openclaw/logs/raw-stream.jsonl 2>/dev/null' \
     > "${export_dir}/raw-stream.jsonl" 2>/dev/null \
     || echo "    (not found — set OPENCLAW_RAW_STREAM=1 to enable)"
 
   # 4. Cache trace
   echo "  [4/6] Cache trace..."
-  docker exec "$container" sh -c 'cat /home/node/.openclaw/logs/cache-trace.jsonl 2>/dev/null' \
+  docker exec "$container" sh -c 'cat /home/gateway/.openclaw/logs/cache-trace.jsonl 2>/dev/null' \
     > "${export_dir}/cache-trace.jsonl" 2>/dev/null \
     || echo "    (not found — set OPENCLAW_CACHE_TRACE=1 to enable)"
 
@@ -1423,20 +1418,20 @@ cmd_export_logs() {
   local sessions_dir="${export_dir}/sessions"
   mkdir -p "$sessions_dir"
   # List all .jsonl session files and copy them out preserving relative paths
-  docker exec "$container" find /home/node/.openclaw/agents -name '*.jsonl' -type f 2>/dev/null \
+  docker exec "$container" find /home/gateway/.openclaw/agents -name '*.jsonl' -type f 2>/dev/null \
     | while IFS= read -r fpath; do
         [[ -z "$fpath" ]] && continue
         # Derive a flat filename from the path: agents/<id>/sessions/<file> → <id>--<file>
-        local rel="${fpath#/home/node/.openclaw/agents/}"
+        local rel="${fpath#/home/gateway/.openclaw/agents/}"
         local flat
         flat="$(echo "$rel" | sed 's|/|--|g')"
         docker cp "${container}:${fpath}" "${sessions_dir}/${flat}" 2>/dev/null || true
       done
   # Also copy sessions.json index if present
-  docker exec "$container" find /home/node/.openclaw/agents -name 'sessions.json' -type f 2>/dev/null \
+  docker exec "$container" find /home/gateway/.openclaw/agents -name 'sessions.json' -type f 2>/dev/null \
     | while IFS= read -r fpath; do
         [[ -z "$fpath" ]] && continue
-        local rel="${fpath#/home/node/.openclaw/agents/}"
+        local rel="${fpath#/home/gateway/.openclaw/agents/}"
         local flat
         flat="$(echo "$rel" | sed 's|/|--|g')"
         docker cp "${container}:${fpath}" "${sessions_dir}/${flat}" 2>/dev/null || true
@@ -1444,7 +1439,7 @@ cmd_export_logs() {
 
   # 6. Gateway config snapshot (for reference)
   echo "  [6/6] Gateway config snapshot..."
-  docker exec "$container" sh -c 'cat /home/node/.openclaw/openclaw.json 2>/dev/null || cat /home/node/.openclaw/config.json5 2>/dev/null' \
+  docker exec "$container" sh -c 'cat /home/gateway/.openclaw/openclaw.json 2>/dev/null || cat /home/gateway/.openclaw/config.json5 2>/dev/null' \
     > "${export_dir}/openclaw-config.json" 2>/dev/null || true
 
   # Remove empty files
@@ -1741,7 +1736,7 @@ with open(models_file, 'w') as f:
   echo "==> Updating model selection list"
   docker exec "$container" node -e "
     const fs = require('fs');
-    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    const cfgPath = '/home/gateway/.openclaw/openclaw.json';
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     const existing = cfg.agents?.defaults?.models || {};
     // Remove old ollama entries
@@ -1859,7 +1854,9 @@ cmd_list_vllm() {
 
   echo "==> Querying vLLM at ${vllm_url}"
   local raw
-  raw="$(query_vllm_models "$vllm_url")"
+  # `|| true`: a failing command substitution under `set -e` would abort before
+  # the explicit reachability check below can print a useful message.
+  raw="$(query_vllm_models "$vllm_url")" || true
   if [[ -z "$raw" ]]; then
     fail "Cannot reach vLLM at ${vllm_url}. Is vLLM running?"
   fi
@@ -1896,21 +1893,80 @@ cmd_sync_vllm() {
   fi
 
   echo "==> Querying vLLM at ${vllm_url}"
+  # Tolerate query failure: under `set -e` a failing command substitution would
+  # abort the script before we could react, so `|| true` lets us inspect raw.
   local raw
-  raw="$(query_vllm_models "$vllm_url")"
-  if [[ -z "$raw" ]]; then
-    fail "Cannot reach vLLM at ${vllm_url}. Is vLLM running?"
+  raw="$(query_vllm_models "$vllm_url")" || true
+
+  # Count advertised models. 0 means vLLM is down/unreachable, up with no model
+  # loaded, or a stale endpoint returning an empty/garbage body — all treated the
+  # same: there are no local vLLM models being served right now.
+  local model_count
+  model_count="$(echo "$raw" | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('data',[])))" 2>/dev/null || true)"
+  [[ "$model_count" =~ ^[0-9]+$ ]] || model_count=0
+
+  if [[ "$model_count" -eq 0 ]]; then
+    # No vLLM available → remove every local vllm/* model and the vLLM provider
+    # from the gateway config, leaving cloud/API models (openai/*, etc.) intact.
+    # Repoint the primary if it pointed at a now-removed vLLM model so the gateway
+    # doesn't boot pointing at a model that no longer exists.
+    echo "==> No vLLM models available at ${vllm_url} (server down or no model loaded)."
+    echo "==> Removing local vLLM models from '${username}' (cloud/API models preserved)..."
+    local cleanup_out
+    cleanup_out="$(docker exec "$container" node -e "
+      const fs = require('fs');
+      const cfgPath = '/home/gateway/.openclaw/openclaw.json';
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const models = (cfg.agents && cfg.agents.defaults && cfg.agents.defaults.models) || {};
+      const removed = [];
+      for (const key of Object.keys(models)) {
+        if (key.startsWith('vllm/')) { delete models[key]; removed.push(key); }
+      }
+      if (cfg.models && cfg.models.providers && cfg.models.providers.vllm) {
+        delete cfg.models.providers.vllm;
+      }
+      const md = cfg.agents && cfg.agents.defaults && cfg.agents.defaults.model;
+      if (md && typeof md.primary === 'string' && md.primary.startsWith('vllm/')) {
+        md.primary = Object.keys(models)[0] || '';
+      }
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+      console.log('  Removed ' + removed.length + ' vLLM model(s): ' + (removed.join(', ') || '(none)'));
+      console.log('  Remaining models: ' + (Object.keys(models).join(', ') || '(none)'));
+    " 2>&1 | grep -v DEP0040 || true)"
+    echo "$cleanup_out"
+    if echo "$cleanup_out" | grep -q "Removed 0 vLLM"; then
+      echo "  No local vLLM models were present; gateway not restarted."
+    else
+      echo ""
+      echo "==> Restarting gateway for '$username' to apply changes..."
+      cmd_restart "$username"
+    fi
+    return 0
   fi
+
+  echo "    vLLM advertises ${model_count} model(s)."
 
   local docker_url
   docker_url="$(resolve_vllm_docker_url "$vllm_url")"
 
+  # Qwen thinking-toggle format written into each qwen3 model's params.
+  #   chat-template -> chat_template_kwargs.enable_thinking (pairs with vLLM's
+  #                    --reasoning-parser qwen3); top-level -> a top-level
+  #                    enable_thinking field. Set to "-" to omit the param.
+  local thinking_format="${OPENCLAW_VLLM_QWEN_THINKING_FORMAT:-chat-template}"
+
+  # Per-provider request timeout. Without it the gateway waits indefinitely on a
+  # stalled model call, so a wedged NPU (see the AICore-hang failure mode) shows
+  # up as a silent 30-min stall instead of a surfaced error. Set 0 to omit.
+  local timeout_seconds="${OPENCLAW_VLLM_TIMEOUT_SECONDS:-180}"
+
   # Build the config JSON using Python
-  local tmp_provider tmp_models
+  local tmp_provider tmp_models tmp_default
   tmp_provider="$(mktemp)"
   tmp_models="$(mktemp)"
+  tmp_default="$(mktemp)"
   echo "$raw" | python3 -c "
-import json, sys
+import json, re, sys
 
 data = json.load(sys.stdin)
 models = data.get('data', [])
@@ -1918,32 +1974,70 @@ models = data.get('data', [])
 docker_url = sys.argv[1]
 provider_file = sys.argv[2]
 models_file = sys.argv[3]
+default_file = sys.argv[4]
+thinking_format = sys.argv[5]  # 'chat-template' | 'top-level' | '-' (omit)
+timeout_seconds = int(sys.argv[6])  # 0 = omit
 
 DEFAULT_CTX = 131072
-# Same 16384 rationale as cmd_sync_ollama: reasoning-capable self-hosted
-# models share one output budget across thinking + visible text + tool
-# calls, and 8192 is often exhausted by thinking alone on a ~30k-token
-# prompt. Keep this explicit in the written config.
+# Output budget shared across thinking + visible text + tool-call JSON for
+# reasoning-capable self-hosted models. 16384 suits large (128k or larger)
+# windows, but it is a CEILING, not a flat default: on a small window,
+# reserving half the window for output makes the request overflow
+# max-model-len the instant a tool result is appended to the prompt (vLLM
+# then returns 400, prompt plus max_tokens exceeds context length), which
+# looks like the agent getting stuck after a single tool call. Per model,
+# cap output at 1/4 of the window so at least 75 percent stays available for
+# the accumulating input.
 SELF_HOSTED_MAX_TOKENS = 16384
+
+def resolve_max_tokens(ctx):
+    return min(SELF_HOSTED_MAX_TOKENS, max(1, ctx // 4))
+
+def is_qwen_thinking(mid):
+    # qwen3 / qwen3.5 / qwen3.6 ... expose the enable_thinking chat-template
+    # toggle. qwen2.5 and earlier do not.
+    return 'qwen3' in mid.lower()
+
+def is_reasoning(mid):
+    # Mirror src/plugins/provider-self-hosted-setup.ts isReasoningModelHeuristic,
+    # plus qwen3. The id 'Qwen3.5-4b' matches none of r1/reasoning/think/reason,
+    # so without this it is mis-tagged reasoning:false -- which collapses the
+    # control-UI thinking dropdown to an off-only profile AND makes
+    # extensions/vllm/stream.ts skip injecting enable_thinking (its wrapper
+    # gates on model.reasoning).
+    m = mid.lower()
+    if is_qwen_thinking(m):
+        return True
+    return bool(re.search(r'r1|reasoning|think|reason', m))
 
 provider_models = []
 for m in models:
     mid = m.get('id', '')
     ctx = m.get('max_model_len', DEFAULT_CTX) or DEFAULT_CTX
-    provider_models.append({
+    entry = {
         'id': mid,
         'name': mid,
         'contextWindow': ctx,
-        'maxTokens': SELF_HOSTED_MAX_TOKENS,
-    })
+        'maxTokens': resolve_max_tokens(ctx),
+    }
+    if is_reasoning(mid):
+        entry['reasoning'] = True
+    if thinking_format != '-' and is_qwen_thinking(mid):
+        # model.params flows to extraParams; the vllm stream wrapper reads
+        # qwenThinkingFormat to decide how to send the toggle.
+        entry['params'] = {'qwenThinkingFormat': thinking_format}
+    provider_models.append(entry)
 
 # vLLM exposes an OpenAI-compatible API at /v1
+provider_cfg = {
+    'baseUrl': docker_url + '/v1',
+    'models': provider_models,
+    'apiKey': 'vllm-local',
+}
+if timeout_seconds > 0:
+    provider_cfg['timeoutSeconds'] = timeout_seconds
 with open(provider_file, 'w') as f:
-    json.dump({
-        'baseUrl': docker_url + '/v1',
-        'models': provider_models,
-        'apiKey': 'vllm-local',
-    }, f)
+    json.dump(provider_cfg, f)
 
 vllm_models = {}
 for m in models:
@@ -1952,7 +2046,14 @@ for m in models:
 
 with open(models_file, 'w') as f:
     json.dump(vllm_models, f)
-" "$docker_url" "$tmp_provider" "$tmp_models"
+
+# First model is the suggested active default (overridable via env). Setting it
+# makes the control UI reflect this model's context window immediately instead
+# of keeping the previous default (e.g. openai/gpt-5.5 at 200k).
+default_key = 'vllm/' + models[0]['id'] if models else ''
+with open(default_file, 'w') as f:
+    f.write(default_key)
+" "$docker_url" "$tmp_provider" "$tmp_models" "$tmp_default" "$thinking_format" "$timeout_seconds"
 
   local provider_config models_config
   provider_config="$(cat "$tmp_provider")"
@@ -1968,7 +2069,7 @@ with open(models_file, 'w') as f:
   echo "==> Updating model selection list"
   docker exec "$container" node -e "
     const fs = require('fs');
-    const cfgPath = '/home/node/.openclaw/openclaw.json';
+    const cfgPath = '/home/gateway/.openclaw/openclaw.json';
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     const existing = cfg.agents?.defaults?.models || {};
     // Remove old vllm entries
@@ -1984,6 +2085,34 @@ with open(models_file, 'w') as f:
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
     console.log('  Models updated:', Object.keys(existing).join(', '));
   " "$models_config" 2>&1 | grep -v DEP0040
+
+  # Point agents.defaults.model.primary at the synced vLLM model so the control
+  # UI shows the right context window on restart (otherwise it keeps the old
+  # default — e.g. openai/gpt-5.5 at 200k — until manually switched). Choose a
+  # specific model with OPENCLAW_VLLM_DEFAULT_MODEL=vllm/<id>, or skip the
+  # override entirely with OPENCLAW_VLLM_SET_DEFAULT=0.
+  local set_default default_model
+  set_default="${OPENCLAW_VLLM_SET_DEFAULT:-1}"
+  default_model="${OPENCLAW_VLLM_DEFAULT_MODEL:-$(cat "$tmp_default" 2>/dev/null)}"
+  rm -f "$tmp_default"
+  if [[ "$set_default" != "0" && -n "$default_model" ]]; then
+    echo "==> Setting default model to '${default_model}'"
+    docker exec "$container" node -e "
+      const fs = require('fs');
+      const cfgPath = '/home/gateway/.openclaw/openclaw.json';
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      if (!cfg.agents) cfg.agents = {};
+      if (!cfg.agents.defaults) cfg.agents.defaults = {};
+      const model = cfg.agents.defaults.model;
+      // Preserve any sibling keys (fallback, etc.); only change primary.
+      cfg.agents.defaults.model =
+        model && typeof model === 'object' && !Array.isArray(model)
+          ? { ...model, primary: process.argv[1] }
+          : { primary: process.argv[1] };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+      console.log('  Default model:', cfg.agents.defaults.model.primary);
+    " "$default_model" 2>&1 | grep -v DEP0040
+  fi
 
   # Ensure VLLM env vars are set in the user .env
   local env_file
@@ -2015,7 +2144,15 @@ models = data.get('models', [])
 print(f'  Synced {len(models)} vLLM model(s):')
 for m in models:
     ctx_k = m.get('contextWindow', 0) // 1024
-    print(f'    vllm/{m[\"id\"]} — {ctx_k}k context')
+    flags = []
+    if m.get('reasoning'):
+        flags.append('reasoning')
+    fmt = (m.get('params') or {}).get('qwenThinkingFormat')
+    if fmt:
+        flags.append('thinking=' + fmt)
+    suffix = (' [' + ', '.join(flags) + ']') if flags else ''
+    mid = m['id']
+    print(f'    vllm/{mid} — {ctx_k}k context{suffix}')
 "
   echo ""
   echo "==> Restarting gateway for '$username' to apply changes..."

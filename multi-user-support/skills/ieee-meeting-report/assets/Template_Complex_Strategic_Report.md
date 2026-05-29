@@ -126,6 +126,12 @@ Strategic Intelligence Report — Meeting Participation
 >
 > Repeat Section 5.x for each contribution.
 
+> **AGENT INSTRUCTION:** Below this note, embed the company-contribution visualization as a Markdown image reference pointing at the chart PNG you generated in Step 4, followed by a caption. Place it here, at the top of Section 5, so readers get a contribution-landscape overview before the per-contribution strategic deep dives. Delete this instruction block after inserting the figure.
+
+![Figure 1. Presentations by contributing company](./company_contributions.png)
+
+*Figure 1. Presentations by contributing company (\<Meeting\> \<Date\>).*
+
 ## 5.1 *[DCN — Presentation Title]*
 
 **Author / Affiliation:** *[...]*

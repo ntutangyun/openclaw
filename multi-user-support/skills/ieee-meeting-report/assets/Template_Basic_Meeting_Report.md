@@ -2,13 +2,16 @@
   IEEE 802.11 AIML SC — Basic Meeting Participation Report (Markdown template)
 
   HOW TO FILL:
+    - BASIC is a NARRATIVE report: write in plain prose. Do NOT use Markdown
+      tables and do NOT embed a chart — those are Analytical/Strategic features.
+    - The factual "spine" — Motions (§4) and Presentations (§5) — is captured as
+      simple bullet lists so DCNs, motion numbers, movers, and authors stay
+      scannable and verifiable. Everything else is sentences/paragraphs.
     - Every "AGENT INSTRUCTION" blockquote describes what to put in the section
-      below it. Replace the placeholder content beneath that blockquote, then
-      DELETE the blockquote itself before saving the final report.
+      below it. Replace the placeholder content beneath it, then DELETE the
+      blockquote itself before saving the final report.
     - Every placeholder looks like *[e.g., ...]* or *[...]*. Replace with the
       real value. Do not leave any placeholder text behind in the final output.
-    - Tables carry a header row — keep the header, replace the *[...]* rows
-      with real data rows. Add or remove rows as needed so every row is real.
     - Preserve section headings exactly (`# 1. Executive Summary`, etc.).
 -->
 
@@ -16,7 +19,7 @@
 
 Meeting Participation Report
 
-**Template Level: BASIC — Information Extraction**
+**Template Level: BASIC — Narrative Information Extraction**
 
 ---
 
@@ -62,42 +65,27 @@ Meeting Participation Report
 
 # 3. Agenda Overview
 
-> **AGENT INSTRUCTION:** List the agenda items in order as they appear in the agenda document. Include agenda item number/description.
+> **AGENT INSTRUCTION:** Describe the agenda in prose (no table). In 1–2 short paragraphs, walk through the agenda items in the order they appear in the agenda document, noting which were covered and any that were deferred or skipped.
 
-| # | Agenda Item | Status |
-| --- | --- | --- |
-| *[...]* | *[...]* | *[...]* |
+*[Write 1–2 paragraphs describing how the agenda was organized and worked through.]*
 
 # 4. Motions and Votes
 
-> **AGENT INSTRUCTION:** Extract all motions from the meeting minutes. Include the motion number, text, mover, seconder, and result.
+> **AGENT INSTRUCTION:** List every motion from the meeting minutes as a bullet (no table). One bullet per motion, in order. Give the motion number, a short description, the mover and seconder, and the result verbatim from the minutes. If a field is not stated in the minutes, leave it blank rather than guessing.
 
-| Motion # | Description | Mover | Second | Result |
-| --- | --- | --- | --- | --- |
-| *[...]* | *[...]* | *[...]* | *[...]* | *[...]* |
+- **Motion *[#]*** — *[short description].* Mover: *[Name (Affiliation)]*; Second: *[Name (Affiliation)]*. Result: *[e.g., Passed 12-0-3 / Withdrawn / Tabled]*.
 
 # 5. Presentations
 
-> **AGENT INSTRUCTION:** List every presentation/contribution discussed. Extract the DCN, title, author, and affiliation from the agenda or minutes. Summarize the key points and your comments on the presentation (e.g. whether it is worth attention).
+> **AGENT INSTRUCTION:** List every presentation/contribution discussed as a bullet (no table, no chart). One bullet per contribution. Lead with the DCN and title, then the author and affiliation, then 1–2 factual sentences of key points (what it proposes / the mechanism / the scope). You may add one short editorial sentence of your own comment — this is the only place a judgement is allowed.
 
-| DCN | Title | Author | Affiliation | Key points | Comments |
-| --- | --- | --- | --- | --- | --- |
-| *[...]* | *[...]* | *[...]* | *[...]* | *[...]* | *[...]* |
-
-> **AGENT INSTRUCTION:** Below this note, embed a company-contribution visualization as a Markdown image reference pointing at the chart PNG you generated, followed by a caption. Delete this instruction block after inserting the figure.
-
-![Figure 1. Presentations by contributing company](./company_contributions.png)
-
-*Figure 1. Presentations by contributing company (\<Meeting\> \<Date\>).*
+- ***[DCN]* — *[Title]*** (*[Author]*, *[Affiliation]*). *[1–2 sentences of factual key points.]* *[Optional: one sentence of comment.]*
 
 # 6. Questions & Answers Summary
 
-> **AGENT INSTRUCTION:** For each presentation, list the questions asked and answers given, as recorded in the meeting minutes. Paraphrase for clarity. Use one `## 6.x` sub-heading per presentation.
+> **AGENT INSTRUCTION:** Summarize the Q&A in prose, one short paragraph per presentation that drew discussion. Paraphrase the questions raised and the presenter's responses for clarity. Do not invent Q&A that the minutes do not record.
 
-## 6.1 *[Presentation Title / DCN]*
-
-- *Q: [Question text]*
-- *A: [Answer text]*
+*[For each presentation that had discussion, write a short paragraph naming the presentation (with its DCN) and summarizing the questions asked and the answers given.]*
 
 # 7. Next Meeting & Action Items
 

@@ -5,7 +5,7 @@ description: "Produce an IEEE 802.11 Meeting Participation Report (Markdown) at 
 
 # IEEE 802.11 Meeting Report (Basic / Analytical / Strategic)
 
-Produce an IEEE 802.11 Meeting Participation Report as **Markdown** from a workspace folder of session documents. This skill supports three depths — Basic (factual extraction), Analytical (reasoning + themes + impact), and Strategic (research-enhanced intelligence). The agent drives the narrative work; this skill handles the mechanical file-access and document-extraction steps. Steps 0–3 and Step 6 are common to all three levels; Step 4 (chart) is Basic-only, and Step 5 branches per level.
+Produce an IEEE 802.11 Meeting Participation Report as **Markdown** from a workspace folder of session documents. This skill supports three depths — Basic (factual extraction), Analytical (reasoning + themes + impact), and Strategic (research-enhanced intelligence). The agent drives the narrative work; this skill handles the mechanical file-access and document-extraction steps. Steps 0–3 and Step 6 are common to all three levels; Step 4 (company-contribution chart) applies to ANALYTICAL and STRATEGIC only — BASIC is a pure-narrative report with no chart and no tables; Step 5 branches per level. Each level is a superset of the one below it: BASIC is narrative prose (with bullet-list motions/presentations); ANALYTICAL renders the same factual coverage with structured tables and adds the company-contribution chart, cross-cutting analysis, and appendices; STRATEGIC adds research-enhanced intelligence on top of ANALYTICAL.
 
 **Output format is always Markdown (`.md`)** — not Word, regardless of level. Small locally-hosted models (≤10B parameters) cannot reliably generate the python-docx code needed to fill a `.docx` template; Markdown text editing keeps the work in-modality. If the user needs a `.docx`, produce the `.md` first, then offer to convert with pandoc in a separate step.
 
@@ -51,9 +51,9 @@ Generic phrases like "IEEE plenary report" or "AIML SC report" default to **BASI
 
 What changes per level:
 
-- **BASIC** — the simplest depth. Step 4 (company-contribution chart) IS required. Section 5 is a single table with one row per presentation. Output filename starts with `Report_Basic_`.
-- **ANALYTICAL** — adds TOC, narrative §3 proceedings overview, per-presentation deep dive (one `## 5.N` subsection each, with Summary + Q&A theme synthesis + maturity table), cross-cutting themes (§6), organizational impact assessment (§7), recommended actions table (§8.2), and Appendices A (doc reference) + B (full Q&A log). **No chart.** Output filename starts with `Report_Analytical_`.
-- **STRATEGIC** — everything in ANALYTICAL plus §3 cross-SDO context (3GPP / WBA / WFA / vendor positioning), competitive intelligence matrix (§7), risk + opportunity tables (§8), tiered recommendations (§9 — Immediate / Short-term / Long-term), next-meeting intelligence preview (§10), and Appendices A–D (D is a glossary). **Many sub-sections require internet research** (clearly marked in the template with "REQUIRES INTERNET SEARCH"). If no web-search tool is available in the current OpenClaw environment, write `[Research not available — external sources could not be consulted]` in those sections rather than fabricating findings, and note the limitation in §1. **No chart.** Output filename starts with `Report_Strategic_`.
+- **BASIC** — the simplest depth, a **narrative** report. **No chart and no Markdown tables.** Sections are prose, except the factual spine — §4 Motions and §5 Presentations — which uses simple bullet lists so DCNs and motion numbers stay scannable. §3 Agenda and §6 Q&A are prose. Output filename starts with `Report_Basic_`.
+- **ANALYTICAL** — a superset of BASIC: all of BASIC's factual coverage, now rendered with **structured tables**, **plus the Step 4 company-contribution chart**, TOC, narrative §3 proceedings overview, per-presentation deep dive (one `## 5.N` subsection each, with Summary + Q&A theme synthesis + maturity table), cross-cutting themes (§6), organizational impact assessment (§7), recommended actions table (§8.2), and Appendices A (doc reference) + B (full Q&A log). The chart sits at the top of §5 as a contribution-landscape overview. Output filename starts with `Report_Analytical_`.
+- **STRATEGIC** — a superset of ANALYTICAL: everything in ANALYTICAL (**including the Step 4 company-contribution chart**) plus §3 cross-SDO context (3GPP / WBA / WFA / vendor positioning), competitive intelligence matrix (§7), risk + opportunity tables (§8), tiered recommendations (§9 — Immediate / Short-term / Long-term), next-meeting intelligence preview (§10), and Appendices A–D (D is a glossary). **Many sub-sections require internet research** (clearly marked in the template with "REQUIRES INTERNET SEARCH"). If no web-search tool is available in the current OpenClaw environment, write `[Research not available — external sources could not be consulted]` in those sections rather than fabricating findings, and note the limitation in §1. Output filename starts with `Report_Strategic_`.
 
 ## Step 0 — Decide where the inputs live
 
@@ -139,11 +139,9 @@ A single path-guess miss must never end the task — every other file is almost 
 
 See `/home/node/.openclaw/workspace/skills/ieee-meeting-report/references/aiml-sc-notes.md` for motion formatting, DCN decoding, and what to skip (IEEE patent/copyright boilerplate).
 
-## Step 4 — Render the company-contribution chart (BASIC LEVEL ONLY)
+## Step 4 — Render the company-contribution chart (ANALYTICAL & STRATEGIC ONLY)
 
-**Skip this step entirely for ANALYTICAL and STRATEGIC.** Those templates do not embed a chart. Only the Basic template's § 5 references `./company_contributions.png`, and if you generate one for analytical/strategic you'll waste 30+ seconds on a PNG no template references.
-
-For BASIC, you MUST run `build_chart.sh` before Step 5. The template's § 5 embeds `./company_contributions.png`; if that file does not exist, Step 6b will fail with "local source does not exist" and the remote report will have a broken image link.
+**Skip this step entirely for BASIC** — the Basic report is pure narrative and embeds no chart. For ANALYTICAL and STRATEGIC you MUST run `build_chart.sh` before Step 5: both templates embed `./company_contributions.png` at the top of § 5 as a contribution-landscape overview ahead of the per-contribution deep dives. If that file does not exist, Step 6b will fail with "local source does not exist" and the remote report will have a broken image link.
 
 ```bash
 bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/build_chart.sh \
@@ -179,14 +177,11 @@ Read `assets/Template_Basic_Meeting_Report.md`. Output to `./Report_Basic_<Meeti
 2. **Cover-page key/value lines all filled** (7 labels): `Meeting`, `Location`, `Date(s)`, `Report Prepared By`, `Date of Report`, `Distribution`, `Classification`.
 3. **§ 1 Executive Summary**: 3–5 factual sentences covering when/where, how many presentations, motions + outcomes, next-meeting date.
 4. **§ 2 Meeting Information**: all 8 labels filled (`Committee`, `Meeting Type`, `Session`, `Chair`, `Vice Chair(s)`, `Secretary`, `Agenda Document`, `Motion Booklet`).
-5. **§ 3 Agenda Overview** contains a Markdown table with header `| # | Agenda Item | Status |`, one real row per agenda item.
-6. **§ 4 Motions and Votes** contains a Markdown table with header `| Motion # | Description | Mover | Second | Result |`, one real row per motion.
-7. **§ 5 Presentations** contains a Markdown table with header `| DCN | Title | Author | Affiliation | Key points | Comments |`, one real row per presentation (all 6 columns filled).
-8. **§ 5** also contains the chart image reference: `![Figure 1. Presentations by contributing company](./company_contributions.png)` with a caption line below it.
-9. **§ 6 Questions & Answers Summary** has one `## 6.N <Title> (<DCN>)` subsection per presentation that had Q&A, with bulleted `- Q: ...` / `- A: ...` pairs. **Use exactly two `#` (H2), not three (`### 6.N`) or four.** The template uses H2 for these subsections. The DCN appears **once** at the end, in parentheses — do not also inline it at the start of the title.
-   - **Correct:** `## 6.1 AI Offload Standardization (11-26/512r0)`
-   - **Wrong (H3):** `### 6.1 AI Offload Standardization (11-26/512r0)`
-   - **Wrong (DCN repeated):** `### 6.1 11-26/512r0 (AI Offload Standardization) (11-26/512r0)`
+5. **§ 3 Agenda Overview** is **narrative prose** (1–2 paragraphs walking through the agenda items in order) — **not a table**.
+6. **§ 4 Motions and Votes** is a **bullet list**, one bullet per motion, each giving the motion number, a short description, mover, seconder, and result — **not a table**. Leave a field blank rather than guessing if the minutes don't state it.
+7. **§ 5 Presentations** is a **bullet list**, one bullet per contribution leading with `<DCN> — <Title>` then `(<Author>, <Affiliation>)` then 1–2 factual sentences of key points (one optional comment sentence allowed) — **not a table**.
+8. **No chart and no Markdown tables anywhere.** The company-contribution chart and any `| ... |` table belong to ANALYTICAL/STRATEGIC; their presence in a Basic report is a level violation.
+9. **§ 6 Questions & Answers Summary** is **narrative prose** — one short paragraph per presentation that drew discussion, naming the presentation (with its DCN) and paraphrasing the questions and answers. No fabricated Q&A.
 10. **§ 7 Next Meeting & Action Items** has all 4 labels filled (`Next Meeting`, `Teleconference Planned`, `Contribution Deadline`, `Expected Topics`).
 11. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed** (those are notes for the author, not part of the final report).
 12. **Zero `*[...]*` or `*[e.g.,...]*` placeholder strings remain** anywhere in the output.
@@ -222,7 +217,7 @@ Read `assets/Template_MidLevel_Meeting_Report.md`. Output to `./Report_Analytica
 11. **§ 8.1 Next Meeting Plans** has 4 labelled lines filled (`Next Meeting`, `Teleconference`, `Submission Deadline`, `Expected Focus Areas`). **§ 8.2 Recommended Actions for Our Organization** is a 5-column table (`# | Recommended Action | Priority | Suggested Owner | Timeline`) with 3–5 rows, every row tied to a specific meeting observation.
 12. **Appendix A** is a 4-column table (`DCN | Title | Author | Type`) listing every input document. **Appendix B** has one `## B.N <Title> (<DCN>)` subsection per presentation with Q&A, with bulleted `- Q: ...` / `- A: ...` pairs (H2 like the BASIC §6 — same H2 rule as 5.A point 9).
 13. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed.** **Zero `*[...]*` or `*[e.g.,...]*` placeholders remain.**
-14. **No company-contributions chart reference** — that is a BASIC-only artifact and must not appear in an Analytical report.
+14. **§ 5 contains the company-contributions chart reference** at the top of the section, before `## 5.1`: `![Figure 1. Presentations by contributing company](./company_contributions.png)` with a caption line below it — generated in Step 4, giving a contribution-landscape overview ahead of the per-contribution deep dives. (BASIC has no chart; this is an ANALYTICAL/STRATEGIC feature.)
 
 ### Step 5.C — STRATEGIC checklist
 
@@ -260,7 +255,7 @@ Read `assets/Template_Complex_Strategic_Report.md`. Output to `./Report_Strategi
 12. **§ 10 Next Meeting Intelligence Preview** has 4 labelled lines: `Next Meeting`, `Expected Submissions`, `Predicted Key Topics`, `Our Preparation Plan`.
 13. **Appendix A** is a 5-column table (`DCN | Title | Author | Type | Link`). **Appendix B** has one `## B.N <Title> (<DCN>)` per Q&A presentation with `- Q (<Speaker>): ...` / `- A (<Speaker>): ...` (attribution where the minutes provide it; blank otherwise — never guess). **Appendix C** is a 4-column table (`Source | URL | Date | Relevance`) listing every external source cited; if no internet search was performed, write `No external sources consulted — research-dependent sections rely solely on meeting documents.` instead of an empty table. **Appendix D** is a 2-column glossary covering every acronym used in the report.
 14. **Every `> **AGENT INSTRUCTION:** ...` blockquote is removed.** The `> **KEY STRATEGIC TAKEAWAYS**` blockquote in §1 is the ONE blockquote that stays — it is content, not an instruction. **Zero `*[...]*` or `*[e.g.,...]*` placeholders remain.**
-15. **No company-contributions chart reference** — STRATEGIC does not use one.
+15. **§ 5 contains the company-contributions chart reference** at the top of the section, before `## 5.1`: `![Figure 1. Presentations by contributing company](./company_contributions.png)` with a caption line below it — the same chart as ANALYTICAL, generated in Step 4.
 16. **Research-section honesty**: every claim made in `§ 1`, `§ 2 Standards Cycle Context`, `§ 3`, `§ 5 External Context`, `§ 6 Industry Context`, `§ 7`, `§ 8`, `§ 9` that comes from external research must be backed by an entry in Appendix C (with URL and date). If you had no web tool, the explicit `[Research not available — external sources could not be consulted]` placeholder is acceptable in those sections; fabricated findings are not.
 
 ## Step 5.5 — Self-check before pushing
@@ -271,10 +266,11 @@ Re-read your own `./Report_<Level>_*.md` before Step 6 and confirm, by eye, that
 - The motions list matches what you actually saw in the meeting's minutes file (`*-<session-name>-meeting-minutes.md`) — motion numbers, movers, and seconders must be verbatim from THAT session's minutes, not from a different session's. (The #1 way this task fails is pulling motions from prior-session minutes that the current minutes merely reference.)
 - Presentation rows / per-presentation subsections only contain DCNs, authors, affiliations, and Q&A that actually appear in the extracted Markdown files you read in Step 3b.
 - No `*[...]*` placeholders remain. No `> **AGENT INSTRUCTION:** ...` blockquotes remain (the STRATEGIC `KEY STRATEGIC TAKEAWAYS` blockquote in §1 is the only one that stays — and only for STRATEGIC).
-- For BASIC only: the chart image reference is present in § 5 and `./company_contributions.png` exists in the working directory (from Step 4).
+- For BASIC: confirm there are **no Markdown tables and no chart reference** (those belong to higher levels). § 3 and § 6 are prose; § 4 and § 5 are bullet lists.
+- For ANALYTICAL / STRATEGIC: the chart image reference is present at the top of § 5 (before `## 5.1`) and `./company_contributions.png` exists in the working directory (from Step 4).
 - For STRATEGIC only: every research claim is backed by an Appendix C row, OR the explicit `[Research not available — ...]` placeholder is in place where needed.
 
-If anything is off, fix it with a fresh `write` (full-file rewrite; avoid `edit` for large rewrites) before pushing. For BASIC, if you never ran Step 4, go back and run it — do not push a report whose § 5 chart reference points at a missing file.
+If anything is off, fix it with a fresh `write` (full-file rewrite; avoid `edit` for large rewrites) before pushing. For ANALYTICAL / STRATEGIC, if you never ran Step 4, go back and run it — do not push a report whose § 5 chart reference points at a missing file.
 
 ## Step 6 — Push the artifacts back to the node
 
@@ -287,9 +283,9 @@ bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_wor
   push <node-name> ./Report_<Level>_<Meeting>_<Date>.md "<remote-folder>"
 ```
 
-**6b. Push the chart PNG (BASIC LEVEL ONLY — skip for ANALYTICAL / STRATEGIC):**
+**6b. Push the chart PNG (ANALYTICAL & STRATEGIC ONLY — skip for BASIC):**
 
-The Basic template's § 5 references the chart by relative path; if you push only the `.md`, the image will be broken on the remote side. ANALYTICAL and STRATEGIC reports do not embed a chart, so step 6b does not apply — push only the `.md`.
+The Analytical/Strategic templates reference the chart by relative path; if you push only the `.md`, the image will be broken on the remote side. BASIC has no chart, so it pushes only the `.md`.
 
 ```bash
 bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_workspace.sh \
@@ -297,8 +293,8 @@ bash /home/node/.openclaw/workspace/skills/ieee-meeting-report/scripts/fetch_wor
 ```
 
 The task is complete when:
-- BASIC: both 6a (the `Report_Basic_*.md`) and 6b (the chart PNG) succeed. In your final summary, explicitly confirm both were pushed.
-- ANALYTICAL: 6a (`Report_Analytical_*.md`) succeeds. Confirm in your summary.
-- STRATEGIC: 6a (`Report_Strategic_*.md`) succeeds. Confirm in your summary; if any sections were filled with the `[Research not available — ...]` placeholder, mention that explicitly so the user knows the report is research-degraded.
+- BASIC: 6a (the `Report_Basic_*.md`) succeeds. There is no chart to push. Confirm in your summary.
+- ANALYTICAL: both 6a (`Report_Analytical_*.md`) and 6b (the chart PNG) succeed. Confirm both in your summary.
+- STRATEGIC: both 6a (`Report_Strategic_*.md`) and 6b (the chart PNG) succeed. Confirm both in your summary; if any sections were filled with the `[Research not available — ...]` placeholder, mention that explicitly so the user knows the report is research-degraded.
 
-If you skip 6b on a BASIC run, the report opens with a broken image link — do not skip.
+If you skip 6b on an ANALYTICAL / STRATEGIC run, the report opens with a broken image link — do not skip.
