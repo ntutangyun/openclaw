@@ -2665,6 +2665,15 @@ export async function runEmbeddedAttempt(
         authProfileId: resolveAttemptStreamAuthProfileId(params),
         authStorage: params.authStorage,
       });
+      // Emit a lifecycle `phase: "request"` event before every LLM call so the
+      // protocol monitor's Agent ↔ Model tab can track per-call TTFT and
+      // generation throughput.
+      const { wrapStreamFnWithRequestTrace } = await import("../llm-request-trace.js");
+      activeSession.agent.streamFn = wrapStreamFnWithRequestTrace(
+        activeSession.agent.streamFn,
+        params.runId,
+        params.sessionId,
+      );
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
         config: params.config,

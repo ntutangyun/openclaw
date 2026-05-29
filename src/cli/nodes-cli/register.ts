@@ -4,6 +4,7 @@ import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
+import { registerNodesFilesCommands } from "./register.files.js";
 import { registerNodesInvokeCommands } from "./register.invoke.js";
 import { registerNodesLocationCommands } from "./register.location.js";
 import { registerNodesNotifyCommand } from "./register.notify.js";
@@ -37,6 +38,7 @@ export async function registerNodesCli(program: Command) {
   registerNodesNotifyCommand(nodes);
   registerNodesPushCommand(nodes);
   registerNodesCameraCommands(nodes);
+  registerNodesFilesCommands(nodes);
   registerNodesScreenCommands(nodes);
   registerNodesLocationCommands(nodes);
 

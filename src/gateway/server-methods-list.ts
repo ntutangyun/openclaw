@@ -63,4 +63,6 @@ export const GATEWAY_EVENTS = [
   // Dedicated ping events (gateway → peer pings + gateway → all-UIs sample broadcasts).
   "ping.gw-to-peer",
   "ping.metrics",
+  // Gateway → all-UIs TCP-layer srtt sample broadcast (Linux-only sampler).
+  "tcp.metrics",
 ];

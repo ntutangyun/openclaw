@@ -417,6 +417,22 @@ export type AppViewState = {
     logsLimit: number;
     logsMaxBytes: number;
     logsAtBottom: boolean;
+    // Protocol monitor
+    protocolTraces: import("./controllers/protocol-monitor.js").ProtocolTraceRecord[];
+    protocolMonitorLoading: boolean;
+    protocolSelectedTrace:
+      | import("./controllers/protocol-monitor.js").ProtocolTraceRecord
+      | import("./controllers/protocol-monitor.js").CoalescedGroup
+      | null;
+    protocolAutoScroll: boolean;
+    protocolDisabledTypes: Set<string>;
+    protocolSubTab: "protocol" | "terminology" | "settings";
+    protocolMonitoringPaused: boolean;
+    protocolControllerStateVersion: number;
+    protocolModelFilter: string | null;
+    protocolNetworkDirection: import("./views/protocol-monitor.js").NetworkDirection;
+    protocolNetworkExplainer: string | null;
+    protocolUsageExplainer: string | null;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;

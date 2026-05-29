@@ -200,6 +200,12 @@ import {
   PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
+  type PingPeerToGwParams,
+  PingPeerToGwParamsSchema,
+  type PingGwToPeerAckParams,
+  PingGwToPeerAckParamsSchema,
+  type PingMetricsReportParams,
+  PingMetricsReportParamsSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -816,6 +822,13 @@ export const validateUpdateRunParams = lazyCompile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validatePingPeerToGwParams = lazyCompile<PingPeerToGwParams>(PingPeerToGwParamsSchema);
+export const validatePingGwToPeerAckParams = lazyCompile<PingGwToPeerAckParams>(
+  PingGwToPeerAckParamsSchema,
+);
+export const validatePingMetricsReportParams = lazyCompile<PingMetricsReportParams>(
+  PingMetricsReportParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {

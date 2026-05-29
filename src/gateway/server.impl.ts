@@ -71,10 +71,14 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
+import { getRecentModelEndpoints } from "../infra/model-endpoint-registry.js";
+import { PingSampleStore, setPingSampleStore } from "./ping-store.js";
+import { startTcpInfoSampler } from "./tcp-info-sampler.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
+import { ProtocolTraceStore, setProtocolTraceStore } from "./protocol-trace-store.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   finishGatewayRestartTrace,
@@ -111,6 +115,7 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { registerWsTraceListener } from "./ws-log.js";
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const { resetModelCatalogCacheForTest } = await import("./server-model-catalog.js");
@@ -926,6 +931,118 @@ export async function startGatewayServer(
     gatewayMethods: listActiveGatewayMethods(baseGatewayMethods),
   });
   deps.cron = runtimeState.cronState.cron;
+
+  // Protocol trace store — captures WS frames for the Protocol Monitor tab
+  const protocolTraceStore = new ProtocolTraceStore();
+  setProtocolTraceStore(protocolTraceStore);
+  protocolTraceStore.setBroadcast((record) => {
+    const allConnIds = new Set<string>();
+    for (const c of clients) {
+      allConnIds.add(c.connId);
+    }
+    if (allConnIds.size > 0) {
+      broadcastToConnIds("protocol.trace", record, allConnIds, { dropIfSlow: true });
+    }
+  });
+  protocolTraceStore.setRxBroadcast((info) => {
+    const allConnIds = new Set<string>();
+    for (const c of clients) {
+      allConnIds.add(c.connId);
+    }
+    if (allConnIds.size > 0) {
+      broadcastToConnIds("protocol.rx.samples", info, allConnIds, { dropIfSlow: true });
+    }
+  });
+  registerWsTraceListener((direction, kind, meta) => {
+    protocolTraceStore.captureTrace(direction, kind, meta);
+  });
+
+  // Ping sample store — holds per-peer one-way latency measurements for the
+  // Protocol Monitor's latency charts.
+  const pingSampleStore = new PingSampleStore();
+  setPingSampleStore(pingSampleStore);
+  pingSampleStore.setBroadcast(({ source, connId, direction, samples }) => {
+    const allConnIds = new Set<string>();
+    for (const c of clients) {
+      allConnIds.add(c.connId);
+    }
+    if (allConnIds.size > 0) {
+      broadcastToConnIds("ping.metrics", { source, connId, direction, samples }, allConnIds, {
+        dropIfSlow: true,
+      });
+    }
+  });
+
+  // Reverse-direction ping scheduler: periodically broadcasts ping.gw-to-peer
+  // to each connected peer so the gateway can measure gw→peer one-way latency.
+  // The forward-direction ping (peer→gw) is driven by each peer's own timer;
+  // without this timer the Protocol Monitor's reverse-latency charts are
+  // permanently empty.
+  const REVERSE_PING_INTERVAL_MS = 10_000;
+  let reversePingSeq = 0;
+  const reversePingTimer = setInterval(() => {
+    for (const c of clients) {
+      const role = c.connect?.role;
+      if (role !== "operator" && role !== "node") continue;
+      broadcastToConnIds(
+        "ping.gw-to-peer",
+        { gatewayT0: Date.now(), pingId: `gw-${reversePingSeq++}` },
+        new Set([c.connId]),
+        { dropIfSlow: true },
+      );
+    }
+  }, REVERSE_PING_INTERVAL_MS);
+  reversePingTimer.unref();
+
+  const stopReversePing = () => {
+    clearInterval(reversePingTimer);
+  };
+
+  // TCP-layer latency sampler (Linux only): reads each operator/node socket's
+  // kernel TCP_INFO srtt via `ss` and broadcasts it alongside the app-layer
+  // ping metrics. Additive — no-op on non-Linux or when `ss` is unavailable.
+  // See src/gateway/tcp-info-sampler.ts.
+  const stopTcpInfoSampler = startTcpInfoSampler({
+    clients,
+    broadcast: ({ source, connId, samples }) => {
+      const allConnIds = new Set<string>();
+      for (const c of clients) {
+        allConnIds.add(c.connId);
+      }
+      if (allConnIds.size > 0) {
+        broadcastToConnIds("tcp.metrics", { source, connId, samples }, allConnIds, {
+          dropIfSlow: true,
+        });
+      }
+    },
+    // Agent↔model leg: union of (1) configured provider baseUrls — e.g. local
+    // vLLM, an explicit host:port — and (2) endpoints actually hit by recent
+    // model fetches, which covers built-in providers (openai, etc.) that have no
+    // baseUrl in config. Read live each tick so model/provider switches and
+    // sync-vllm changes are picked up without a restart.
+    modelEndpoints: () => {
+      const seen = new Map<string, { host: string; port: number }>();
+      const add = (host: string, port: number) => {
+        if (host && Number.isFinite(port)) seen.set(`${host}|${port}`, { host, port });
+      };
+      const providers = getRuntimeConfig().models?.providers ?? {};
+      for (const provider of Object.values(providers)) {
+        const baseUrl = provider?.baseUrl;
+        if (!baseUrl) continue;
+        try {
+          const u = new URL(baseUrl);
+          add(u.hostname, u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80);
+        } catch {
+          // Ignore a malformed baseUrl rather than breaking the whole sampler tick.
+        }
+      }
+      for (const ep of getRecentModelEndpoints()) {
+        add(ep.host, ep.port);
+      }
+      return [...seen.values()];
+    },
+  });
+
   const pluginHostServices = {
     get cron() {
       return runtimeState.cronState.cron;
@@ -982,6 +1099,8 @@ export async function startGatewayServer(
     for (const postReadySidecar of postReadySidecars) {
       postReadySidecar.stop();
     }
+    stopReversePing();
+    stopTcpInfoSampler();
   };
   const createCloseHandler = () => async (opts?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
@@ -1127,6 +1246,15 @@ export async function startGatewayServer(
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
+      "protocol-traces.list": ({ params, respond }) => {
+        const limit = typeof params.limit === "number" ? params.limit : 500;
+        const afterId = typeof params.afterId === "string" ? params.afterId : undefined;
+        respond(true, { traces: protocolTraceStore.getRecentTraces(limit, afterId) });
+      },
+      "protocol-traces.clear": ({ respond }) => {
+        protocolTraceStore.clearTraces();
+        respond(true, { ok: true });
+      },
     };
     let attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
     const buildAttachedGatewayMethodRegistry = (

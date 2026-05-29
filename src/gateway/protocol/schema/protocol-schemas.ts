@@ -210,6 +210,7 @@ import {
   PingMetricsReportResultSchema,
   PingPeerToGwParamsSchema,
   PingPeerToGwResultSchema,
+  TcpMetricsEventSchema,
 } from "./ping.js";
 import {
   PluginApprovalRequestParamsSchema,
@@ -541,6 +542,7 @@ export const ProtocolSchemas = {
   PingMetricsReportParams: PingMetricsReportParamsSchema,
   PingMetricsReportResult: PingMetricsReportResultSchema,
   PingMetricsEvent: PingMetricsEventSchema,
+  TcpMetricsEvent: TcpMetricsEventSchema,
 } satisfies Record<string, TSchema>;
 
 export {

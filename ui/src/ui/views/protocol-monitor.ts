@@ -46,7 +46,7 @@ import type { UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 export type ProtocolMonitorSubTab = "protocol" | "terminology" | "settings";
 
-export type NetworkDirection = "op-to-gw" | "gw-to-op" | "gw-to-node" | "node-to-gw" | "agent-llm";
+export type NetworkDirection = "op-gw" | "gw-node" | "agent-llm";
 
 export type ProtocolMonitorProps = {
   traces: ProtocolTraceRecord[];
@@ -656,6 +656,25 @@ function formatBytes(bytes: number): string {
     return `${(bytes / 1024).toFixed(2)} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+/**
+ * Format a bytes/sec rate as a network bitrate (bits/sec). Uses decimal SI
+ * (1 kbps = 1000 bps), the universal convention for kbps/Mbps/Gbps — distinct
+ * from `formatBytes`'s binary (1024) byte units.
+ */
+function formatBitsPerSec(bytesPerSec: number): string {
+  const bits = bytesPerSec * 8;
+  if (bits < 1000) {
+    return `${Number(bits.toFixed(2))} bps`;
+  }
+  if (bits < 1_000_000) {
+    return `${(bits / 1000).toFixed(2)} kbps`;
+  }
+  if (bits < 1_000_000_000) {
+    return `${(bits / 1_000_000).toFixed(2)} Mbps`;
+  }
+  return `${(bits / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
 const ROW_HEIGHT = 80;
@@ -1778,7 +1797,28 @@ function buildNetworkExplainerContent(
   }
 
   // Latency keys (wire-pair tabs)
-  const latency = selectDirectionLatency(net, props.networkDirection);
+  // For the merged op-gw tab, resolve latency directly from net stats
+  // since selectDirectionLatency returns null for the combined direction.
+  let latency: ReturnType<typeof selectDirectionLatency>;
+  if (props.networkDirection === "op-gw") {
+    if (key.startsWith("lat-op-gw-")) {
+      latency = {
+        stats: net.operatorGatewayOneWayLatency,
+        label: "Operator → Gateway · one-way",
+        latencyKey: "lat-op-gw",
+      };
+    } else if (key.startsWith("lat-gw-op-")) {
+      latency = {
+        stats: net.gatewayOperatorOneWayLatency,
+        label: "Gateway → Operator · one-way (peer-measured)",
+        latencyKey: "lat-gw-op",
+      };
+    } else {
+      latency = null;
+    }
+  } else {
+    latency = selectDirectionLatency(net, props.networkDirection);
+  }
   if (latency && key.startsWith(latency.latencyKey)) {
     const stats = latency.stats;
     const latencyName = latency.label;
@@ -1913,6 +1953,95 @@ function buildNetworkExplainerContent(
     }
   }
 
+  // TCP-layer latency cards (kernel srtt/2). One series per link; the key tells
+  // us which. Shown alongside the app-layer one-way cards.
+  if (key.startsWith("lat-tcp-")) {
+    const isAgentModel = key.startsWith("lat-tcp-agent-model");
+    const isNode = key.startsWith("lat-tcp-node-gw");
+    const stats = isAgentModel
+      ? net.agentModelTcpLatency
+      : isNode
+        ? net.nodeGatewayTcpLatency
+        : net.operatorGatewayTcpLatency;
+    const linkName = isAgentModel
+      ? "Agent ↔ Model"
+      : isNode
+        ? "Node ↔ Gateway"
+        : "Operator ↔ Gateway";
+    const statName = key.endsWith("-min")
+      ? "Min"
+      : key.endsWith("-avg")
+        ? "Average"
+        : key.endsWith("-p50")
+          ? "p50"
+          : key.endsWith("-p95")
+            ? "p95"
+            : "Peak";
+    const value = key.endsWith("-min")
+      ? stats.minMs
+      : key.endsWith("-avg")
+        ? stats.avgMs
+        : key.endsWith("-p50")
+          ? stats.p50Ms
+          : key.endsWith("-p95")
+            ? stats.p95Ms
+            : stats.peakMs;
+    return {
+      title: `${linkName} · TCP-layer · ${statName}`,
+      stats: [
+        { label: statName, value: formatMs(value) },
+        { label: "Samples", value: String(stats.count) },
+      ],
+      intro: html`<strong>Kernel TCP_INFO srtt, sampled via <code>ss</code> every 10 s.</strong>
+        TCP-layer latency 来源于内核 <code>TCP_INFO</code> 的 <code>srtt</code>(smoothed round-trip
+        time),由 gateway 端每 10 秒跑一次 <code>ss</code> 读取,<em>与上层协议无关</em>
+        (WebSocket / HTTP / SSE 都一样)。这里显示的是 <code>srtt / 2</code>, 以便和 app-layer
+        的单向延迟放在同一张图里比较。${isAgentModel
+          ? html` 这条测的是 gateway 到 <strong>LLM provider endpoint</strong> 的网络往返(云端 = 到 API
+              边缘的公网 RTT;本地 vLLM = 局域网/环回)。`
+          : ""}`,
+      sections: [
+        {
+          title: "和 app-layer latency 的区别",
+          body: isAgentModel
+            ? html`<p>
+                Agent↔Model 这条上,app-layer 的耗时由 <strong>TTFT / 推理时间</strong>(秒级)主导,而
+                TCP-layer srtt 只是到 provider 的<strong>网络底噪</strong>(毫秒级)—— 两者不在一个量级。
+                它的意义在于量化 "云 vs 本地" 的网络延迟差,而不是这条链路的瓶颈。
+              </p>`
+            : html`<p>
+                app-layer ping 量的是端到端体验(含 JS event loop 调度、TLS、framing); TCP-layer srtt
+                只量内核到内核的网络往返(基于 ACK 计时),因此通常更低、更稳。 两者之差 ≈ 应用层 +
+                协议开销。
+              </p>`,
+        },
+        {
+          title: "怎么采集的",
+          body: html`<p>
+            Gateway 每 10s 跑一次 <code>ss -tin state established</code>,${isAgentModel
+              ? html`按已配置的 model provider <code>baseUrl</code> 的 host:port(DNS 解析到 IP)匹配
+                gateway 的出站连接`
+              : html`按对端 <code>addr:port</code> 匹配到每条 operator/node WebSocket`},取
+            <code>rtt:</code> 字段(毫秒),通过 <code>tcp.metrics</code> 广播给 UI。 仅 Linux 可用;无
+            <code>ss</code> 时该指标为空。见 <code>src/gateway/tcp-info-sampler.ts</code>。
+          </p>`,
+        },
+        ...(isAgentModel
+          ? [
+              {
+                title: "为什么经常没有样本",
+                body: html`<p>
+                  Model 连接是<strong>按需 / 连接池</strong>管理的,空闲时会被关闭,不像 op↔gw / node↔gw
+                  那样常驻。每 10s 的采样只在<strong>有活跃连接时</strong>(通常是模型调用期间)才取得到值,
+                  所以这条曲线是稀疏的。
+                </p>`,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
+
   return null;
 }
 
@@ -1921,23 +2050,23 @@ function transportSection(direction: NetworkDirection): {
   body: TemplateResult;
 } {
   switch (direction) {
-    case "op-to-gw":
-    case "gw-to-op":
+    case "op-gw":
       return {
         title: "这条方向用什么 transport",
         body: html`<p>
           Operator(浏览器或 Mac/Windows 客户端)和 Gateway 之间是
-          <strong>WebSocket</strong> 长连接。每一次 RPC 请求、事件推送、或一段流式输出
-          都是一个或多个 WS 帧。Throughput 卡片里的字节数就是这些 WS 帧的 payload 累加。
+          <strong>WebSocket</strong> 长连接。此标签页同时展示上行(Operator → Gateway) 和下行(Gateway
+          → Operator)两个方向。每一次 RPC 请求、事件推送、或一段流式输出 都是一个或多个 WS
+          帧。Throughput 卡片里的字节数就是这些 WS 帧的 payload 累加。
         </p>`,
       };
-    case "gw-to-node":
-    case "node-to-gw":
+    case "gw-node":
       return {
         title: "这条方向用什么 transport",
         body: html`<p>
           Gateway 和 Node(本机或远端 PC)之间也是 <strong>WebSocket</strong> 长连接, 带有 OpenClaw
-          自己的 RPC / event 协议。Throughput 卡片统计的是这些 WS 帧的 payload 字节。
+          自己的 RPC / event 协议。此标签页同时展示上行(Node → Gateway) 和下行(Gateway
+          → Node)两个方向。Throughput 卡片统计的是这些 WS 帧的 payload 字节。
         </p>`,
       };
     case "agent-llm":
@@ -2822,28 +2951,16 @@ type DirectionMeta = {
 
 const DIRECTION_META: DirectionMeta[] = [
   {
-    id: "op-to-gw",
-    shortLabel: "Operator → Gateway",
-    longLabel: "Operator (STA) → Gateway (AP)",
+    id: "op-gw",
+    shortLabel: "Operator ↔ Gateway",
+    longLabel: "Operator ↔ Gateway (bidirectional)",
     color: "#3b82f6",
   },
   {
-    id: "gw-to-op",
-    shortLabel: "Gateway → Operator",
-    longLabel: "Gateway (AP) → Operator (STA)",
-    color: "#0ea5e9",
-  },
-  {
-    id: "gw-to-node",
-    shortLabel: "Gateway → Node",
-    longLabel: "Gateway (AP) → Node (PC)",
+    id: "gw-node",
+    shortLabel: "Gateway ↔ Node",
+    longLabel: "Gateway ↔ Node (bidirectional)",
     color: "#22c55e",
-  },
-  {
-    id: "node-to-gw",
-    shortLabel: "Node → Gateway",
-    longLabel: "Node (PC) → Gateway (AP)",
-    color: "#16a34a",
   },
   {
     id: "agent-llm",
@@ -2861,31 +2978,29 @@ function selectDirectionThroughput(net: NetworkStats, id: NetworkDirection): Thr
   // Per-MESSAGE throughput samples (one ThroughputSample per frame).
   //
   // Source split by direction:
-  //   - peer→gw (op-to-gw, node-to-gw): use messages.throughputSamples from
+  //   - peer→gw (node-to-gw): use messages.throughputSamples from
   //     the messageStore. The store sees the WIDER message set (health,
   //     polls, presence, etc.) — *ThroughputStats.forward iterates the
-  //     blocklist-filtered trace ring buffer, so on sessions whose op→gw
-  //     traffic is nearly all polls (Control UI sitting idle), it would
-  //     report 0 measured messages while the Messages section above shows
-  //     dozens. Sourcing from the store instead keeps the "N measured
-  //     messages" count consistent with the Messages totals.
-  //   - gw→peer (gw-to-op, gw-to-node): keep using *ThroughputStats.reverse
-  //     because the gateway-side trace records for outbound frames don't
-  //     carry oneWayLatencyMs (it can't observe its own arrival times). The
+  //     blocklist-filtered trace ring buffer, so on sessions whose node→gw
+  //     traffic is nearly all polls, it would report 0 measured messages
+  //     while the Messages section above shows dozens. Sourcing from the
+  //     store instead keeps the "N measured messages" count consistent
+  //     with the Messages totals.
+  //   - gw→peer (gw-to-node): keep using *ThroughputStats.reverse because
+  //     the gateway-side trace records for outbound frames don't carry
+  //     oneWayLatencyMs (it can't observe its own arrival times). The
   //     reverse stats are built from peer-reported rxSamples, which DO have
   //     latencyMs.
+  //   - op-gw: has its own merged renderer (renderOperatorGatewayContent)
+  //     that accesses operatorGatewayThroughputStats directly.
   switch (id) {
-    case "op-to-gw":
-      return net.operatorGatewayMessages.forward.throughputSamples;
-    case "gw-to-op":
-      return net.operatorGatewayThroughputStats.reverse.samples;
     case "node-to-gw":
       return net.gatewayNodeMessages.forward.throughputSamples;
     case "gw-to-node":
       return net.gatewayNodeThroughputStats.reverse.samples;
     default:
-      // agent-llm has its own dedicated renderer (renderAgentLlmContent)
-      // and does not flow through this wire-pair throughput selector.
+      // op-gw has its own merged renderer; agent-llm has its own dedicated
+      // renderer (renderAgentLlmContent).
       return [];
   }
 }
@@ -2895,22 +3010,6 @@ function selectDirectionLatency(
   id: NetworkDirection,
 ): { stats: LatencyStats; label: string; latencyKey: string; estimated?: boolean } | null {
   switch (id) {
-    case "op-to-gw":
-      return {
-        stats: net.operatorGatewayOneWayLatency,
-        label: "Operator → Gateway · one-way",
-        latencyKey: "lat-op-gw",
-      };
-    case "gw-to-op":
-      // Peer-measured: the operator client measures rx latency for each frame
-      // it receives from the gateway and reports samples back via
-      // `protocol-traces.rx-report`. Requires `time.sync` to have converged
-      // for the offset correction to be meaningful.
-      return {
-        stats: net.gatewayOperatorOneWayLatency,
-        label: "Gateway → Operator · one-way (peer-measured)",
-        latencyKey: "lat-gw-op",
-      };
     case "node-to-gw":
       return {
         stats: net.nodeGatewayOneWayLatency,
@@ -2965,10 +3064,6 @@ function selectDirectionMessages(
   id: NetworkDirection,
 ): MessagesDirection | null {
   switch (id) {
-    case "op-to-gw":
-      return net.operatorGatewayMessages.forward;
-    case "gw-to-op":
-      return net.operatorGatewayMessages.reverse;
     case "node-to-gw":
       return net.gatewayNodeMessages.forward;
     case "gw-to-node":
@@ -3077,7 +3172,7 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
  * to the same range. Absent entry = auto (use the computed timeWindow).
  *
  * Keys:
- *   - `op-to-gw`, `gw-to-op`, `node-to-gw`, `gw-to-node` — wire-pair tabs
+ *   - `op-gw`, `node-to-gw`, `gw-to-node` — wire-pair tabs
  *   - `agent-llm` — agent|model tab
  *
  * Lives at module scope so it persists across Lit re-renders and tab
@@ -3086,6 +3181,88 @@ function buildMessageTypeColorMap(types: string[]): Map<string, string> {
  * always sized relative to each other, not to off-screen extremes.
  */
 const barChartZoom = new Map<string, { minTs: number; maxTs: number }>();
+
+// ── Drag-to-pan state ─────────────────────────────────────────────────────
+
+type ChartDragState = {
+  zoomKey: string;
+  startMinTs: number;
+  startMaxTs: number;
+  startX: number;
+  autoMinTs: number;
+  autoMaxTs: number;
+  pxToTs: number;
+};
+
+let chartDrag: ChartDragState | null = null;
+
+function clearChartDrag() {
+  chartDrag = null;
+  document.body.style.cursor = "";
+}
+
+function handleChartDragStart(params: {
+  zoomKey: string;
+  curMinTs: number;
+  curMaxTs: number;
+  autoMinTs: number;
+  autoMaxTs: number;
+  tsRange: number;
+  padL: number;
+  plotW: number;
+  chartW: number;
+  svgW: number;
+  clientX: number;
+  onRequestUpdate?: () => void;
+}) {
+  const plotWPx = (params.plotW / params.chartW) * params.svgW;
+  const pxToTs = params.tsRange / plotWPx;
+  chartDrag = {
+    zoomKey: params.zoomKey,
+    startMinTs: params.curMinTs,
+    startMaxTs: params.curMaxTs,
+    startX: params.clientX,
+    autoMinTs: params.autoMinTs,
+    autoMaxTs: params.autoMaxTs,
+    pxToTs,
+  };
+  const onUpdate = params.onRequestUpdate;
+  const onMove = (ev: MouseEvent) => {
+    if (!chartDrag) {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      return;
+    }
+    const pxDelta = ev.clientX - chartDrag.startX;
+    if (Math.abs(pxDelta) < 1) return;
+    const tsDelta = -(pxDelta * chartDrag.pxToTs);
+    let nextMin = chartDrag.startMinTs + tsDelta;
+    let nextMax = chartDrag.startMaxTs + tsDelta;
+    if (nextMin < chartDrag.autoMinTs) {
+      nextMax += chartDrag.autoMinTs - nextMin;
+      nextMin = chartDrag.autoMinTs;
+    }
+    if (nextMax > chartDrag.autoMaxTs) {
+      nextMin -= nextMax - chartDrag.autoMaxTs;
+      nextMax = chartDrag.autoMaxTs;
+    }
+    nextMin = Math.max(nextMin, chartDrag.autoMinTs);
+    nextMax = Math.min(nextMax, chartDrag.autoMaxTs);
+    if (nextMax - nextMin >= MIN_ZOOM_SPAN_MS) {
+      barChartZoom.set(chartDrag.zoomKey, { minTs: nextMin, maxTs: nextMax });
+      onUpdate?.();
+    }
+  };
+  const onUp = () => {
+    chartDrag = null;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+  document.body.style.cursor = "grabbing";
+}
 
 /**
  * Resolve the active zoom range for a direction tab (or `null` if no zoom).
@@ -3227,7 +3404,27 @@ function renderMessagesBarChartSvg(
       </div>
       <div
         class="pm-chart-wrap"
-        @mousemove=${(e: MouseEvent) =>
+        @mousedown=${(e: MouseEvent) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const svgW = (e.currentTarget as HTMLElement).getBoundingClientRect().width;
+          handleChartDragStart({
+            zoomKey,
+            curMinTs: viewMinTs,
+            curMaxTs: viewMaxTs,
+            autoMinTs,
+            autoMaxTs,
+            tsRange,
+            padL: PAD_L,
+            plotW,
+            chartW: W,
+            svgW,
+            clientX: e.clientX,
+            onRequestUpdate,
+          });
+        }}
+        @mousemove=${(e: MouseEvent) => {
+          if (chartDrag) return;
           handleBarChartHover(
             e,
             visibleBars,
@@ -3241,8 +3438,12 @@ function renderMessagesBarChartSvg(
             PAD_T,
             H,
             W,
-          )}
-        @mouseleave=${handleChartLeave}
+          );
+        }}
+        @mouseleave=${(e: Event) => {
+          handleChartLeave(e);
+          clearChartDrag();
+        }}
         @wheel=${onWheel}
         @dblclick=${onDblClick}
       >
@@ -3538,6 +3739,11 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
   const timeWindow = computeGlobalTimeWindow(net);
   const stats = net.agentLlm;
   const ttft = stats.ttft;
+  // Split the unified event bars by wire direction for the throughput chart:
+  // agent→model carries request bodies + tool results, model→agent carries SSE
+  // deltas / tool-call blocks / lifecycle end.
+  const llmFwdBars = stats.bars.filter((b) => agentLlmBarDirection(b.category) === "fwd");
+  const llmRevBars = stats.bars.filter((b) => agentLlmBarDirection(b.category) === "rev");
   const colorMap = new Map<string, string>(
     (Object.entries(AGENT_LLM_CATEGORY_COLORS) as Array<[AgentLlmEventCategory, string]>).map(
       ([cat, color]) => [cat, color],
@@ -3555,7 +3761,7 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
       Events by category · ${stats.totalEvents} total · ${stats.cards.length}
       ${stats.cards.length === 1 ? "type" : "types"}
     </div>
-    ${renderAgentLlmEventChartSvg(stats.bars, colorMap, timeWindow, props.onRequestUpdate)}
+    ${renderAgentLlmSplitBarChartSvg(stats.bars, colorMap, timeWindow, props.onRequestUpdate)}
     <div class="pm-message-legend">
       ${stats.cards.map((c) => {
         const cat = c.category;
@@ -3637,21 +3843,55 @@ function renderAgentLlmContent(net: NetworkStats, props: ProtocolMonitorProps): 
       },
     ])}
 
-    <!-- 3. Throughput — metrics only (no chart) -->
+    <!-- TCP-layer latency to the model endpoint — network floor only; sparse,
+         since model sockets are pooled/transient. -->
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Latency · tcp-layer
+      <span style="font-weight:400;opacity:0.7;">— kernel TCP_INFO srtt to the model endpoint, via ss every 10 s</span>
+    </div>
+    ${renderLatencyDirectionRow(
+      "Agent ↔ Model · one-way ≈ srtt/2 (tcp-layer, network floor)",
+      net.agentModelTcpLatency,
+      "lat-tcp-agent-model",
+      openExp,
+    )}
+
+    <!-- 3. Throughput — over-time chart, then streaming-period metrics -->
+    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    ${renderThroughputOverTimeSection(llmFwdBars, llmRevBars, timeWindow, props, {
+      zoomKey: "agent-llm",
+      fwdAxisLabel: "ag→ml",
+      revAxisLabel: "ml→ag",
+      fwdColor: "#8b5cf6",
+      revColor: "#f59e0b",
+      fwdLegend: "Agent → Model (bitrate)",
+      revLegend: "Model → Agent (bitrate)",
+    })}
     ${renderAgentLlmThroughputSection(stats.callThroughput, stats.eventByteStats, openExp)}
   `;
 }
 
-function renderAgentLlmEventChartSvg(
+// Categories that travel agent → model (HTTP request body, and tool results
+// which get carried in the next request to the model). Everything else is
+// considered model → agent (SSE deltas, tool_use blocks emitted by the model,
+// lifecycle end, and the catch-all "other" bucket).
+function agentLlmBarDirection(category: AgentLlmEventCategory): "fwd" | "rev" {
+  return category === "request" || category === "tool-result" ? "fwd" : "rev";
+}
+
+function renderAgentLlmSplitBarChartSvg(
   bars: AgentLlmEventBar[],
   colorMap: Map<string, string>,
   timeWindow: TimeWindow | undefined,
   onRequestUpdate?: () => void,
 ): TemplateResult {
   const zoomKey = "agent-llm";
+  const blockClass = "pm-chart-block";
   if (bars.length === 0) {
-    return html`<div class="pm-chart-empty" style="height:195px;line-height:195px;">
-      Waiting for first agent ↔ model event...
+    return html`<div class=${blockClass}>
+      <div class="pm-chart-empty" style="height:195px;line-height:195px;">
+        Waiting for first agent ↔ model event...
+      </div>
     </div>`;
   }
   const PAD_L = 64;
@@ -3662,25 +3902,25 @@ function renderAgentLlmEventChartSvg(
   const H = 195;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  // Defensive scan — bars may be unsorted on rehydrate, so don't trust
-  // bars[0]/bars[-1] for fallback bounds.
+  const MID_Y = PAD_T + plotH / 2;
+  const halfH = (plotH - 2) / 2;
+
+  const fwdBars: AgentLlmEventBar[] = [];
+  const revBars: AgentLlmEventBar[] = [];
+  for (const b of bars) {
+    (agentLlmBarDirection(b.category) === "fwd" ? fwdBars : revBars).push(b);
+  }
+
   let scannedMin = Infinity;
   let scannedMax = -Infinity;
   for (const b of bars) {
-    if (b.ts < scannedMin) {
-      scannedMin = b.ts;
-    }
-    if (b.ts > scannedMax) {
-      scannedMax = b.ts;
-    }
+    if (b.ts < scannedMin) scannedMin = b.ts;
+    if (b.ts > scannedMax) scannedMax = b.ts;
   }
   const localMin = scannedMin === Infinity ? 0 : scannedMin;
   const localMax = scannedMax === -Infinity ? localMin + 1 : scannedMax;
   const autoMinTs = timeWindow?.minTs ?? localMin;
   const autoMaxTs = timeWindow?.maxTs ?? localMax;
-  // Shared zoom state with whatever else lives on this tab (currently only
-  // this chart, but using the same per-tab key as the wire-pair tabs keeps
-  // the API uniform).
   const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
   let viewMinTs = autoMinTs;
   let viewMaxTs = autoMaxTs;
@@ -3691,22 +3931,34 @@ function renderAgentLlmEventChartSvg(
     isZoomed = true;
   }
   const tsRange = Math.max(1, viewMaxTs - viewMinTs);
-  // Filter to bars in the visible range so the log y-scale recomputes against
-  // what's actually on screen — otherwise a single off-screen 200KB request
-  // would squash the visible SSE deltas to nothing.
-  const visibleBars = isZoomed ? bars.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : bars;
-  // log scale for y so SSE deltas (tens of bytes) and request bodies
-  // (hundreds of KB) coexist without the small bars vanishing.
-  const sizes = visibleBars.map((b) => Math.max(1, b.size));
-  const maxSize = Math.max(...sizes, 1);
-  const logMax = Math.log10(maxSize + 1);
+  const filterBars = (src: AgentLlmEventBar[]) =>
+    isZoomed ? src.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : src;
+  const visibleFwd = filterBars(fwdBars);
+  const visibleRev = filterBars(revBars);
+
+  // Log y-scale per half so a 200 KB request body and a 50 B SSE delta can
+  // coexist in the same chart without the small bars vanishing — same trick as
+  // the unified chart this replaces.
+  const fwdMax = Math.max(...visibleFwd.map((b) => Math.max(1, b.size)), 1);
+  const revMax = Math.max(...visibleRev.map((b) => Math.max(1, b.size)), 1);
+  const fwdLogMax = Math.log10(fwdMax + 1);
+  const revLogMax = Math.log10(revMax + 1);
+
   const toX = (ts: number) => PAD_L + ((ts - viewMinTs) / tsRange) * plotW;
-  const toY = (s: number) => PAD_T + plotH - (Math.log10(Math.max(1, s) + 1) / logMax) * plotH;
-  const yGridCount = 4;
-  const yGridLines = Array.from({ length: yGridCount }, (_, i) => {
-    const exp = (logMax / yGridCount) * (i + 1);
+  const fwdToY = (s: number) =>
+    MID_Y - (Math.log10(Math.max(1, s) + 1) / fwdLogMax) * halfH;
+  const revBarH = (s: number) => (Math.log10(Math.max(1, s) + 1) / revLogMax) * halfH;
+
+  const yGridCount = 3;
+  const fwdGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const exp = (fwdLogMax / yGridCount) * (i + 1);
     const val = 10 ** exp - 1;
-    return { y: toY(val), label: formatBytes(val) };
+    return { y: fwdToY(val), label: formatBytes(val) };
+  });
+  const revGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const exp = (revLogMax / yGridCount) * (i + 1);
+    const val = 10 ** exp - 1;
+    return { y: MID_Y + (Math.log10(val + 1) / revLogMax) * halfH, label: formatBytes(val) };
   });
   const xTickCount = 5;
   const xTicks = Array.from({ length: xTickCount }, (_, i) => {
@@ -3715,6 +3967,12 @@ function renderAgentLlmEventChartSvg(
   });
   const barWidth = 2;
   const chartId = `agent-llm-bars-${(bars[0]?.ts ?? 0).toString(36)}`;
+
+  const enriched: Array<AgentLlmEventBar & { dir: "fwd" | "rev" }> = [
+    ...fwdBars.map((b) => ({ ...b, dir: "fwd" as const })),
+    ...revBars.map((b) => ({ ...b, dir: "rev" as const })),
+  ];
+
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     handleBarChartZoom(e, zoomKey, viewMinTs, viewMaxTs, autoMinTs, autoMaxTs, PAD_L, plotW, W);
@@ -3727,13 +3985,18 @@ function renderAgentLlmEventChartSvg(
       onRequestUpdate?.();
     }
   };
+  const onMousemove = (e: MouseEvent) => {
+    handleAgentLlmSplitBarHover(e, enriched, colorMap, viewMinTs, tsRange, PAD_L, plotW, W, chartId);
+  };
+
   return html`
-    <div class="pm-chart-block">
+    <div class=${blockClass}>
       <div class="pm-chart-zoom-bar">
         <span class="pm-chart-zoom-hint">
           ${isZoomed
             ? html`<strong>Zoomed:</strong> ${chartTimeLabel(viewMinTs)} –
-                ${chartTimeLabel(viewMaxTs)} · ${visibleBars.length} of ${bars.length} events`
+                ${chartTimeLabel(viewMaxTs)} ·
+                ${visibleFwd.length + visibleRev.length} of ${bars.length} events`
             : html`<span class="pm-muted"
                 >Scroll on the chart to zoom on time, double-click to reset</span
               >`}
@@ -3753,27 +4016,13 @@ function renderAgentLlmEventChartSvg(
       </div>
       <div
         class="pm-chart-wrap"
-        @mousemove=${(e: MouseEvent) =>
-          handleAgentLlmBarHover(
-            e,
-            visibleBars,
-            colorMap,
-            viewMinTs,
-            tsRange,
-            logMax,
-            PAD_L,
-            plotW,
-            plotH,
-            PAD_T,
-            H,
-            W,
-          )}
+        @mousemove=${onMousemove}
         @mouseleave=${handleChartLeave}
         @wheel=${onWheel}
         @dblclick=${onDblClick}
       >
         <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
-          ${yGridLines.map(
+          ${fwdGrid.map(
             (g) => svg`
               <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
                 stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
@@ -3781,26 +4030,39 @@ function renderAgentLlmEventChartSvg(
                 fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
             `,
           )}
-          <line
-            x1="${PAD_L}"
-            y1="${PAD_T + plotH}"
-            x2="${W - PAD_R}"
-            y2="${PAD_T + plotH}"
-            stroke="#c4c9d6"
-            stroke-width="0.6"
-          />
+          ${revGrid.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.6" stroke-dasharray="3,3" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="11" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line x1="${PAD_L}" y1="${MID_Y}" x2="${W - PAD_R}" y2="${MID_Y}"
+            stroke="#9aa3af" stroke-width="0.8" />
+          <text x="${PAD_L - 6}" y="${MID_Y - 4}" text-anchor="end"
+            fill="#0f172a" font-size="11" font-family="monospace" font-weight="600">ag→ml</text>
+          <text x="${PAD_L - 6}" y="${MID_Y + 14}" text-anchor="end"
+            fill="#0f172a" font-size="11" font-family="monospace" font-weight="600">ml→ag</text>
           ${xTicks.map(
             (t) => svg`
               <text x="${t.x}" y="${H - 8}" text-anchor="middle"
                 fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
             `,
           )}
-          ${visibleBars.map((b) => {
+          ${visibleFwd.map((b) => {
             const x = toX(b.ts) - barWidth / 2;
-            const y = toY(b.size);
-            const h = PAD_T + plotH - y;
+            const y = fwdToY(b.size);
+            const h = MID_Y - y;
             const fill = colorMap.get(b.category) ?? "#64748b";
             return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
+              fill="${fill}" opacity="0.85" />`;
+          })}
+          ${visibleRev.map((b) => {
+            const x = toX(b.ts) - barWidth / 2;
+            const h = revBarH(b.size);
+            const fill = colorMap.get(b.category) ?? "#64748b";
+            return svg`<rect x="${x}" y="${MID_Y}" width="${barWidth}" height="${h}"
               fill="${fill}" opacity="0.85" />`;
           })}
         </svg>
@@ -3811,26 +4073,23 @@ function renderAgentLlmEventChartSvg(
   `;
 }
 
-function handleAgentLlmBarHover(
+function handleAgentLlmSplitBarHover(
   e: MouseEvent,
-  bars: AgentLlmEventBar[],
+  bars: Array<AgentLlmEventBar & { dir: "fwd" | "rev" }>,
   colorMap: Map<string, string>,
   minTs: number,
   tsRange: number,
-  logMax: number,
   padL: number,
   plotW: number,
-  plotH: number,
-  padT: number,
-  chartH: number,
   chartW: number,
+  chartId: string,
 ) {
   const wrap = e.currentTarget as HTMLElement;
   const rect = wrap.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const svgW = rect.width;
   const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
-  if (xRatio < 0 || xRatio > 1) {
+  if (xRatio < 0 || xRatio > 1 || bars.length === 0) {
     handleChartLeave(e);
     return;
   }
@@ -3844,8 +4103,8 @@ function handleAgentLlmBarHover(
       nearest = b;
     }
   }
-  const tip = wrap.querySelector(".pm-chart-tooltip") as HTMLElement | null;
-  const cross = wrap.querySelector(".pm-chart-crosshair") as HTMLElement | null;
+  const tip = wrap.querySelector(`#${chartId}-tip`) as HTMLElement | null;
+  const cross = wrap.querySelector(`#${chartId}-cross`) as HTMLElement | null;
   if (!tip || !cross || !nearest) {
     return;
   }
@@ -3861,19 +4120,20 @@ function handleAgentLlmBarHover(
     fractionalSecondDigits: 1,
   });
   const swatch = colorMap.get(nearest.category) ?? "#64748b";
+  const dirLabel = nearest.dir === "fwd" ? "ag→ml" : "ml→ag";
   const detailStr = nearest.detail
     ? `<br/><span style="color:#6b7280;">${nearest.detail}</span>`
     : "";
   tip.innerHTML =
-    `<b>${formatBytes(nearest.size)}</b><br/>` +
+    `<b>${formatBytes(nearest.size)}</b> · ${dirLabel}<br/>` +
     `<span style="display:inline-block;width:8px;height:8px;background:${swatch};border-radius:2px;margin-right:4px;vertical-align:middle;"></span>` +
     `${AGENT_LLM_CATEGORY_LABELS[nearest.category] ?? nearest.category}${detailStr}<br/>` +
     `<span style="color:#9ca3af;">${time}</span>`;
   const tipLeft = crossLeftPct > 70 ? crossLeftPct - 22 : crossLeftPct + 3;
   tip.style.left = `${tipLeft}%`;
-  const nearestYPct = padT + plotH - (Math.log10(Math.max(1, nearest.size) + 1) / logMax) * plotH;
-  tip.style.top = `${(nearestYPct / chartH) * 100 - 12}%`;
+  tip.style.top = `4%`;
 }
+
 
 function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps): TemplateResult {
   // Agent ↔ Model has its own dedicated 3-section layout (Events by category,
@@ -3881,14 +4141,22 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
   if (props.networkDirection === "agent-llm") {
     return renderAgentLlmContent(net, props);
   }
+  // Operator ↔ Gateway merged tab — bidirectional bar chart + both latency
+  // and throughput directions shown side by side.
+  if (props.networkDirection === "op-gw") {
+    return renderOperatorGatewayContent(net, props);
+  }
+  // Gateway ↔ Node merged tab — same bidirectional layout as op-gw.
+  if (props.networkDirection === "gw-node") {
+    return renderGatewayNodeContent(net, props);
+  }
   const meta = getDirectionMeta(props.networkDirection);
   const samples = selectDirectionThroughput(net, props.networkDirection);
   const latency = selectDirectionLatency(net, props.networkDirection);
 
   const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
 
-  // Shared x-axis across ALL direction tabs (op-gw, gw-op, node-gw, gw-node,
-  // agent-llm, llm-agent). Computed once per net snapshot from every chart's
+  // Shared x-axis across ALL direction tabs (op-gw, gw-node, agent-llm).
   // samples — switching tabs preserves the same time window so events line
   // up vertically across both the three charts on the current tab and the
   // charts on any other tab.
@@ -3986,6 +4254,1134 @@ function renderDirectionContent(net: NetworkStats, props: ProtocolMonitorProps):
  *     data (messageStore via selectDirectionMessages). Counts/min/max/avg
  *     here therefore always match the per-type cards above.
  */
+// ── Operator ↔ Gateway merged renderer ─────────────────────────────────────
+
+function renderOperatorGatewayContent(
+  net: NetworkStats,
+  props: ProtocolMonitorProps,
+): TemplateResult {
+  const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
+  const timeWindow = computeGlobalTimeWindow(net);
+  const fwdMessages = net.operatorGatewayMessages.forward;
+  const revMessages = net.operatorGatewayMessages.reverse;
+  const fwdLatency = net.operatorGatewayOneWayLatency;
+  const revLatency = net.gatewayOperatorOneWayLatency;
+  const fwdTpt = net.operatorGatewayThroughputStats.forward;
+  const revTpt = net.operatorGatewayThroughputStats.reverse;
+
+  return html`
+    <div class="pm-net-direction-header">
+      <span class="pm-dot" style="background:#3b82f6;"></span>
+      <strong>Operator ↔ Gateway (bidirectional)</strong>
+    </div>
+
+    <!-- Messages — merged bar chart with up/down split -->
+    ${renderMergedMessagesSection(net, fwdMessages, revMessages, timeWindow, openExp, props, {
+      fwdLabel: "Operator → Gateway",
+      revLabel: "Gateway → Operator",
+      fwdLegendSuffix: "op→gw",
+      revLegendSuffix: "gw→op",
+      chartKey: "op-gw",
+    })}
+
+    <!-- Latency — app-layer (ping) one-way per direction, then tcp-layer srtt -->
+    <div class="pm-net-section-title" style="margin-top:14px;">Latency · app-layer (ping)</div>
+    ${renderLatencyDirectionRow(
+      "Operator → Gateway · one-way (app-layer)",
+      fwdLatency,
+      "lat-op-gw",
+      openExp,
+    )}
+    ${renderLatencyDirectionRow(
+      "Gateway → Operator · one-way (app-layer, peer-measured)",
+      revLatency,
+      "lat-gw-op",
+      openExp,
+    )}
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Latency · tcp-layer
+      <span style="font-weight:400;opacity:0.7;">— kernel TCP_INFO srtt, sampled via ss every 10 s</span>
+    </div>
+    ${renderLatencyDirectionRow(
+      "Operator ↔ Gateway · one-way ≈ srtt/2 (tcp-layer)",
+      net.operatorGatewayTcpLatency,
+      "lat-tcp-op-gw",
+      openExp,
+    )}
+
+    <!-- Throughput — over-time chart first, then per-direction stats -->
+    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    ${renderThroughputOverTimeSection(fwdMessages.bars, revMessages.bars, timeWindow, props, {
+      zoomKey: "op-gw",
+      fwdAxisLabel: "op→gw",
+      revAxisLabel: "gw→op",
+      fwdColor: "#3b82f6",
+      revColor: "#f59e0b",
+      fwdLegend: "Operator → Gateway (bitrate)",
+      revLegend: "Gateway → Operator (bitrate)",
+    })}
+    ${renderDirectionThroughputBlock(
+      "Operator → Gateway (forward)",
+      fwdTpt.samples,
+      fwdMessages,
+      openExp,
+    )}
+    ${renderDirectionThroughputBlock(
+      "Gateway → Operator (reverse, peer-measured)",
+      revTpt.samples,
+      revMessages,
+      openExp,
+    )}
+  `;
+}
+
+function renderGatewayNodeContent(
+  net: NetworkStats,
+  props: ProtocolMonitorProps,
+): TemplateResult {
+  const openExp = (key: string) => () => props.onOpenNetworkExplainer(key);
+  const timeWindow = computeGlobalTimeWindow(net);
+  const fwdMessages = net.gatewayNodeMessages.forward;
+  const revMessages = net.gatewayNodeMessages.reverse;
+  const fwdLatency = net.nodeGatewayOneWayLatency;
+  const revLatency = net.gatewayNodeOneWayLatency;
+  const fwdTpt = net.gatewayNodeThroughputStats.forward;
+  const revTpt = net.gatewayNodeThroughputStats.reverse;
+
+  return html`
+    <div class="pm-net-direction-header">
+      <span class="pm-dot" style="background:#22c55e;"></span>
+      <strong>Gateway ↔ Node (bidirectional)</strong>
+    </div>
+
+    <!-- Messages — merged bar chart with up/down split -->
+    ${renderMergedMessagesSection(net, fwdMessages, revMessages, timeWindow, openExp, props, {
+      fwdLabel: "Node → Gateway",
+      revLabel: "Gateway → Node",
+      fwdLegendSuffix: "nd→gw",
+      revLegendSuffix: "gw→nd",
+      chartKey: "gw-node",
+    })}
+
+    <!-- Latency — app-layer (ping) one-way per direction, then tcp-layer srtt -->
+    <div class="pm-net-section-title" style="margin-top:14px;">Latency · app-layer (ping)</div>
+    ${renderLatencyDirectionRow(
+      "Node → Gateway · one-way (app-layer)",
+      fwdLatency,
+      "lat-node-gw",
+      openExp,
+    )}
+    ${renderLatencyDirectionRow(
+      "Gateway → Node · one-way (app-layer, peer-measured)",
+      revLatency,
+      "lat-gw-node",
+      openExp,
+    )}
+    <div class="pm-net-section-title" style="margin-top:14px;">
+      Latency · tcp-layer
+      <span style="font-weight:400;opacity:0.7;">— kernel TCP_INFO srtt, sampled via ss every 10 s</span>
+    </div>
+    ${renderLatencyDirectionRow(
+      "Node ↔ Gateway · one-way ≈ srtt/2 (tcp-layer)",
+      net.nodeGatewayTcpLatency,
+      "lat-tcp-node-gw",
+      openExp,
+    )}
+
+    <!-- Throughput — over-time chart first, then per-direction stats -->
+    <div class="pm-net-section-title" style="margin-top:14px;">Throughput</div>
+    ${renderThroughputOverTimeSection(fwdMessages.bars, revMessages.bars, timeWindow, props, {
+      zoomKey: "gw-node",
+      fwdAxisLabel: "nd→gw",
+      revAxisLabel: "gw→nd",
+      fwdColor: "#22c55e",
+      revColor: "#f59e0b",
+      fwdLegend: "Node → Gateway (bitrate)",
+      revLegend: "Gateway → Node (bitrate)",
+    })}
+    ${renderDirectionThroughputBlock(
+      "Node → Gateway (forward)",
+      fwdTpt.samples,
+      fwdMessages,
+      openExp,
+    )}
+    ${renderDirectionThroughputBlock(
+      "Gateway → Node (reverse, peer-measured)",
+      revTpt.samples,
+      revMessages,
+      openExp,
+    )}
+  `;
+}
+
+function renderLatencyDirectionRow(
+  label: string,
+  stats: LatencyStats,
+  latencyKey: string,
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  return html`
+    <div class="pm-net-subsection-title" style="margin-top:6px;">${label}</div>
+    ${stats.count === 0
+      ? html`<div class="pm-chart-empty" style="height:40px;line-height:40px;">
+          No samples yet.
+        </div>`
+      : renderNetStatRow([
+          {
+            title: "Min",
+            value: formatMs(stats.minMs),
+            sub: "best sample",
+            onClick: openExp(`${latencyKey}-min`),
+          },
+          {
+            title: "Avg",
+            value: formatMs(stats.avgMs),
+            sub: `${stats.count} samples`,
+            onClick: openExp(`${latencyKey}-avg`),
+          },
+          {
+            title: "p50",
+            value: formatMs(stats.p50Ms),
+            sub: "median",
+            onClick: openExp(`${latencyKey}-p50`),
+          },
+          {
+            title: "p95",
+            value: formatMs(stats.p95Ms),
+            sub: "tail",
+            onClick: openExp(`${latencyKey}-p95`),
+          },
+          {
+            title: "Peak",
+            value: formatMs(stats.peakMs),
+            sub: "worst sample",
+            onClick: openExp(`${latencyKey}-peak`),
+          },
+        ])}
+  `;
+}
+
+function renderDirectionThroughputBlock(
+  label: string,
+  throughputSamples: ThroughputSample[],
+  messages: MessagesDirection,
+  openExp: (key: string) => () => void,
+): TemplateResult {
+  const tptCount = throughputSamples.length;
+  const messageCount = messages.bars.length;
+  if (tptCount === 0 && messageCount === 0) {
+    return html`
+      <div class="pm-net-subsection-title" style="margin-top:6px;">${label}</div>
+      <div class="pm-chart-empty" style="height:40px;line-height:40px;">No messages yet.</div>
+    `;
+  }
+
+  let tptMin = 0;
+  let tptPeak = 0;
+  let tptAvg = 0;
+  let tptMedian = 0;
+  if (tptCount > 0) {
+    const bps = throughputSamples.map((s) => s.bytesPerSec);
+    const sorted = bps.slice().toSorted((a, b) => a - b);
+    const sum = sorted.reduce((a, b) => a + b, 0);
+    tptMin = sorted[0] ?? 0;
+    tptPeak = sorted[sorted.length - 1] ?? 0;
+    tptAvg = sum / tptCount;
+    tptMedian = sorted[Math.floor(tptCount * 0.5)] ?? 0;
+  }
+
+  let minBytes = 0;
+  let maxBytes = 0;
+  let avgBytes = 0;
+  let medianBytes = 0;
+  let totalBytes = 0;
+  if (messageCount > 0) {
+    const byteValues = messages.bars.map((b) => b.size);
+    const sorted = byteValues.slice().toSorted((a, b) => a - b);
+    totalBytes = sorted.reduce((a, b) => a + b, 0);
+    minBytes = sorted[0] ?? 0;
+    maxBytes = sorted[sorted.length - 1] ?? 0;
+    avgBytes = totalBytes / messageCount;
+    medianBytes = sorted[Math.floor(messageCount * 0.5)] ?? 0;
+  }
+
+  return html`
+    <div class="pm-net-subsection-title" style="margin-top:10px;">${label}</div>
+    <div class="pm-net-subsection-title">
+      Per-message throughput · ${tptCount}
+      ${tptCount === 1 ? "measured message" : "measured messages"}
+    </div>
+    ${tptCount === 0
+      ? html`<div class="pm-chart-empty" style="height:40px;line-height:40px;">
+          No per-message latency available yet.
+        </div>`
+      : renderNetStatRow([
+          {
+            title: "Min",
+            value: `${formatBytes(tptMin)}/s`,
+            sub: "slowest message",
+            onClick: openExp("throughput-min"),
+          },
+          {
+            title: "Peak",
+            value: `${formatBytes(tptPeak)}/s`,
+            sub: "fastest message",
+            onClick: openExp("throughput-peak"),
+          },
+          {
+            title: "Average",
+            value: `${formatBytes(tptAvg)}/s`,
+            sub: `over ${tptCount} messages`,
+            onClick: openExp("throughput-avg"),
+          },
+          {
+            title: "Median",
+            value: `${formatBytes(tptMedian)}/s`,
+            sub: "p50",
+            onClick: openExp("throughput-median"),
+          },
+        ])}
+    <div class="pm-net-subsection-title" style="margin-top:10px;">
+      Per-message bytes · ${messageCount} ${messageCount === 1 ? "message" : "messages"}
+    </div>
+    ${messageCount === 0
+      ? html`<div class="pm-chart-empty" style="height:40px;line-height:40px;">
+          No messages on this direction yet.
+        </div>`
+      : renderNetStatRow([
+          {
+            title: "Min",
+            value: formatBytes(minBytes),
+            sub: "smallest",
+            onClick: openExp("bytes-min"),
+          },
+          {
+            title: "Max",
+            value: formatBytes(maxBytes),
+            sub: "largest",
+            onClick: openExp("bytes-max"),
+          },
+          {
+            title: "Average",
+            value: formatBytes(avgBytes),
+            sub: `over ${messageCount} msgs`,
+            onClick: openExp("bytes-avg"),
+          },
+          {
+            title: "Median",
+            value: formatBytes(medianBytes),
+            sub: "p50",
+            onClick: openExp("bytes-median"),
+          },
+          {
+            title: "Total",
+            value: formatBytes(totalBytes),
+            sub: `${messageCount} msgs`,
+            onClick: openExp("bytes-total"),
+          },
+        ])}
+  `;
+}
+
+type MergedDirectionLabels = {
+  /** Long label for the upper-direction `<summary>` (e.g. "Operator → Gateway"). */
+  fwdLabel: string;
+  /** Long label for the lower-direction `<summary>` (e.g. "Gateway → Operator"). */
+  revLabel: string;
+  /** Short legend suffix appended after each upper-direction type (e.g. "→gw"). */
+  fwdLegendSuffix: string;
+  /** Short legend suffix appended after each lower-direction type (e.g. "gw→"). */
+  revLegendSuffix: string;
+  /** Per-tab key so zoom state and chart DOM ids don't collide across tabs. */
+  chartKey: string;
+};
+
+function renderMergedMessagesSection(
+  net: NetworkStats,
+  fwd: MessagesDirection,
+  rev: MessagesDirection,
+  timeWindow: TimeWindow | undefined,
+  openExp: (key: string) => () => void,
+  props: ProtocolMonitorProps,
+  labels: MergedDirectionLabels,
+): TemplateResult {
+  const totalBars = fwd.bars.length + rev.bars.length;
+  if (totalBars === 0) {
+    return html`
+      <div class="pm-net-section-title">Messages · 0 total</div>
+      <div class="pm-chart-block">
+        <div class="pm-chart-empty" style="height:195px;line-height:195px;">
+          Waiting for first message...
+        </div>
+      </div>
+    `;
+  }
+
+  const fwdColorMap = buildMessageTypeColorMap(fwd.cards.map((c) => c.type));
+  const revColorMap = buildMessageTypeColorMap(rev.cards.map((c) => c.type));
+  const colorMap = new Map([...revColorMap, ...fwdColorMap]);
+
+  const legendEntries: Array<{ type: string; color: string; label: string }> = [];
+  for (const card of fwd.cards) {
+    legendEntries.push({
+      type: card.type,
+      color: colorMap.get(card.type) ?? "#64748b",
+      label: `${card.type} (${labels.fwdLegendSuffix})`,
+    });
+  }
+  for (const card of rev.cards) {
+    legendEntries.push({
+      type: card.type,
+      color: colorMap.get(card.type) ?? "#64748b",
+      label: `${card.type} (${labels.revLegendSuffix})`,
+    });
+  }
+
+  return html`
+    <div class="pm-net-section-title">
+      Messages · ${totalBars} total · ${fwd.cards.length + rev.cards.length} type(s)
+    </div>
+    ${renderMergedBarChartSvg(fwd, rev, colorMap, timeWindow, props, labels.chartKey)}
+    <div class="pm-message-legend">
+      ${legendEntries.map(
+        (e) => html`
+          <span class="pm-message-legend-item">
+            <span class="pm-message-legend-swatch" style="background:${e.color};"></span>
+            <span class="pm-message-legend-label">${e.label}</span>
+          </span>
+        `,
+      )}
+    </div>
+    ${fwd.cards.length > 0
+      ? html`
+          <details class="pm-message-types-details" style="margin-top:8px;">
+            <summary class="pm-message-types-summary">
+              ${labels.fwdLabel} type cards (${fwd.cards.length} types)
+            </summary>
+            <div class="pm-message-cards" style="margin-top:6px;">
+              ${fwd.cards.map(
+                (card) => html`
+                  <button
+                    class="pm-message-card"
+                    style="border-left-color:${colorMap.get(card.type) ?? "#64748b"};"
+                    @click=${openExp(`messages-${card.type}`)}
+                  >
+                    <div class="pm-message-card-type" title=${card.type}>${card.type}</div>
+                    <div class="pm-message-card-count">${card.count}</div>
+                    <div class="pm-message-card-sub">
+                      ${formatBytes(card.minBytes)} – ${formatBytes(card.maxBytes)}
+                    </div>
+                  </button>
+                `,
+              )}
+            </div>
+          </details>
+        `
+      : nothing}
+    ${rev.cards.length > 0
+      ? html`
+          <details class="pm-message-types-details" style="margin-top:4px;">
+            <summary class="pm-message-types-summary">
+              ${labels.revLabel} type cards (${rev.cards.length} types)
+            </summary>
+            <div class="pm-message-cards" style="margin-top:6px;">
+              ${rev.cards.map(
+                (card) => html`
+                  <button
+                    class="pm-message-card"
+                    style="border-left-color:${colorMap.get(card.type) ?? "#64748b"};"
+                    @click=${openExp(`messages-${card.type}`)}
+                  >
+                    <div class="pm-message-card-type" title=${card.type}>${card.type}</div>
+                    <div class="pm-message-card-count">${card.count}</div>
+                    <div class="pm-message-card-sub">
+                      ${formatBytes(card.minBytes)} – ${formatBytes(card.maxBytes)}
+                    </div>
+                  </button>
+                `,
+              )}
+            </div>
+          </details>
+        `
+      : nothing}
+  `;
+}
+
+function renderMergedBarChartSvg(
+  fwd: MessagesDirection,
+  rev: MessagesDirection,
+  colorMap: Map<string, string>,
+  timeWindow: TimeWindow | undefined,
+  props: ProtocolMonitorProps,
+  chartKey: string,
+): TemplateResult {
+  const blockClass = "pm-chart-block";
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 195;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const MID_Y = PAD_T + plotH / 2;
+  const halfH = (plotH - 2) / 2;
+
+  const allBars = [...fwd.bars, ...rev.bars];
+  let scannedMin = Infinity;
+  let scannedMax = -Infinity;
+  for (const b of allBars) {
+    if (b.ts < scannedMin) scannedMin = b.ts;
+    if (b.ts > scannedMax) scannedMax = b.ts;
+  }
+  const localMin = scannedMin === Infinity ? 0 : scannedMin;
+  const localMax = scannedMax === -Infinity ? localMin + 1 : scannedMax;
+  const autoMinTs = timeWindow?.minTs ?? localMin;
+  const autoMaxTs = timeWindow?.maxTs ?? localMax;
+  const zoomKey = chartKey;
+  const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
+  let viewMinTs = autoMinTs;
+  let viewMaxTs = autoMaxTs;
+  let isZoomed = false;
+  if (zoomActive) {
+    viewMinTs = zoomActive.minTs;
+    viewMaxTs = zoomActive.maxTs;
+    isZoomed = true;
+  }
+  const tsRange = Math.max(1, viewMaxTs - viewMinTs);
+  const filterBars = (bars: MessageBar[]) =>
+    isZoomed ? bars.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : bars;
+  const visibleFwd = filterBars(fwd.bars);
+  const visibleRev = filterBars(rev.bars);
+  const maxFwd = Math.max(...visibleFwd.map((b) => b.size), 1);
+  const maxRev = Math.max(...visibleRev.map((b) => b.size), 1);
+  const toX = (ts: number) => PAD_L + ((ts - viewMinTs) / tsRange) * plotW;
+  const fwdToY = (s: number) => MID_Y - (s / maxFwd) * halfH;
+  const revToH = (s: number) => (s / maxRev) * halfH;
+
+  const yGridCount = 3;
+  const fwdGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxFwd / yGridCount) * (i + 1);
+    return { y: fwdToY(val), label: formatBytes(val) };
+  });
+  const revGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxRev / yGridCount) * (i + 1);
+    return { y: MID_Y + (val / maxRev) * halfH, label: formatBytes(val) };
+  });
+  const xTickCount = 5;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
+    const ts = viewMinTs + (tsRange / (xTickCount - 1)) * i;
+    return { x: toX(ts), label: chartTimeLabel(ts) };
+  });
+  const barWidth = 2;
+  const chartId = `bars-${chartKey}-${(allBars[0]?.ts ?? 0).toString(36)}`;
+
+  const enriched: Array<MessageBar & { dir: "fwd" | "rev" }> = [
+    ...fwd.bars.map((b) => ({ ...b, dir: "fwd" as const })),
+    ...rev.bars.map((b) => ({ ...b, dir: "rev" as const })),
+  ];
+
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    handleBarChartZoom(e, zoomKey, viewMinTs, viewMaxTs, autoMinTs, autoMaxTs, PAD_L, plotW, W);
+    props.onRequestUpdate?.();
+  };
+  const onDblClick = (e: MouseEvent) => {
+    e.preventDefault();
+    if (barChartZoom.has(zoomKey)) {
+      barChartZoom.delete(zoomKey);
+      props.onRequestUpdate?.();
+    }
+  };
+  const onMousemove = (e: MouseEvent) => {
+    handleMergedBarHover(e, enriched, colorMap, viewMinTs, tsRange, PAD_L, plotW, W, chartId);
+  };
+
+  return html`
+    <div class="${blockClass}">
+      <div class="pm-chart-zoom-bar">
+        <span class="pm-chart-zoom-hint">
+          ${isZoomed
+            ? html`<strong>Zoomed:</strong> ${chartTimeLabel(viewMinTs)} –
+                ${chartTimeLabel(viewMaxTs)} · ${visibleFwd.length + visibleRev.length} bars`
+            : html`<span class="pm-muted"
+                >Scroll to zoom, drag to pan, double-click to reset</span
+              >`}
+        </span>
+        ${isZoomed
+          ? html`<button
+              type="button"
+              class="pm-chart-zoom-reset"
+              @click=${() => {
+                barChartZoom.delete(zoomKey);
+                props.onRequestUpdate?.();
+              }}
+            >
+              Reset zoom
+            </button>`
+          : nothing}
+      </div>
+      <div
+        class="pm-chart-wrap"
+        @mousedown=${(e: MouseEvent) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const svgW = (e.currentTarget as HTMLElement).getBoundingClientRect().width;
+          handleChartDragStart({
+            zoomKey,
+            curMinTs: viewMinTs,
+            curMaxTs: viewMaxTs,
+            autoMinTs,
+            autoMaxTs,
+            tsRange,
+            padL: PAD_L,
+            plotW,
+            chartW: W,
+            svgW,
+            clientX: e.clientX,
+            onRequestUpdate: props.onRequestUpdate,
+          });
+        }}
+        @wheel=${onWheel}
+        @dblclick=${onDblClick}
+        @mousemove=${(e: MouseEvent) => {
+          if (chartDrag) return;
+          onMousemove(e);
+        }}
+        @mouseleave=${(e: Event) => {
+          handleChartLeave(e);
+          clearChartDrag();
+        }}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${fwdGrid.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="10" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${MID_Y}"
+            x2="${W - PAD_R}"
+            y2="${MID_Y}"
+            stroke="#94a3b8"
+            stroke-width="1.2"
+          />
+          <text
+            x="${PAD_L - 6}"
+            y="${MID_Y - 5}"
+            text-anchor="end"
+            fill="#64748b"
+            font-size="10"
+            font-family="monospace"
+          >
+            op→gw
+          </text>
+          <text
+            x="${PAD_L - 6}"
+            y="${MID_Y + 11}"
+            text-anchor="end"
+            fill="#64748b"
+            font-size="10"
+            font-family="monospace"
+          >
+            gw→op
+          </text>
+          ${revGrid.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="10" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+            `,
+          )}
+          ${visibleFwd.map((b) => {
+            const x = toX(b.ts) - barWidth / 2;
+            const y = fwdToY(b.size);
+            const h = MID_Y - y;
+            const fill = colorMap.get(b.type) ?? "#64748b";
+            return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${h}"
+              fill="${fill}" opacity="0.85" />`;
+          })}
+          ${visibleRev.map((b) => {
+            const x = toX(b.ts) - barWidth / 2;
+            const h = revToH(b.size);
+            const fill = colorMap.get(b.type) ?? "#64748b";
+            return svg`<rect x="${x}" y="${MID_Y}" width="${barWidth}" height="${h}"
+              fill="${fill}" opacity="0.65" />`;
+          })}
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
+    </div>
+  `;
+}
+
+function handleMergedBarHover(
+  e: MouseEvent,
+  bars: Array<MessageBar & { dir: "fwd" | "rev" }>,
+  colorMap: Map<string, string>,
+  minTs: number,
+  tsRange: number,
+  padL: number,
+  plotW: number,
+  chartW: number,
+  chartId: string,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const tip = wrap.querySelector(`#${chartId}-tip`) as HTMLElement | null;
+  const cross = wrap.querySelector(`#${chartId}-cross`) as HTMLElement | null;
+  if (!tip || !cross) return;
+
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  if (xRatio < 0 || xRatio > 1) {
+    handleChartLeave(e);
+    return;
+  }
+  const hoverTs = minTs + xRatio * tsRange;
+  let nearest = bars[0];
+  let nearestDist = Infinity;
+  for (const b of bars) {
+    const d = Math.abs(b.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = b;
+    }
+  }
+  const fill = colorMap.get(nearest.type) ?? "#64748b";
+  const dirLabel = nearest.dir === "fwd" ? "op→gw" : "gw→op";
+  tip.style.display = "block";
+  tip.style.left = `${mouseX + 10}px`;
+  tip.style.top = `${e.clientY - rect.top - 30}px`;
+  tip.innerHTML = `
+    <span style="display:inline-block;background:${fill};color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;margin-right:4px;">${dirLabel}</span>
+    ${nearest.type}<br>
+    <strong>${formatBytes(nearest.size)}</strong> &middot; ${new Date(nearest.ts).toLocaleTimeString()}
+  `;
+  cross.style.display = "block";
+  const crossX = padL + ((nearest.ts - minTs) / tsRange) * plotW;
+  cross.style.left = `${(crossX / chartW) * svgW}px`;
+}
+
+// ── Throughput-over-time (per-second bytes) chart ──────────────────────────
+
+type ThroughputSecondBucket = { ts: number; bytes: number };
+
+type ThroughputChartLabels = {
+  /** Upper-half axis label (forward direction, e.g. "op→gw"). */
+  fwdAxisLabel: string;
+  /** Lower-half axis label (reverse direction, e.g. "gw→op"). */
+  revAxisLabel: string;
+  fwdColor: string;
+  revColor: string;
+  /**
+   * Shared per-tab zoom key — must match the Messages chart on the same tab
+   * ("op-gw" | "gw-node" | "agent-llm") so the time x-axis (and any zoom/pan)
+   * stays synchronized with every other chart on the page.
+   */
+  zoomKey: string;
+};
+
+/**
+ * Aggregate per-message bars into non-overlapping 1-second buckets. Each
+ * bucket's value is the summed payload bytes of every message whose timestamp
+ * lands in that wall-clock second — i.e. observed throughput in bytes/sec.
+ * Bucket `ts` is the start-of-second (`floor(ts/1000)*1000`) so buckets line
+ * up with the shared time axis. Returned sorted ascending by time.
+ */
+function bucketBytesPerSecond(
+  bars: ReadonlyArray<{ ts: number; size: number }>,
+): ThroughputSecondBucket[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const bySecond = new Map<number, number>();
+  for (const b of bars) {
+    const sec = Math.floor(b.ts / 1000) * 1000;
+    bySecond.set(sec, (bySecond.get(sec) ?? 0) + b.size);
+  }
+  return Array.from(bySecond, ([ts, bytes]) => ({ ts, bytes })).toSorted((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Dual-direction throughput chart: one bar per occupied second, forward
+ * direction up from the mid-line, reverse down. Bar height = bytes/sec for
+ * that second (independent linear scale per half so both directions stay
+ * readable). Time x-axis + zoom come from the shared `timeWindow` / `zoomKey`,
+ * matching the Messages and Latency charts on the same tab.
+ */
+function renderThroughputTimeChartSvg(
+  fwdBuckets: ThroughputSecondBucket[],
+  revBuckets: ThroughputSecondBucket[],
+  timeWindow: TimeWindow | undefined,
+  props: ProtocolMonitorProps,
+  labels: ThroughputChartLabels,
+): TemplateResult {
+  const blockClass = "pm-chart-block";
+  if (fwdBuckets.length === 0 && revBuckets.length === 0) {
+    return html`<div class=${blockClass}>
+      <div class="pm-chart-empty" style="height:195px;line-height:195px;">
+        Waiting for first message...
+      </div>
+    </div>`;
+  }
+  const PAD_L = 64;
+  const PAD_R = 24;
+  const PAD_T = 14;
+  const PAD_B = 28;
+  const W = 460;
+  const H = 195;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const MID_Y = PAD_T + plotH / 2;
+  const halfH = (plotH - 2) / 2;
+
+  const allBuckets = [...fwdBuckets, ...revBuckets];
+  let scannedMin = Infinity;
+  let scannedMax = -Infinity;
+  for (const b of allBuckets) {
+    if (b.ts < scannedMin) scannedMin = b.ts;
+    if (b.ts > scannedMax) scannedMax = b.ts;
+  }
+  const localMin = scannedMin === Infinity ? 0 : scannedMin;
+  const localMax = scannedMax === -Infinity ? localMin + 1 : scannedMax;
+  const autoMinTs = timeWindow?.minTs ?? localMin;
+  const autoMaxTs = timeWindow?.maxTs ?? localMax;
+  const zoomKey = labels.zoomKey;
+  const zoomActive = resolveActiveZoom(zoomKey, autoMinTs, autoMaxTs);
+  let viewMinTs = autoMinTs;
+  let viewMaxTs = autoMaxTs;
+  let isZoomed = false;
+  if (zoomActive) {
+    viewMinTs = zoomActive.minTs;
+    viewMaxTs = zoomActive.maxTs;
+    isZoomed = true;
+  }
+  const tsRange = Math.max(1, viewMaxTs - viewMinTs);
+  const filterBuckets = (buckets: ThroughputSecondBucket[]) =>
+    isZoomed ? buckets.filter((b) => b.ts >= viewMinTs && b.ts <= viewMaxTs) : buckets;
+  const visibleFwd = filterBuckets(fwdBuckets);
+  const visibleRev = filterBuckets(revBuckets);
+  const maxFwd = Math.max(...visibleFwd.map((b) => b.bytes), 1);
+  const maxRev = Math.max(...visibleRev.map((b) => b.bytes), 1);
+  const toX = (ts: number) => PAD_L + ((ts - viewMinTs) / tsRange) * plotW;
+  const fwdToY = (v: number) => MID_Y - (v / maxFwd) * halfH;
+  const revToY = (v: number) => MID_Y + (v / maxRev) * halfH;
+  // Trace per-second values as a polyline that drops back to the mid-line (0)
+  // across idle gaps, so a second with no traffic reads as 0 bytes/sec rather
+  // than a straight bridge between distant bursts. `toY` maps a value into the
+  // relevant half (above the mid-line for forward, below for reverse).
+  const buildLinePoints = (
+    buckets: ThroughputSecondBucket[],
+    toY: (v: number) => number,
+  ): string => {
+    const pts: string[] = [];
+    let prevTs: number | null = null;
+    for (const b of buckets) {
+      if (prevTs === null) {
+        pts.push(`${toX(b.ts).toFixed(2)},${toY(0).toFixed(2)}`);
+      } else if (b.ts - prevTs > 1000) {
+        pts.push(`${toX(prevTs + 1000).toFixed(2)},${toY(0).toFixed(2)}`);
+        pts.push(`${toX(b.ts).toFixed(2)},${toY(0).toFixed(2)}`);
+      }
+      pts.push(`${toX(b.ts).toFixed(2)},${toY(b.bytes).toFixed(2)}`);
+      prevTs = b.ts;
+    }
+    if (prevTs !== null) {
+      pts.push(`${toX(prevTs + 1000).toFixed(2)},${toY(0).toFixed(2)}`);
+    }
+    return pts.join(" ");
+  };
+  const fwdLinePoints = buildLinePoints(visibleFwd, fwdToY);
+  const revLinePoints = buildLinePoints(visibleRev, revToY);
+
+  const yGridCount = 3;
+  const fwdGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxFwd / yGridCount) * (i + 1);
+    return { y: fwdToY(val), label: formatBitsPerSec(val) };
+  });
+  const revGrid = Array.from({ length: yGridCount }, (_, i) => {
+    const val = (maxRev / yGridCount) * (i + 1);
+    return { y: MID_Y + (val / maxRev) * halfH, label: formatBitsPerSec(val) };
+  });
+  const xTickCount = 5;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => {
+    const ts = viewMinTs + (tsRange / (xTickCount - 1)) * i;
+    return { x: toX(ts), label: chartTimeLabel(ts) };
+  });
+  const chartId = `tpt-time-${zoomKey}-${(allBuckets[0]?.ts ?? 0).toString(36)}`;
+
+  const enriched: Array<ThroughputSecondBucket & { dir: "fwd" | "rev" }> = [
+    ...fwdBuckets.map((b) => ({ ...b, dir: "fwd" as const })),
+    ...revBuckets.map((b) => ({ ...b, dir: "rev" as const })),
+  ];
+
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    handleBarChartZoom(e, zoomKey, viewMinTs, viewMaxTs, autoMinTs, autoMaxTs, PAD_L, plotW, W);
+    props.onRequestUpdate?.();
+  };
+  const onDblClick = (e: MouseEvent) => {
+    e.preventDefault();
+    if (barChartZoom.has(zoomKey)) {
+      barChartZoom.delete(zoomKey);
+      props.onRequestUpdate?.();
+    }
+  };
+  const onMousemove = (e: MouseEvent) => {
+    handleThroughputBucketHover(e, enriched, labels, viewMinTs, tsRange, PAD_L, plotW, W, chartId);
+  };
+
+  return html`
+    <div class="${blockClass}">
+      <div class="pm-chart-zoom-bar">
+        <span class="pm-chart-zoom-hint">
+          ${isZoomed
+            ? html`<strong>Zoomed:</strong> ${chartTimeLabel(viewMinTs)} –
+                ${chartTimeLabel(viewMaxTs)} · ${visibleFwd.length + visibleRev.length} buckets`
+            : html`<span class="pm-muted"
+                >Scroll to zoom, drag to pan, double-click to reset · 1s buckets</span
+              >`}
+        </span>
+        ${isZoomed
+          ? html`<button
+              type="button"
+              class="pm-chart-zoom-reset"
+              @click=${() => {
+                barChartZoom.delete(zoomKey);
+                props.onRequestUpdate?.();
+              }}
+            >
+              Reset zoom
+            </button>`
+          : nothing}
+      </div>
+      <div
+        class="pm-chart-wrap"
+        @mousedown=${(e: MouseEvent) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const svgW = (e.currentTarget as HTMLElement).getBoundingClientRect().width;
+          handleChartDragStart({
+            zoomKey,
+            curMinTs: viewMinTs,
+            curMaxTs: viewMaxTs,
+            autoMinTs,
+            autoMaxTs,
+            tsRange,
+            padL: PAD_L,
+            plotW,
+            chartW: W,
+            svgW,
+            clientX: e.clientX,
+            onRequestUpdate: props.onRequestUpdate,
+          });
+        }}
+        @wheel=${onWheel}
+        @dblclick=${onDblClick}
+        @mousemove=${(e: MouseEvent) => {
+          if (chartDrag) return;
+          onMousemove(e);
+        }}
+        @mouseleave=${(e: Event) => {
+          handleChartLeave(e);
+          clearChartDrag();
+        }}
+      >
+        <svg viewBox="0 0 ${W} ${H}" class="pm-chart-svg pm-chart-svg--tall">
+          ${fwdGrid.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="10" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${MID_Y}"
+            x2="${W - PAD_R}"
+            y2="${MID_Y}"
+            stroke="#94a3b8"
+            stroke-width="1.2"
+          />
+          <text
+            x="${PAD_L - 6}"
+            y="${MID_Y - 5}"
+            text-anchor="end"
+            fill="#64748b"
+            font-size="10"
+            font-family="monospace"
+          >
+            ${labels.fwdAxisLabel}
+          </text>
+          <text
+            x="${PAD_L - 6}"
+            y="${MID_Y + 11}"
+            text-anchor="end"
+            fill="#64748b"
+            font-size="10"
+            font-family="monospace"
+          >
+            ${labels.revAxisLabel}
+          </text>
+          ${revGrid.map(
+            (g) => svg`
+              <line x1="${PAD_L}" y1="${g.y}" x2="${W - PAD_R}" y2="${g.y}"
+                stroke="#d4d8e8" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6" />
+              <text x="${PAD_L - 6}" y="${g.y + 4}" text-anchor="end"
+                fill="#6b7280" font-size="10" font-family="monospace">${g.label}</text>
+            `,
+          )}
+          <line
+            x1="${PAD_L}"
+            y1="${PAD_T + plotH}"
+            x2="${W - PAD_R}"
+            y2="${PAD_T + plotH}"
+            stroke="#c4c9d6"
+            stroke-width="0.6"
+          />
+          ${xTicks.map(
+            (t) => svg`
+              <text x="${t.x}" y="${H - 8}" text-anchor="middle"
+                fill="#6b7280" font-size="11" font-family="monospace">${t.label}</text>
+            `,
+          )}
+          <polygon fill="${labels.fwdColor}" fill-opacity="0.8" stroke="none"
+            points="${fwdLinePoints}" />
+          <polyline
+            fill="none"
+            stroke="${labels.fwdColor}"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+            opacity="0.95"
+            points="${fwdLinePoints}"
+          />
+          <polygon fill="${labels.revColor}" fill-opacity="0.65" stroke="none"
+            points="${revLinePoints}" />
+          <polyline
+            fill="none"
+            stroke="${labels.revColor}"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+            opacity="0.95"
+            points="${revLinePoints}"
+          />
+        </svg>
+        <div class="pm-chart-tooltip" id="${chartId}-tip"></div>
+        <div class="pm-chart-crosshair" id="${chartId}-cross"></div>
+      </div>
+    </div>
+  `;
+}
+
+function handleThroughputBucketHover(
+  e: MouseEvent,
+  buckets: Array<ThroughputSecondBucket & { dir: "fwd" | "rev" }>,
+  labels: ThroughputChartLabels,
+  minTs: number,
+  tsRange: number,
+  padL: number,
+  plotW: number,
+  chartW: number,
+  chartId: string,
+) {
+  const wrap = e.currentTarget as HTMLElement;
+  const tip = wrap.querySelector(`#${chartId}-tip`) as HTMLElement | null;
+  const cross = wrap.querySelector(`#${chartId}-cross`) as HTMLElement | null;
+  if (!tip || !cross) return;
+
+  const rect = wrap.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const svgW = rect.width;
+  const xRatio = (mouseX - (padL / chartW) * svgW) / ((plotW / chartW) * svgW);
+  if (xRatio < 0 || xRatio > 1) {
+    handleChartLeave(e);
+    return;
+  }
+  const hoverTs = minTs + xRatio * tsRange;
+  let nearest = buckets[0];
+  let nearestDist = Infinity;
+  for (const b of buckets) {
+    const d = Math.abs(b.ts - hoverTs);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = b;
+    }
+  }
+  if (!nearest) return;
+  const fill = nearest.dir === "fwd" ? labels.fwdColor : labels.revColor;
+  const dirLabel = nearest.dir === "fwd" ? labels.fwdAxisLabel : labels.revAxisLabel;
+  tip.style.display = "block";
+  tip.style.left = `${mouseX + 10}px`;
+  tip.style.top = `${e.clientY - rect.top - 30}px`;
+  tip.innerHTML = `
+    <span style="display:inline-block;background:${fill};color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;margin-right:4px;">${dirLabel}</span>
+    <strong>${formatBitsPerSec(nearest.bytes)}</strong><br>
+    ${new Date(nearest.ts).toLocaleTimeString()} &middot; 1s bucket
+  `;
+  cross.style.display = "block";
+  const crossX = padL + ((nearest.ts - minTs) / tsRange) * plotW;
+  cross.style.left = `${(crossX / chartW) * svgW}px`;
+}
+
+/**
+ * "Throughput over time" subsection: a labeled 1-second-bucket throughput
+ * chart plus a two-entry direction legend. Bars are sourced from the same
+ * message/event bars that feed the Messages section, so a second's height
+ * equals the sum of those frames' bytes. Sits at the top of each tab's
+ * Throughput section, above the per-message stat rows.
+ */
+function renderThroughputOverTimeSection(
+  fwdBars: ReadonlyArray<{ ts: number; size: number }>,
+  revBars: ReadonlyArray<{ ts: number; size: number }>,
+  timeWindow: TimeWindow | undefined,
+  props: ProtocolMonitorProps,
+  labels: ThroughputChartLabels & { fwdLegend: string; revLegend: string },
+): TemplateResult {
+  const fwdBuckets = bucketBytesPerSecond(fwdBars);
+  const revBuckets = bucketBytesPerSecond(revBars);
+  return html`
+    <div class="pm-net-subsection-title" style="margin-top:6px;">
+      Throughput over time · 1s buckets (bitrate per direction, kbps)
+    </div>
+    ${renderThroughputTimeChartSvg(fwdBuckets, revBuckets, timeWindow, props, labels)}
+    <div class="pm-message-legend">
+      <span class="pm-message-legend-item">
+        <span class="pm-message-legend-swatch" style="background:${labels.fwdColor};"></span>
+        <span class="pm-message-legend-label">${labels.fwdLegend}</span>
+      </span>
+      <span class="pm-message-legend-item">
+        <span class="pm-message-legend-swatch" style="background:${labels.revColor};"></span>
+        <span class="pm-message-legend-label">${labels.revLegend}</span>
+      </span>
+    </div>
+  `;
+}
+
 function renderWireThroughputStatsSection(
   throughputSamples: ThroughputSample[],
   messages: MessagesDirection | null,

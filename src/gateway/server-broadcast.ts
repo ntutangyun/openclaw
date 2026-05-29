@@ -13,7 +13,7 @@ import type {
 } from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Pairing scope is for device-pairing handshakes only; chat transcript events
 // require operator-level session access. Pairing-scoped and node-role clients
@@ -45,12 +45,32 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.message": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
+  "protocol.trace": [READ_SCOPE],
+  // Protocol monitor — peer-reported reverse-direction rx samples.
+  "protocol.rx.samples": [READ_SCOPE],
+  // Dedicated ping protocol for protocol-monitor latency.
+  // - ping.gw-to-peer is a targeted ping the gateway sends to a single peer
+  //   (operator OR node) and must reach BOTH role types because nodes also
+  //   ACK pings. Uses an empty scope-required list so any role is allowed.
+  // - ping.metrics is the gateway's broadcast of new ping samples to UIs;
+  //   operator clients with read scope get it (parallel to protocol.trace).
+  "ping.gw-to-peer": [],
+  "ping.metrics": [READ_SCOPE],
+  // tcp.metrics is the gateway's broadcast of kernel TCP_INFO srtt samples
+  // (TCP-layer latency) to UIs; same audience as ping.metrics.
+  "tcp.metrics": [READ_SCOPE],
 };
 
 // Events that node-role sessions must receive even when the event's operator
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+const NODE_ALLOWED_EVENTS = new Set<string>([
+  "voicewake.changed",
+  "voicewake.routing.changed",
+  // Nodes need to ACK gateway-initiated pings so the gateway can measure
+  // gw→node reverse-direction latency.
+  "ping.gw-to-peer",
+]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   const fieldJSON = JSON.stringify({ [name]: value });
@@ -106,26 +126,30 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return;
     }
     const isTargeted = Boolean(targetConnIds);
-    if (shouldLogWs()) {
-      const logMeta: Record<string, unknown> = {
-        event,
-        seq: isTargeted ? "targeted" : "per-client",
-        clients: params.clients.size,
-        targets: targetConnIds ? targetConnIds.size : undefined,
-        dropIfSlow: opts?.dropIfSlow,
-        presenceVersion: opts?.stateVersion?.presence,
-        healthVersion: opts?.stateVersion?.health,
-      };
-      if (event === "agent") {
-        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
-      }
-      logWs("out", "event", logMeta);
+    // Always route through logWs so the protocol trace listener captures every
+    // outbound event frame regardless of console-log verbosity. Without this the
+    // protocol monitor's latency/throughput/TTFT charts are empty unless the
+    // operator happens to have WS console logging enabled.
+    const logMeta: Record<string, unknown> = {
+      event,
+      seq: isTargeted ? "targeted" : "per-client",
+      payload,
+      clients: params.clients.size,
+      targets: targetConnIds ? targetConnIds.size : undefined,
+      dropIfSlow: opts?.dropIfSlow,
+      presenceVersion: opts?.stateVersion?.presence,
+      healthVersion: opts?.stateVersion?.health,
+    };
+    if (event === "agent") {
+      Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
     }
+    logWs("out", "event", logMeta);
     let frameBase:
       | {
           eventJSON: string;
           payloadFragment: string;
           stateVersionFragment: string;
+          sentAtFragment: string;
         }
       | undefined;
     const getFrameBase = () => {
@@ -137,6 +161,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
             opts?.stateVersion === undefined
               ? ""
               : serializeFrameField("stateVersion", opts.stateVersion),
+          // Stamp peer-receivable wall-clock so the operator/node can compute
+          // gateway→peer one-way latency. See `protocol-traces.rx-report`.
+          sentAtFragment: `,"sentAt":${Date.now()}`,
         };
       }
       return frameBase;
@@ -182,7 +209,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         }
         const base = getFrameBase();
         const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
-        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;
+        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}${base.sentAtFragment}}`;
         c.socket.send(frame);
       } catch {
         /* ignore */

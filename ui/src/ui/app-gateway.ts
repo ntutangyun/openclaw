@@ -55,8 +55,12 @@ import {
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
   handlePingMetricsEvent,
+  handleTcpMetricsEvent,
   handleProtocolRxSamplesEvent,
   handleProtocolTraceEvent,
+  startBrowserPingSchedule,
+  stopBrowserPingSchedule,
+  handleBrowserPingGwToPeer,
 } from "./controllers/protocol-monitor.ts";
 import {
   applySessionsChangedEvent,
@@ -130,7 +134,7 @@ type GatewayHost = {
     | null;
   protocolAutoScroll: boolean;
   protocolDisabledTypes: Set<string>;
-  protocolSubTab: "usage" | "protocol";
+  protocolSubTab: "protocol" | "terminology" | "settings";
   protocolMonitoringPaused: boolean;
   protocolControllerStateVersion: number;
   reconcileWebPushState?: () => Promise<void> | void;
@@ -553,6 +557,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastError = null;
       host.lastErrorCode = null;
       host.hello = hello;
+      startBrowserPingSchedule(client);
       applySnapshot(host, hello);
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -615,6 +620,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void verifyPendingUpdateVersion(host, client);
     },
     onClose: ({ code, reason, error }) => {
+      stopBrowserPingSchedule();
       if (host.client !== client) {
         return;
       }
@@ -886,6 +892,16 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
   if (evt.event === "ping.metrics") {
     handlePingMetricsEvent(host, evt.payload);
+    return;
+  }
+  if (evt.event === "tcp.metrics") {
+    handleTcpMetricsEvent(host, evt.payload);
+    return;
+  }
+  if (evt.event === "ping.gw-to-peer") {
+    if (host.client) {
+      handleBrowserPingGwToPeer(host.client, evt.payload);
+    }
     return;
   }
 

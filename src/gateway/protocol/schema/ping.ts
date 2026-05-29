@@ -114,6 +114,40 @@ export const PingMetricsEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * TCP-layer latency, measured gateway-side from the kernel's TCP_INFO for each
+ * operator/node WebSocket (Linux only, read via `ss`). Unlike the app-layer
+ * ping above, this is a single round-trip estimate per connection (`srtt`,
+ * smoothed RTT in ms) — it is NOT direction-specific and excludes userland /
+ * protocol overhead, so it sits below the app-layer one-way numbers. The UI
+ * presents one-way ≈ srtt/2 to overlay it on the same latency chart. See
+ * `src/gateway/tcp-info-sampler.ts`.
+ */
+const TcpRttSampleSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    srttMs: Type.Number({ minimum: 0 }),
+    minRttMs: Type.Optional(Type.Number({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TcpMetricsEventSchema = Type.Object(
+  {
+    // operator / node = a peer WebSocket (matched by its socket addr:port).
+    // agent-model = the gateway's outbound TCP to the LLM provider endpoint
+    // (matched by the configured provider baseUrl host:port). The latter has no
+    // connId since it isn't a gateway peer connection.
+    source: Type.String({ enum: ["operator", "node", "agent-model"] }),
+    connId: Type.Optional(Type.String()),
+    samples: Type.Array(TcpRttSampleSchema),
+  },
+  { additionalProperties: false },
+);
+
+export type TcpRttSample = Static<typeof TcpRttSampleSchema>;
+export type TcpMetricsEvent = Static<typeof TcpMetricsEventSchema>;
+
 export type PingSample = Static<typeof PingSampleSchema>;
 export type PingPeerToGwParams = Static<typeof PingPeerToGwParamsSchema>;
 export type PingPeerToGwResult = Static<typeof PingPeerToGwResultSchema>;

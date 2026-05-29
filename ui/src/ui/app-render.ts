@@ -114,6 +114,7 @@ import {
   loadProtocolTraces,
   purgeAllProtocolMonitorState,
 } from "./controllers/protocol-monitor.ts";
+import { loadUsage } from "./controllers/usage.ts";
 import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
@@ -2981,7 +2982,10 @@ export function renderApp(state: AppViewState) {
                 onToggleAutoScroll: (v) => (state.protocolAutoScroll = v),
                 onSelectTrace: (t) => (state.protocolSelectedTrace = t),
                 onClearSelection: () => (state.protocolSelectedTrace = null),
-                onRefresh: () => loadProtocolTraces(state),
+                onRefresh: () => {
+                  void loadProtocolTraces(state);
+                  void loadUsage(state);
+                },
                 onExport: () => {
                   void exportProtocolMonitorHtml(state);
                 },

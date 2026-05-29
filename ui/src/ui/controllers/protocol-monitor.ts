@@ -506,6 +506,20 @@ export type NetworkStats = {
    * client and reported back via `protocol-traces.rx-report`.
    */
   gatewayNodeOneWayLatency: LatencyStats;
+  /**
+   * TCP-layer latency (kernel TCP_INFO srtt, sampled gateway-side via `ss`),
+   * presented as one-way ≈ srtt/2. One series per link — TCP RTT is a single
+   * round-trip per connection, not direction-specific.
+   */
+  operatorGatewayTcpLatency: LatencyStats;
+  nodeGatewayTcpLatency: LatencyStats;
+  /**
+   * Agent → Model TCP-layer latency: kernel srtt of the gateway's outbound
+   * connection to the LLM provider endpoint. Sparse (model sockets are pooled /
+   * transient) and measures only the network floor — TTFT/inference dominates
+   * the app-layer agent↔model timing.
+   */
+  agentModelTcpLatency: LatencyStats;
 };
 
 // ---------------------------------------------------------------------------
@@ -718,6 +732,8 @@ export const DEFAULT_INGEST_BLOCKLIST = new Set<string>([
   // Gateway → peer ping event + gateway → all-UIs sample broadcast.
   "ping.gw-to-peer",
   "ping.metrics",
+  // Gateway → all-UIs TCP-layer srtt sample broadcast.
+  "tcp.metrics",
 ]);
 
 /** Returns true if a trace record should be dropped before ingestion. */
@@ -757,6 +773,8 @@ export const MESSAGES_SELF_REFERENTIAL_BLOCKLIST = new Set<string>([
   "ping.gw-to-peer.ack",
   "ping.metrics",
   "ping.metrics-report",
+  // TCP-layer srtt sample broadcast (measurement mechanism).
+  "tcp.metrics",
   // Clock-sync mechanism (high frequency, used to derive sentAt offsets).
   "time.sync",
 ]);
@@ -1171,6 +1189,27 @@ export function computeNetworkStats(
     ...agentLlmRaw,
     ttft: filterLatencyByModel(agentLlmRaw.ttft, modelFilter),
   };
+
+  // Per-direction messages from the persistent store — survives ring-buffer
+  // eviction that would otherwise starve the throughput section after a burst
+  // of SSE deltas fills the shared 1000-entry trace buffer.
+  const opGwFwd = buildMessagesDirection(
+    messageStore.opGw.forward,
+    getLatestPingOneWayMs("operator", "forward"),
+  );
+  const opGwRev = buildMessagesDirection(
+    messageStore.opGw.reverse,
+    getLatestPingOneWayMs("operator", "reverse"),
+  );
+  const nodeGwFwd = buildMessagesDirection(
+    messageStore.nodeGw.forward,
+    getLatestPingOneWayMs("node", "forward"),
+  );
+  const nodeGwRev = buildMessagesDirection(
+    messageStore.nodeGw.reverse,
+    getLatestPingOneWayMs("node", "reverse"),
+  );
+
   return {
     totalBytesIn: netState.totalBytesIn,
     totalBytesOut: netState.totalBytesOut,
@@ -1183,30 +1222,39 @@ export function computeNetworkStats(
     gatewayOperatorOneWayLatency: computePingLatencyStats("operator", "reverse"),
     nodeGatewayOneWayLatency: computePingLatencyStats("node", "forward"),
     gatewayNodeOneWayLatency: computePingLatencyStats("node", "reverse"),
-    // Per-message throughput stats. peer→gw uses trace.oneWayLatencyMs
-    // (gateway-stamped at recv); gw→peer reads payloadSize+latencyMs from
-    // peer-reported rx-samples directly. Either way, per-message — no
-    // per-window ping smearing — and no trace↔rx-sample join needed.
+    operatorGatewayTcpLatency: computeTcpLatencyStats("operator"),
+    nodeGatewayTcpLatency: computeTcpLatencyStats("node"),
+    agentModelTcpLatency: computeTcpLatencyStats("agentModel"),
+    // Per-message throughput stats.
+    //
+    // Forward (peer→gw): sourced from the persistent message store so the
+    // throughput cards don't collapse to zero after an SSE burst floods the
+    // shared trace ring buffer.  Each message entry carries oneWayLatencyMs
+    // from the gateway's own capture (recvTs − frame.sentAt).
+    //
+    // Reverse (gw→peer): the browser Control UI does not report per-frame
+    // rx-samples (unlike the Node.js client), so we derive a per-message
+    // throughput estimate from message store payloads divided by the latest
+    // reverse-ping one-way latency.  Node↔gw reverse still uses peer-reported
+    // rx-samples when available.
     operatorGatewayThroughputStats: {
-      forward: buildThroughputStats(
-        computePeerToGwThroughput(traces, "operator", getLatestPingOneWayMs("operator", "forward")),
-      ),
-      reverse: buildThroughputStats(computeGwToPeerThroughput(rxSamplesOperator)),
+      forward: buildThroughputStats(opGwFwd.throughputSamples),
+      reverse: buildThroughputStats(opGwRev.throughputSamples),
     },
     gatewayNodeThroughputStats: {
-      forward: buildThroughputStats(
-        computePeerToGwThroughput(traces, "node", getLatestPingOneWayMs("node", "forward")),
+      forward: buildThroughputStats(nodeGwFwd.throughputSamples),
+      // Prefer peer-reported rx-samples (a Node.js client measures gw→node
+      // per-frame latency and reports it); when the node doesn't report them the
+      // set is empty, so fall back to the SAME message-store estimate operator
+      // reverse uses (bytes ÷ latest reverse-ping) instead of showing nothing.
+      reverse: buildThroughputStats(
+        rxSamplesNode.length > 0
+          ? computeGwToPeerThroughput(rxSamplesNode)
+          : nodeGwRev.throughputSamples,
       ),
-      reverse: buildThroughputStats(computeGwToPeerThroughput(rxSamplesNode)),
     },
-    operatorGatewayMessages: {
-      forward: buildMessagesDirection(messageStore.opGw.forward),
-      reverse: buildMessagesDirection(messageStore.opGw.reverse),
-    },
-    gatewayNodeMessages: {
-      forward: buildMessagesDirection(messageStore.nodeGw.forward),
-      reverse: buildMessagesDirection(messageStore.nodeGw.reverse),
-    },
+    operatorGatewayMessages: { forward: opGwFwd, reverse: opGwRev },
+    gatewayNodeMessages: { forward: nodeGwFwd, reverse: nodeGwRev },
   };
 }
 
@@ -1346,16 +1394,25 @@ function resolveMessageType(t: ProtocolTraceRecord): string | null {
  * Read the per-direction message buffer (populated at ingest time, decoupled
  * from the shared MAX_VISIBLE trace buffer) and roll it up into cards + bars.
  */
-function buildMessagesDirection(buf: MessageEntry[]): MessagesDirection {
+function buildMessagesDirection(
+  buf: MessageEntry[],
+  fallbackPingMs?: number | null,
+): MessagesDirection {
   const cardMap = new Map<string, MessageTypeCard>();
   const bars: MessageBar[] = [];
   const throughputSamples: ThroughputSample[] = [];
   for (const e of buf) {
     bars.push({ ts: e.ts, size: e.size, type: e.type });
-    if (e.oneWayLatencyMs !== undefined && e.oneWayLatencyMs > 0) {
+    const oneWayMs =
+      e.oneWayLatencyMs !== undefined && e.oneWayLatencyMs > 0
+        ? e.oneWayLatencyMs
+        : fallbackPingMs && fallbackPingMs > 0
+          ? fallbackPingMs
+          : null;
+    if (oneWayMs !== null && oneWayMs > 0) {
       throughputSamples.push({
         ts: e.ts,
-        bytesPerSec: (e.size / e.oneWayLatencyMs) * 1000,
+        bytesPerSec: (e.size / oneWayMs) * 1000,
         rawBytes: e.size,
       });
     }
@@ -1452,6 +1509,18 @@ function computePingLatencyStats(
   return buildLatencyStats(samples);
 }
 
+/**
+ * Build LatencyStats from TCP-layer srtt samples. srtt is a round-trip kernel
+ * estimate (one per connection, not direction-specific); we present it as
+ * one-way ≈ srtt/2 to overlay on the same chart as the app-layer one-way
+ * series. See `src/gateway/tcp-info-sampler.ts`.
+ */
+function computeTcpLatencyStats(source: TcpSampleKey): LatencyStats {
+  const arr = tcpSamples[source];
+  const samples: LatencySample[] = arr.map((s) => ({ ts: s.ts, latencyMs: s.srttMs / 2 }));
+  return buildLatencyStats(samples);
+}
+
 function buildLatencyStats(samples: LatencySample[]): LatencyStats {
   if (samples.length === 0) {
     return {
@@ -1538,6 +1607,16 @@ const genCache: LatencySample[] = [];
 const genRunState = new Map<string, GenRunState>();
 const genProcessed = new Set<string>();
 
+// Compact per-direction message-store entry used by the Messages section and
+// per-message throughput computation.  Defined early so throughput helpers can
+// reference it.
+type MessageEntry = {
+  ts: number;
+  size: number;
+  type: string;
+  oneWayLatencyMs?: number;
+};
+
 // Reverse-direction (gateway → peer) rx-latency samples, fed by
 // `handleProtocolRxSamplesEvent`. Per-source so we can chart the operator and
 // node legs separately. Capped to bound memory under long uptime.
@@ -1568,6 +1647,20 @@ const pingSamples = {
 };
 const PING_SAMPLE_CAP = 1000;
 
+// TCP-layer latency samples, fed by `handleTcpMetricsEvent` from the gateway's
+// `tcp.metrics` broadcast (kernel TCP_INFO srtt via `ss`). Single round-trip
+// per connection, so unlike pingSamples there is no forward/reverse split.
+type TcpSampleEntry = { ts: number; srttMs: number; minRttMs?: number };
+const tcpSamples = {
+  operator: [] as TcpSampleEntry[],
+  node: [] as TcpSampleEntry[],
+  // Gateway → LLM provider endpoint (agent↔model leg). Sparse: only populated
+  // while a model connection is established at sample time.
+  agentModel: [] as TcpSampleEntry[],
+};
+type TcpSampleKey = keyof typeof tcpSamples;
+const TCP_SAMPLE_CAP = 1000;
+
 // Compact per-direction message store for the Protocol Monitor's "Messages"
 // section. Stores only {ts, size, type} per wire-pair message — far smaller
 // than a full ProtocolTraceRecord — so it can hold ~10-30× more history than
@@ -1580,21 +1673,6 @@ const PING_SAMPLE_CAP = 1000;
 // agent↔llm directions don't get a store here because they're not "wire"
 // traffic and would be dominated by SSE deltas anyway; their throughput /
 // latency / TTFT calculations still iterate `protocolTraces` directly.
-/**
- * Persistent per-direction message-store entry. `size` is the estimated
- * **on-wire frame size** in bytes (envelope + payload), NOT just the inner
- * `payloadSize`. The Messages cards/bars and the wire-pair Throughput
- * section both read from this field, so the user-facing numbers in those
- * two sections always match. `oneWayLatencyMs` is carried through so the
- * Throughput section can compute per-message bytes/sec without a second
- * pass over the trace ring buffer.
- */
-type MessageEntry = {
-  ts: number;
-  size: number;
-  type: string;
-  oneWayLatencyMs?: number;
-};
 const MESSAGE_STORE_CAP = 3000;
 const messageStore = {
   opGw: { forward: [] as MessageEntry[], reverse: [] as MessageEntry[] },
@@ -2187,6 +2265,13 @@ export type ControllerStoresSnapshot = {
     operator: SerializedRxLatencySample[];
     node: SerializedRxLatencySample[];
   };
+  /** tcpSamples: per-source TCP-layer srtt. Optional — absent in older exports. */
+  tcp?: {
+    operator: SerializedTcpSample[];
+    node: SerializedTcpSample[];
+    /** agent↔model leg; optional for exports captured before it existed. */
+    agentModel?: SerializedTcpSample[];
+  };
 };
 
 type SerializedMessageEntry = {
@@ -2202,6 +2287,7 @@ type SerializedAgentLlmEvent = {
   detail?: string;
 };
 type SerializedPingSample = { ts: number; oneWayMs: number };
+type SerializedTcpSample = { ts: number; srttMs: number; minRttMs?: number };
 type SerializedRxLatencySample = {
   ts: number;
   latencyMs: number;
@@ -2362,6 +2448,11 @@ function snapshotControllerStores(): ControllerStoresSnapshot {
       operator: rxSamplesOperator.map((s) => ({ ...s })),
       node: rxSamplesNode.map((s) => ({ ...s })),
     },
+    tcp: {
+      operator: tcpSamples.operator.map((s) => ({ ...s })),
+      node: tcpSamples.node.map((s) => ({ ...s })),
+      agentModel: tcpSamples.agentModel.map((s) => ({ ...s })),
+    },
   };
 }
 
@@ -2382,6 +2473,9 @@ function clearControllerStores(): void {
   pingSamples.node.reverse.length = 0;
   rxSamplesOperator.length = 0;
   rxSamplesNode.length = 0;
+  tcpSamples.operator.length = 0;
+  tcpSamples.node.length = 0;
+  tcpSamples.agentModel.length = 0;
 }
 
 function rehydrateControllerStores(snap: ControllerStoresSnapshot): void {
@@ -2423,6 +2517,17 @@ function rehydrateControllerStores(snap: ControllerStoresSnapshot): void {
   }
   for (const s of snap.rxSamples.node) {
     rxSamplesNode.push({ ...s });
+  }
+  if (snap.tcp) {
+    for (const s of snap.tcp.operator) {
+      tcpSamples.operator.push({ ...s });
+    }
+    for (const s of snap.tcp.node) {
+      tcpSamples.node.push({ ...s });
+    }
+    for (const s of snap.tcp.agentModel ?? []) {
+      tcpSamples.agentModel.push({ ...s });
+    }
   }
 }
 
@@ -2624,6 +2729,47 @@ export function handlePingMetricsEvent(host: ProtocolMonitorHost, payload: unkno
 }
 
 /**
+ * Append a batch of TCP-layer srtt samples to the per-source sliding window.
+ * Fed by the gateway's `tcp.metrics` broadcast event.
+ */
+export function handleTcpMetricsEvent(host: ProtocolMonitorHost, payload: unknown) {
+  if (host.protocolMonitoringPaused) {
+    return;
+  }
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const data = payload as { source?: unknown; samples?: unknown };
+  if (data.source !== "operator" && data.source !== "node" && data.source !== "agent-model") {
+    return;
+  }
+  if (!Array.isArray(data.samples)) {
+    return;
+  }
+  // Wire source "agent-model" maps to the camelCase store key.
+  const key: TcpSampleKey = data.source === "agent-model" ? "agentModel" : data.source;
+  const target = tcpSamples[key];
+  for (const raw of data.samples) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const s = raw as { ts?: unknown; srttMs?: unknown; minRttMs?: unknown };
+    if (typeof s.ts !== "number" || typeof s.srttMs !== "number") {
+      continue;
+    }
+    target.push({
+      ts: s.ts,
+      srttMs: s.srttMs,
+      minRttMs: typeof s.minRttMs === "number" ? s.minRttMs : undefined,
+    });
+  }
+  if (target.length > TCP_SAMPLE_CAP) {
+    target.splice(0, target.length - TCP_SAMPLE_CAP);
+  }
+  host.protocolControllerStateVersion = (host.protocolControllerStateVersion ?? 0) + 1;
+}
+
+/**
  * Append a peer-reported rx-latency batch to the per-source sliding window.
  * Called from the WS event dispatcher when `protocol.rx.samples` arrives.
  * Filtering by task-relevance happens at compute time (`computeRxLatencyStats`)
@@ -2684,6 +2830,98 @@ export function handleProtocolRxSamplesEvent(host: ProtocolMonitorHost, payload:
   if (target.length > RX_SAMPLE_CAP) {
     target.splice(0, target.length - RX_SAMPLE_CAP);
   }
+  // Bump reactive version so Lit re-renders the protocol monitor view; the
+  // rx-sample arrays live in module state that Lit can't observe.
+  host.protocolControllerStateVersion = (host.protocolControllerStateVersion ?? 0) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// Browser-side ping protocol for the Control UI
+//
+// The Node.js client (src/gateway/client.ts) implements the full ping protocol
+// so node↔gateway latency works out of the box.  The browser Control UI had no
+// ping implementation — it passively consumed `ping.metrics` broadcasts but
+// never sent pings or responded to them, so the operator↔gateway latency
+// section was permanently empty.  This module fills that gap.
+//
+// Forward (browser → gateway): every 10 s send `ping.peer-to-gw` RPC, compute
+//   RTT, and report via `ping.metrics-report`.
+// Reverse (gateway → browser): handle `ping.gw-to-peer` events, immediately
+//   ACK via `ping.gw-to-peer.ack`.
+// ---------------------------------------------------------------------------
+
+const BROWSER_PING_INTERVAL_MS = 10_000;
+
+let browserPingTimer: ReturnType<typeof setInterval> | null = null;
+let browserPingInFlight = false;
+let browserPingClient: GatewayBrowserClient | null = null;
+
+async function runBrowserPingCycle(): Promise<void> {
+  const client = browserPingClient;
+  if (!client || browserPingInFlight) return;
+  try {
+    // client.ws is BrowserWebSocket; check readyState generically
+    const ws = (client as unknown as { ws?: { readyState?: number } }).ws;
+    if (!ws || ws.readyState !== 1 /* WebSocket.OPEN */) return;
+  } catch {
+    return;
+  }
+  browserPingInFlight = true;
+  try {
+    const peerT0 = Date.now();
+    const result = await client.request<{
+      peerT0: number;
+      gatewayProcessingMs: number;
+    }>("ping.peer-to-gw", { peerT0 });
+    const peerT3 = Date.now();
+    if (result && typeof result.gatewayProcessingMs === "number") {
+      const wireRttMs = Math.max(0, peerT3 - peerT0 - result.gatewayProcessingMs);
+      await client
+        .request("ping.metrics-report", {
+          samples: [{ ts: peerT3, oneWayMs: wireRttMs / 2 }],
+        })
+        .catch(() => {});
+    }
+  } catch {
+    // best-effort; gateway will handle next cycle
+  } finally {
+    browserPingInFlight = false;
+  }
+}
+
+export function handleBrowserPingGwToPeer(
+  client: GatewayBrowserClient,
+  payload: unknown,
+): void {
+  const peerT1 = Date.now();
+  if (!payload || typeof payload !== "object") return;
+  const data = payload as { pingId?: unknown; gatewayT0?: unknown };
+  if (typeof data.pingId !== "string" || typeof data.gatewayT0 !== "number") return;
+  const peerT2 = Date.now();
+  void client
+    .request("ping.gw-to-peer.ack", {
+      pingId: data.pingId,
+      gatewayT0: data.gatewayT0,
+      peerProcessingMs: Math.max(0, peerT2 - peerT1),
+    })
+    .catch(() => {});
+}
+
+export function startBrowserPingSchedule(client: GatewayBrowserClient): void {
+  stopBrowserPingSchedule();
+  browserPingClient = client;
+  browserPingTimer = setInterval(() => {
+    void runBrowserPingCycle();
+  }, BROWSER_PING_INTERVAL_MS);
+}
+
+export function stopBrowserPingSchedule(): void {
+  if (browserPingTimer) {
+    clearInterval(browserPingTimer);
+    browserPingTimer = null;
+  }
+  browserPingClient = null;
+  browserPingInFlight = false;
 }
 
 export async function clearProtocolTraces(host: ProtocolMonitorHost) {
@@ -2692,28 +2930,28 @@ export async function clearProtocolTraces(host: ProtocolMonitorHost) {
   }
   try {
     await host.client.request("protocol-traces.clear");
-    host.protocolTraces = [];
-    rxSamplesOperator.length = 0;
-    rxSamplesNode.length = 0;
-    pingSamples.operator.forward.length = 0;
-    pingSamples.operator.reverse.length = 0;
-    pingSamples.node.forward.length = 0;
-    pingSamples.node.reverse.length = 0;
-    messageStore.opGw.forward.length = 0;
-    messageStore.opGw.reverse.length = 0;
-    messageStore.nodeGw.forward.length = 0;
-    messageStore.nodeGw.reverse.length = 0;
-    recordedMessageIds.clear();
-    llmCallStore.clear();
-    lastCallByRunId.clear();
-    recordedLlmCallTraceIds.clear();
-    agentLlmEventStore.length = 0;
-    recordedAgentLlmEventIds.clear();
-    host.protocolSelectedTrace = null;
-    clearLatencyCaches();
   } catch {
-    // ignore
+    // Server clear may fail (e.g. scope restriction) — still reset local state.
   }
+  host.protocolTraces = [];
+  rxSamplesOperator.length = 0;
+  rxSamplesNode.length = 0;
+  pingSamples.operator.forward.length = 0;
+  pingSamples.operator.reverse.length = 0;
+  pingSamples.node.forward.length = 0;
+  pingSamples.node.reverse.length = 0;
+  messageStore.opGw.forward.length = 0;
+  messageStore.opGw.reverse.length = 0;
+  messageStore.nodeGw.forward.length = 0;
+  messageStore.nodeGw.reverse.length = 0;
+  recordedMessageIds.clear();
+  llmCallStore.clear();
+  lastCallByRunId.clear();
+  recordedLlmCallTraceIds.clear();
+  agentLlmEventStore.length = 0;
+  recordedAgentLlmEventIds.clear();
+  host.protocolSelectedTrace = null;
+  clearLatencyCaches();
 }
 
 /**

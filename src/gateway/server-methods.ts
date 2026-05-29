@@ -38,6 +38,7 @@ import { modelsHandlers } from "./server-methods/models.js";
 import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { pingHandlers } from "./server-methods/ping.js";
 import { pluginHostHookHandlers } from "./server-methods/plugin-host-hooks.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { restartHandlers } from "./server-methods/restart.js";
@@ -72,6 +73,10 @@ function authorizeGatewayMethod(
     return null;
   }
   if (method === "health") {
+    return null;
+  }
+  // Ping protocol methods are telemetry-only — allow both operator and node.
+  if (method.startsWith("ping.")) {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -115,6 +120,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...modelsHandlers,
   ...modelsAuthStatusHandlers,
   ...nativeHookRelayHandlers,
+  ...pingHandlers,
   ...pluginHostHookHandlers,
   ...configHandlers,
   ...wizardHandlers,

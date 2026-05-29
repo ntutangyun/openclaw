@@ -432,6 +432,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "usage":
         await loadUsage(app);
         break;
+      case "protocolMonitor":
+        await loadUsage(app);
+        break;
       case "sessions":
         await loadSessions(app);
         break;

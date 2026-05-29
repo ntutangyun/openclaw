@@ -24,6 +24,9 @@ ARG OPENCLAW_MARKITDOWN_EXTRAS=all
 # https://pypi.tuna.tsinghua.edu.cn/simple for the Tsinghua PyPI mirror.
 ARG OPENCLAW_NPM_REGISTRY=""
 ARG OPENCLAW_PIP_INDEX_URL=""
+# Debian/Ubuntu apt mirror for faster downloads in China (e.g. https://mirrors.tuna.tsinghua.edu.cn/debian).
+# When set, replaces the default deb.debian.org URIs before the first apt-get invocation.
+ARG OPENCLAW_APT_MIRROR=""
 ARG OPENCLAW_PNPM_FETCH_TIMEOUT=10000
 ARG OPENCLAW_PNPM_FETCH_RETRIES=0
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
@@ -190,12 +193,34 @@ FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 ARG OPENCLAW_NPM_REGISTRY
 ARG OPENCLAW_PIP_INDEX_URL
+ARG OPENCLAW_APT_MIRROR
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_APT_MIRROR
+ARG OPENCLAW_NPM_REGISTRY
+ARG OPENCLAW_PIP_INDEX_URL
+
+# Configure apt mirror for faster downloads (e.g. China).
+# Replaces the default deb.debian.org / security.debian.org URIs.
+# If an HTTPS mirror is used, temporarily disable TLS verification until
+# ca-certificates is installed by the next step (chicken-and-egg: the slim
+# base image ships without CA certs).
+RUN if [ -n "${OPENCLAW_APT_MIRROR}" ]; then \
+      rm -f /etc/apt/sources.list.d/debian.sources && \
+      echo "deb ${OPENCLAW_APT_MIRROR} bookworm main contrib non-free" > /etc/apt/sources.list && \
+      echo "deb ${OPENCLAW_APT_MIRROR} bookworm-updates main contrib non-free" >> /etc/apt/sources.list && \
+      echo "deb ${OPENCLAW_APT_MIRROR}-security bookworm-security main contrib non-free" >> /etc/apt/sources.list && \
+      case "${OPENCLAW_APT_MIRROR}" in \
+        https://*) \
+          mkdir -p /etc/apt/apt.conf.d && \
+          echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99-trust-mirror; \
+          ;; \
+      esac; \
+    fi
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -215,25 +240,34 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# `iproute2` provides `ss`, which the Protocol Monitor's TCP-layer latency
+# sampler shells out to for per-socket kernel TCP_INFO (srtt). It installs to
+# /usr/sbin/ss; the sampler resolves that absolute path since /usr/sbin is not
+# on the non-root gateway user's PATH.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
-    update-ca-certificates
+      ca-certificates curl git hostname iproute2 lsof openssl procps python3 tini && \
+    update-ca-certificates && \
+    rm -f /etc/apt/apt.conf.d/99-trust-mirror
 
-RUN chown node:node /app
+# Rename base image 'node' user → 'gateway' for clearer container identity.
+RUN usermod -l gateway -d /home/gateway -m node && \
+    groupmod -n gateway node
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
-COPY --from=runtime-assets --chown=node:node /app/patches ./patches
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+RUN chown gateway:gateway /app
+
+COPY --from=runtime-assets --chown=gateway:gateway /app/dist ./dist
+COPY --from=runtime-assets --chown=gateway:gateway /app/node_modules ./node_modules
+COPY --from=runtime-assets --chown=gateway:gateway /app/package.json .
+COPY --from=runtime-assets --chown=gateway:gateway /app/pnpm-workspace.yaml .
+COPY --from=runtime-assets --chown=gateway:gateway /app/patches ./patches
+COPY --from=runtime-assets --chown=gateway:gateway /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=gateway:gateway /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets --chown=gateway:gateway /app/skills ./skills
+COPY --from=runtime-assets --chown=gateway:gateway /app/docs ./docs
+COPY --from=runtime-assets --chown=gateway:gateway /app/qa ./qa
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -278,7 +312,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         apt-get update && \
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-pip; \
       fi && \
-      python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
+      PIP_INDEX_ARGS=""; \
+      if [ -n "${OPENCLAW_PIP_INDEX_URL}" ]; then \
+        PIP_INDEX_ARGS="-i ${OPENCLAW_PIP_INDEX_URL}"; \
+      fi && \
+      python3 -m pip install --no-cache-dir --break-system-packages $PIP_INDEX_ARGS $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi
 
 # Install Python environment and document processing tools.
@@ -309,7 +347,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/gateway/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
@@ -317,7 +355,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
+      chown -R gateway:gateway "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
@@ -364,16 +402,16 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
 # Pre-create the default state dir so first-run Docker named volumes mounted
-# here inherit node ownership instead of root-owned state.
-RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+# here inherit gateway ownership instead of root-owned state.
+RUN install -d -m 0700 -o gateway -g gateway /home/gateway/.openclaw && \
+    stat -c '%U:%G %a' /home/gateway/.openclaw | grep -qx 'gateway:gateway 700'
 
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
+# The node:24-bookworm image user is renamed to 'gateway' (uid 1000).
 # This reduces the attack surface by preventing container escape via root privileges
-USER node
+USER gateway
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

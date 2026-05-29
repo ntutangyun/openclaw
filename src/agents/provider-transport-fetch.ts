@@ -4,6 +4,7 @@ import {
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import { recordModelEndpoint } from "../infra/model-endpoint-registry.js";
 import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
@@ -530,6 +531,10 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    // Record the real endpoint so the Protocol Monitor's TCP-layer sampler can
+    // attribute the agent↔model socket (covers built-in providers like openai
+    // that carry no baseUrl in config).
+    recordModelEndpoint(url);
     const policy = resolveModelTransportSsrFPolicy({
       model,
       url,

@@ -589,6 +589,23 @@ export class OpenClawApp extends LitElement {
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
 
+  // Protocol monitor
+  @state() protocolTraces: import("./controllers/protocol-monitor.js").ProtocolTraceRecord[] = [];
+  @state() protocolMonitorLoading = false;
+  @state() protocolSelectedTrace:
+    | import("./controllers/protocol-monitor.js").ProtocolTraceRecord
+    | import("./controllers/protocol-monitor.js").CoalescedGroup
+    | null = null;
+  @state() protocolAutoScroll = true;
+  @state() protocolDisabledTypes: Set<string> = new Set();
+  @state() protocolSubTab: "protocol" | "terminology" | "settings" = "protocol";
+  @state() protocolMonitoringPaused = false;
+  @state() protocolControllerStateVersion = 0;
+  @state() protocolModelFilter: string | null = null;
+  @state() protocolNetworkDirection = "agent-llm";
+  @state() protocolNetworkExplainer: string | null = null;
+  @state() protocolUsageExplainer: string | null = null;
+
   client: GatewayBrowserClient | null = null;
   chatScrollFrame: number | null = null;
   chatScrollTimeout: number | null = null;
