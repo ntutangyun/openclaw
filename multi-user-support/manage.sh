@@ -16,6 +16,25 @@ DEFAULT_IMAGE="${OPENCLAW_IMAGE:-openclaw:local}"
 # Port allocation: each user gets a pair (gateway, bridge) starting from a base
 BASE_GATEWAY_PORT="${OPENCLAW_MULTI_BASE_PORT:-19000}"
 
+# Gateway container timezone. The gateway buckets usage by its process timezone
+# (session-cost-usage formatDayKey), while the Control UI Usage picker defaults
+# to the browser's local "today" — so a UTC gateway makes UTC+N users see "no
+# activity" for usage recorded near the local-day boundary. Default to the host
+# timezone so the two align. Override with OPENCLAW_GATEWAY_TZ.
+detect_host_tz() {
+  if [[ -n "${OPENCLAW_GATEWAY_TZ:-}" ]]; then
+    printf '%s' "$OPENCLAW_GATEWAY_TZ"
+  elif [[ -f /etc/timezone ]]; then
+    tr -d '[:space:]' < /etc/timezone
+  elif [[ -L /etc/localtime ]]; then
+    readlink -f /etc/localtime | sed 's#.*/zoneinfo/##'
+  else
+    printf 'UTC'
+  fi
+}
+GATEWAY_TZ="$(detect_host_tz)"
+[[ -n "$GATEWAY_TZ" ]] || GATEWAY_TZ="UTC"
+
 # China-friendly mirrors (overridable via env vars).
 # Docker Hub proxy: used as a prefix for base images, e.g. <mirror>/library/node:24-bookworm.
 # Common options: docker.1ms.run, docker.m.daocloud.io.
@@ -252,6 +271,11 @@ services:
     environment:
       HOME: /home/gateway
       TERM: xterm-256color
+      # Run the gateway in the host timezone so the Usage tab's local-"today"
+      # picker matches how usage is bucketed (session-cost-usage uses the
+      # process timezone). Without this the gateway runs UTC and UTC+N users see
+      # "no activity" for usage recorded near the local-day boundary.
+      TZ: "${GATEWAY_TZ}"
       OPENCLAW_GATEWAY_TOKEN: \${OPENCLAW_GATEWAY_TOKEN}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: \${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       # ── Verbose logging & diagnostics ──
@@ -433,6 +457,43 @@ ensure_openai_embedded_runtime() {
     echo "==> Pinned OpenAI models to the embedded runtime for '$username' (protocol-monitor); recreating gateway to apply..."
     compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
   fi
+}
+
+# Backfill the gateway-service TZ env into an existing user's compose file so
+# the gateway buckets usage in the host timezone (Usage tab local-"today"
+# alignment). New users get TZ from the compose template; this covers users
+# provisioned before TZ was added. Idempotent; patches compose then recreates.
+ensure_gateway_timezone() {
+  local username="$1"
+  local compose_file
+  compose_file="$(user_compose_file "$username")"
+  [[ -f "$compose_file" ]] || return 0
+  # Already has a TZ env line anywhere in the compose → nothing to do.
+  if grep -qE '^[[:space:]]*TZ:[[:space:]]' "$compose_file"; then
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  # Insert `TZ: "<host-tz>"` as the first entry of the gateway service's
+  # environment block (the first `environment:` line; the gateway service is
+  # declared before the cli service in the template), matching the 2-space
+  # child indent relative to the `environment:` key.
+  awk -v tz="$GATEWAY_TZ" '
+    { print }
+    !inserted && $0 ~ /^[[:space:]]*environment:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/)
+      indent = substr($0, 1, RLENGTH)
+      print indent "  TZ: \"" tz "\""
+      inserted = 1
+    }
+  ' "$compose_file" > "$tmp" || { rm -f "$tmp"; return 0; }
+  if ! grep -qE '^[[:space:]]*TZ:[[:space:]]' "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  mv "$tmp" "$compose_file"
+  echo "==> Set gateway timezone to ${GATEWAY_TZ} for '${username}' (usage-window alignment); recreating gateway to apply..."
+  compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
 }
 
 ensure_llm_idle_timeout() {
@@ -974,6 +1035,7 @@ cmd_start() {
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
   ensure_openai_embedded_runtime "$username"
+  ensure_gateway_timezone "$username"
   ensure_agents_skills_allow "$username"
   echo "Gateway started."
 
@@ -1058,6 +1120,7 @@ cmd_restart() {
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
   ensure_openai_embedded_runtime "$username"
+  ensure_gateway_timezone "$username"
   ensure_agents_skills_allow "$username"
   echo "Gateway restarted."
 }
@@ -1072,6 +1135,7 @@ cmd_start_all() {
     ensure_tools_deny "$name"
     ensure_llm_idle_timeout "$name"
     ensure_openai_embedded_runtime "$name"
+    ensure_gateway_timezone "$name"
     ensure_agents_skills_allow "$name"
     count=$((count + 1))
   done < <(all_usernames)
@@ -1403,6 +1467,7 @@ TOOLS_MD
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
   ensure_openai_embedded_runtime "$username"
+  ensure_gateway_timezone "$username"
   ensure_agents_skills_allow "$username"
 
   echo ""
