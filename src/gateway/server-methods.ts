@@ -547,6 +547,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.usage",
       "sessions.usage.timeseries",
       "sessions.usage.logs",
+      "sessions.purge",
     ],
     loadHandlers: loadUsageHandlers,
   }),
