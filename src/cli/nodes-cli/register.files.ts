@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -287,7 +287,9 @@ async function copyFromNode(
       totalBytes += bytes;
       defaultRuntime.log(`  ${entry.relativePath} (${formatBytes(bytes)})`);
     }
-    defaultRuntime.log(`\nCopied ${files.length} files (${formatBytes(totalBytes)}) to ${localPath}`);
+    defaultRuntime.log(
+      `\nCopied ${files.length} files (${formatBytes(totalBytes)}) to ${localPath}`,
+    );
   }
 }
 

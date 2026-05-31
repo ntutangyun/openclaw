@@ -1,20 +1,20 @@
-import {
-  type Context,
-  complete,
-  getEnvApiKey,
-  getModel,
-  type Model,
-  type OpenAICompletionsOptions,
-  type Tool,
-} from "@earendil-works/pi-ai";
-import { Type } from "typebox";
-import { formatErrorMessage } from "../infra/errors.js";
-import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import { formatErrorMessage } from "../infra/errors.js";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
+import { complete } from "../llm/stream.js";
+import { type Context, type Model, type Tool } from "../llm/types.js";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -221,10 +221,9 @@ async function fetchOpenRouterModels(
             : null;
 
       const supportedParameters = Array.isArray(obj.supported_parameters)
-        ? obj.supported_parameters
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
+        ? normalizeStringEntries(
+            obj.supported_parameters.filter((value) => typeof value === "string"),
+          )
         : [];
 
       const supportedParametersCount = supportedParameters.length;
@@ -343,7 +342,7 @@ function ensureImageInput(model: OpenAIModel): OpenAIModel {
   }
   return {
     ...model,
-    input: Array.from(new Set([...(model.input ?? []), "image"])),
+    input: uniqueStrings([...(model.input ?? []), "image"]) as OpenAIModel["input"],
   };
 }
 
@@ -418,7 +417,7 @@ export async function scanOpenRouterModels(
     );
   }
 
-  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
@@ -453,7 +452,18 @@ export async function scanOpenRouterModels(
     return true;
   });
 
-  const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
+  const baseModel: OpenAIModel = {
+    id: "openrouter/auto",
+    name: "OpenRouter Auto",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
 
   options.onProgress?.({
     phase: "probe",

@@ -1,11 +1,11 @@
-import { getPingSampleStore } from "../ping-store.js";
 import {
   ErrorCodes,
   errorShape,
   validatePingGwToPeerAckParams,
   validatePingMetricsReportParams,
   validatePingPeerToGwParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { getPingSampleStore } from "../ping-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /**

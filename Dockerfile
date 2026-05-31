@@ -72,6 +72,7 @@ ARG OPENCLAW_NPM_REGISTRY
 ARG OPENCLAW_PIP_INDEX_URL
 ARG OPENCLAW_PNPM_FETCH_TIMEOUT
 ARG OPENCLAW_PNPM_FETCH_RETRIES
+ARG OPENCLAW_EXTENSIONS
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
@@ -84,7 +85,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -127,7 +128,12 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Matrix's native downloader can hit transient release CDN errors while
 # still exiting successfully, so retry the package downloader before failing.
+# Skip the entire check when matrix is not a bundled extension (e.g. msteams-only builds).
 RUN set -eux; \
+    if ! printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'matrix'; then \
+      echo "==> matrix not bundled, skipping matrix-sdk-crypto check"; \
+      exit 0; \
+    fi; \
     echo "==> Verifying critical native addons..."; \
     for attempt in 1 2 3 4 5; do \
       if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
@@ -166,25 +172,22 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm_config_verify_deps_before_run=false pnpm ui:build
 RUN pnpm_config_verify_deps_before_run=false pnpm qa:lab:build
 
-# Prune dev dependencies and strip build-only metadata before copying
-# runtime assets into the final image.
+# Prune dev dependencies, omitted plugin runtime packages, and build-only
+# metadata before copying runtime assets into the final image.
 FROM build AS runtime-assets
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+# BuildKit cache mounts are not part of cached layers; seed tarballs for the
+# installed prod graph in the same step that runs offline prune.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    pnpm_out="$(mktemp)"; \
-    (CI=true pnpm prune --prod --ignore-scripts \
+    pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
+    CI=true pnpm prune --prod --ignore-scripts \
       --config.offline=true \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc 2>&1 || true) | tee "$pnpm_out"; \
-    if grep -q ', done' "$pnpm_out"; then \
-      echo "==> pnpm prune completed successfully"; \
-    else \
-      echo "ERROR: pnpm prune did not finish"; exit 1; \
-    fi && \
+      --config.supportedArchitectures.libc=glibc && \
+    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     node scripts/postinstall-bundled-plugins.mjs && \
-    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     node scripts/check-package-dist-imports.mjs /app
 
@@ -264,6 +267,7 @@ COPY --from=runtime-assets --chown=gateway:gateway /app/package.json .
 COPY --from=runtime-assets --chown=gateway:gateway /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=gateway:gateway /app/patches ./patches
 COPY --from=runtime-assets --chown=gateway:gateway /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=gateway:gateway /app/src/agents/templates ./src/agents/templates
 COPY --from=runtime-assets --chown=gateway:gateway /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=gateway:gateway /app/skills ./skills
 COPY --from=runtime-assets --chown=gateway:gateway /app/docs ./docs
@@ -401,10 +405,20 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state dir so first-run Docker named volumes mounted
-# here inherit gateway ownership instead of root-owned state.
-RUN install -d -m 0700 -o gateway -g gateway /home/gateway/.openclaw && \
-    stat -c '%U:%G %a' /home/gateway/.openclaw | grep -qx 'gateway:gateway 700'
+# Pre-create default named-volume mount points so first-run Docker volumes copy
+# gateway ownership from the image instead of starting as root-owned directories.
+# NOTE: /home/gateway/.config must be created with gateway ownership first so that
+# the leaf /home/gateway/.config/openclaw inherits the correct parent permissions.
+# Without this, install -d leaves /home/gateway/.config as root:root (issue #85968).
+RUN install -d -m 0755 -o gateway -g gateway /home/gateway/.config && \
+    install -d -m 0700 -o gateway -g gateway \
+      /home/gateway/.openclaw \
+      /home/gateway/.openclaw/workspace \
+      /home/gateway/.config/openclaw && \
+    stat -c '%U:%G %a' /home/gateway/.openclaw | grep -qx 'gateway:gateway 700' && \
+    stat -c '%U:%G %a' /home/gateway/.openclaw/workspace | grep -qx 'gateway:gateway 700' && \
+    stat -c '%U:%G %a' /home/gateway/.config | grep -qx 'gateway:gateway 755' && \
+    stat -c '%U:%G %a' /home/gateway/.config/openclaw | grep -qx 'gateway:gateway 700'
 
 ENV NODE_ENV=production
 

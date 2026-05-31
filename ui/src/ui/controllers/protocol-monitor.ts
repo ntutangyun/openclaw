@@ -1,4 +1,4 @@
-import { GATEWAY_CLIENT_IDS } from "../../../../src/gateway/protocol/client-info.ts";
+import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 
 /**
@@ -2889,10 +2889,7 @@ async function runBrowserPingCycle(): Promise<void> {
   }
 }
 
-export function handleBrowserPingGwToPeer(
-  client: GatewayBrowserClient,
-  payload: unknown,
-): void {
+export function handleBrowserPingGwToPeer(client: GatewayBrowserClient, payload: unknown): void {
   const peerT1 = Date.now();
   if (!payload || typeof payload !== "object") return;
   const data = payload as { pingId?: unknown; gatewayT0?: unknown };

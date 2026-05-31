@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape, validateTimeSyncParams } from "../protocol/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateTimeSyncParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /**

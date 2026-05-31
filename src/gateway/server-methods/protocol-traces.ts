@@ -1,5 +1,9 @@
+import {
+  ErrorCodes,
+  errorShape,
+  validateProtocolTracesRxReportParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { getProtocolTraceStore } from "../protocol-trace-store.js";
-import { ErrorCodes, errorShape, validateProtocolTracesRxReportParams } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /**

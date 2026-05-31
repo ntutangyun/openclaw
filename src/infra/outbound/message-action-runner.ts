@@ -1,14 +1,18 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  readNumberParam,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
+import {
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -33,10 +37,9 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -731,7 +734,60 @@ async function handleInternalSourceReplySendAction(
     to: "current-run",
     handledBy: "internal-source",
     payload,
+    toolResult: buildInternalSourceReplyToolResult(payload),
     dryRun,
+  };
+}
+
+function buildInternalSourceReplyToolResult(payload: {
+  status: string;
+  deliveryStatus: string;
+  channel: ChannelId;
+  target: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplySink?: "internal-ui";
+  sourceReply: ReplyPayload;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  dryRun: boolean;
+}): AgentToolResult<{
+  status: string;
+  deliveryStatus: string;
+  channel: ChannelId;
+  target: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplySink?: "internal-ui";
+  sourceReply: ReplyPayload;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  dryRun: boolean;
+}> {
+  const action = payload.dryRun ? "Prepared" : "Sent";
+  const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${action} visible reply to the current webchat conversation${sink}.`,
+      },
+    ],
+    details: {
+      status: payload.status,
+      deliveryStatus: payload.deliveryStatus,
+      channel: payload.channel,
+      target: payload.target,
+      ...(payload.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
+        : {}),
+      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
+      sourceReply: payload.sourceReply,
+      ...(payload.message ? { message: payload.message } : {}),
+      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
+      dryRun: payload.dryRun,
+    },
   };
 }
 
@@ -748,14 +804,27 @@ async function buildSendPayloadParts(params: {
   if (actionParams.pin === true && actionParams.delivery == null) {
     actionParams.delivery = { pin: { enabled: true } };
   }
+  // Models may emit message body under non-canonical aliases.
+  if (typeof actionParams.message !== "string" || !actionParams.message.trim()) {
+    for (const alias of ["SendMessage", "content", "text"] as const) {
+      const value = actionParams[alias];
+      if (typeof value === "string" && value.trim()) {
+        actionParams.message = stripFormattedReasoningMessage(value);
+        console.warn(`[message-tool] normalized alias "${alias}" to "message" for send action`);
+        break;
+      }
+    }
+  }
   const mediaHint =
     readStringParam(actionParams, "media", { trim: false }) ??
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
     readStringParam(actionParams, "fileUrl", { trim: false });
+  const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
-  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
+  const hasMediaHint =
+    Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
@@ -771,7 +840,10 @@ async function buildSendPayloadParts(params: {
     message = caption;
   }
 
-  const parsed = parseReplyDirectives(message);
+  const parsed = parseInlineDirectives(message, {
+    stripAudioTag: true,
+    stripReplyTags: true,
+  });
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
@@ -783,13 +855,12 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const mediaUrlHint of mediaUrlHints) {
+    pushMedia(mediaUrlHint);
+  }
   for (const attachmentMediaHint of attachmentMediaHints) {
     pushMedia(attachmentMediaHint);
   }
-  for (const url of parsed.mediaUrls ?? []) {
-    pushMedia(url);
-  }
-  pushMedia(parsed.mediaUrl);
 
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
@@ -798,7 +869,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = parsed.text;
+  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
@@ -843,8 +914,7 @@ async function buildSendPayloadParts(params: {
   const asVoice =
     readBooleanParam(actionParams, "asVoice") ??
     readBooleanParam(actionParams, "audioAsVoice") ??
-    parsed.audioAsVoice ??
-    false;
+    parsed.audioAsVoice;
   const bestEffort = readBooleanParam(actionParams, "bestEffort");
   const silent = readBooleanParam(actionParams, "silent");
   const mirrorMediaUrls =
@@ -981,9 +1051,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      senderIsOwner: input.senderIsOwner,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,
@@ -1090,7 +1160,6 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       agentId,
       requesterSenderId: input.requesterSenderId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
@@ -1108,9 +1177,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
         throw new Error("pollOption requires at least two values");
       }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-        strict: true,
+      const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
+        message: "pollDurationHours must be a positive integer",
       });
 
       return {
@@ -1289,17 +1357,21 @@ export async function runMessageAction(
     requesterSenderId: input.requesterSenderId,
     senderIsOwner: input.senderIsOwner,
   });
+  const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
     extraParamKeys: extraActionMediaSourceParamKeys,
+    structuredAttachments: structuredAttachmentMode,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+      structuredAttachments: structuredAttachmentMode,
+    }),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -1321,6 +1393,7 @@ export async function runMessageAction(
     action,
     dryRun,
     mediaPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const resolvedTarget = await resolveActionTarget({

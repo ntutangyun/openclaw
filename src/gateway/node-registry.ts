@@ -1,4 +1,12 @@
 import { randomUUID } from "node:crypto";
+import {
+  addTimerTimeoutGraceMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -73,6 +81,7 @@ type PingableSocket = {
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const WEBSOCKET_OPEN_READY_STATE = 1;
+const SLOW_CONSUMER_CLOSE_CODE = 1008;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -108,7 +117,7 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
     return undefined;
   }
   const timeoutMs = Math.trunc(value);
-  return timeoutMs > 0 ? timeoutMs : null;
+  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
 function resolvePendingSystemRunEvent(params: {
@@ -438,7 +447,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -526,7 +535,8 @@ export class NodeRegistry {
     if (typeof timeoutMs !== "number") {
       return null;
     }
-    return Date.now() + timeoutMs + AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS;
+    const durationMs = addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS);
+    return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
   }
 
   private matchAuthorizedSystemRunEvent(params: {
@@ -588,7 +598,10 @@ export class NodeRegistry {
 
   private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
     for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.expiresAtMs !== null && event.expiresAtMs <= now) {
+      if (
+        event.expiresAtMs !== null &&
+        !isFutureDateTimestampMs(event.expiresAtMs, { nowMs: now })
+      ) {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
@@ -658,6 +671,9 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
+    if (this.rejectSlowNodeSocket(node)) {
+      return false;
+    }
     try {
       // Stamp `sentAt` so the node can derive one-way wire latency, matching
       // the operator-bound send path in server/ws-connection.ts.
@@ -702,6 +718,9 @@ export class NodeRegistry {
     ) {
       return false;
     }
+    if (this.rejectSlowNodeSocket(node)) {
+      return false;
+    }
     try {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       node.client.socket.send(
@@ -715,5 +734,23 @@ export class NodeRegistry {
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
     return this.sendEventInternal(node, event, payload);
+  }
+
+  private rejectSlowNodeSocket(node: NodeSession): boolean {
+    if (!(node.client.socket.bufferedAmount > MAX_BUFFERED_BYTES)) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.outbound_buffer",
+      bytes: node.client.socket.bufferedAmount,
+      limitBytes: MAX_BUFFERED_BYTES,
+      reason: "ws_send_buffer_close",
+    });
+    try {
+      node.client.socket.close(SLOW_CONSUMER_CLOSE_CODE, "slow consumer");
+    } catch {
+      /* ignore */
+    }
+    return true;
   }
 }
