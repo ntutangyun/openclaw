@@ -391,6 +391,50 @@ ensure_tools_deny() {
   fi
 }
 
+# Pin official OpenAI models to OpenClaw's embedded agent runtime ("openclaw")
+# instead of the Codex app-server. Official OpenAI defaults to the Codex runtime,
+# but Codex runs as a separate process and keeps per-token deltas internal, so
+# the agent|model protocol monitor (TTFT / throughput / tcp-layer) stays empty.
+# The embedded runtime emits the lifecycle/assistant events and uses the
+# instrumented model fetch the monitor reads. Idempotent; safe on every
+# start/restart. Non-OpenAI providers (ollama/vllm) already use the embedded
+# runtime, so only openai/* entries are touched.
+ensure_openai_embedded_runtime() {
+  local username="$1"
+  local container="openclaw-${username}-gateway"
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    return 0
+  fi
+
+  local output
+  output="$(docker exec "$container" node -e '
+    const fs = require("fs");
+    const cfgPath = "/home/gateway/.openclaw/openclaw.json";
+    if (!fs.existsSync(cfgPath)) process.exit(0);
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); }
+    catch { process.exit(0); }
+    const models = cfg.agents && cfg.agents.defaults && cfg.agents.defaults.models;
+    if (!models || typeof models !== "object") process.exit(0);
+    let changed = false;
+    for (const key of Object.keys(models)) {
+      if (!key.startsWith("openai/")) continue;
+      const m = models[key];
+      if (!m || typeof m !== "object") continue;
+      if (m.agentRuntime && m.agentRuntime.id === "openclaw") continue;
+      m.agentRuntime = { id: "openclaw" };
+      changed = true;
+    }
+    if (!changed) process.exit(0);
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+    console.log("updated");
+  ' 2>&1)"
+  if [[ "$output" == *updated* ]]; then
+    echo "==> Pinned OpenAI models to the embedded runtime for '$username' (protocol-monitor); recreating gateway to apply..."
+    compose_cmd "$username" up -d --force-recreate openclaw-gateway >/dev/null
+  fi
+}
+
 ensure_llm_idle_timeout() {
   # agents.defaults.llm.idleTimeoutSeconds was deprecated 2026-04-27 and
   # removed from the config schema. The replacement is per-provider:
@@ -929,6 +973,7 @@ cmd_start() {
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_openai_embedded_runtime "$username"
   ensure_agents_skills_allow "$username"
   echo "Gateway started."
 
@@ -1012,6 +1057,7 @@ cmd_restart() {
   compose_cmd "$username" up -d openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_openai_embedded_runtime "$username"
   ensure_agents_skills_allow "$username"
   echo "Gateway restarted."
 }
@@ -1025,6 +1071,7 @@ cmd_start_all() {
     compose_cmd "$name" up -d openclaw-gateway
     ensure_tools_deny "$name"
     ensure_llm_idle_timeout "$name"
+    ensure_openai_embedded_runtime "$name"
     ensure_agents_skills_allow "$name"
     count=$((count + 1))
   done < <(all_usernames)
@@ -1355,6 +1402,7 @@ TOOLS_MD
   compose_cmd "$username" up -d --force-recreate openclaw-gateway
   ensure_tools_deny "$username"
   ensure_llm_idle_timeout "$username"
+  ensure_openai_embedded_runtime "$username"
   ensure_agents_skills_allow "$username"
 
   echo ""
