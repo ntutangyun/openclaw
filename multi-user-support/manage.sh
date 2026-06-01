@@ -1778,9 +1778,16 @@ ctx_cap = int(sys.argv[5])
 
 DEFAULT_CTX = 131072
 
-def get_context_window(model_name, base_url):
-    \"\"\"Query /api/show to get the model's context_length, clamped to ctx_cap.\"\"\"
+def get_model_info(model_name, base_url):
+    \"\"\"Query /api/show once for the model's context_length (clamped to ctx_cap)
+    and whether it natively supports thinking. Ollama 0.5+ returns a
+    'capabilities' array (e.g. ['completion', 'tools', 'thinking', 'vision']);
+    the presence of 'thinking' is the authoritative signal for thinking
+    support — this is what makes OpenClaw treat the model as reasoning-capable
+    (reasoning: true), so the chat thinking control defaults on instead of
+    showing 'Inherited: off'. Name heuristics are deliberately avoided.\"\"\"
     detected = DEFAULT_CTX
+    supports_thinking = False
     try:
         req = urllib.request.Request(
             base_url.rstrip('/') + '/api/show',
@@ -1793,11 +1800,13 @@ def get_context_window(model_name, base_url):
             if key.endswith('.context_length') and isinstance(value, (int, float)) and value > 0:
                 detected = int(value)
                 break
+        caps = info.get('capabilities')
+        if isinstance(caps, list) and 'thinking' in caps:
+            supports_thinking = True
     except Exception:
         pass
-    if ctx_cap > 0 and detected > ctx_cap:
-        return ctx_cap
-    return detected
+    ctx = ctx_cap if (ctx_cap > 0 and detected > ctx_cap) else detected
+    return ctx, supports_thinking
 
 # Mirror src/agents/self-hosted-provider-defaults.ts. 8192 is usually too
 # tight for reasoning-capable self-hosted models (ollama/gemma4, qwen3,
@@ -1813,13 +1822,19 @@ provider_models = []
 for m in models:
     name = m['name']
     params = m.get('details', {}).get('parameter_size', '')
-    ctx = get_context_window(name, ollama_url)
-    provider_models.append({
+    ctx, supports_thinking = get_model_info(name, ollama_url)
+    entry = {
         'id': name,
         'name': f'{name} ({params})' if params else name,
         'contextWindow': ctx,
         'maxTokens': SELF_HOSTED_MAX_TOKENS,
-    })
+    }
+    # Mark reasoning-capable models so OpenClaw's thinking default resolves to
+    # 'low' (resolveThinkingDefaultForModel) and the ollama plugin forwards the
+    # native `think` param. Only set when /api/show advertises 'thinking'.
+    if supports_thinking:
+        entry['reasoning'] = True
+    provider_models.append(entry)
 
 with open(provider_file, 'w') as f:
     json.dump({'baseUrl': docker_url, 'models': provider_models}, f)
