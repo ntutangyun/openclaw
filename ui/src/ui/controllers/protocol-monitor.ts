@@ -2966,6 +2966,8 @@ export async function purgeAllProtocolMonitorState(
   host: ProtocolMonitorHost & {
     usageResult: unknown;
     usageCostSummary: unknown;
+    chatMessages: unknown[];
+    chatToolMessages: unknown[];
   },
 ): Promise<void> {
   if (!host.client || !host.connected) {
@@ -3027,4 +3029,11 @@ export async function purgeAllProtocolMonitorState(
   await clearProtocolTraces(host);
   host.usageResult = null;
   host.usageCostSummary = null;
+  // The purge unlinked the session transcripts, so the chat history is now
+  // empty on the gateway. Clear the live chat view to match (a fresh reassign
+  // triggers a Lit re-render); otherwise the chat window keeps showing stale
+  // messages — e.g. the first user request and final response that survive the
+  // partial reactive update — until the operator manually refreshes the page.
+  host.chatMessages = [];
+  host.chatToolMessages = [];
 }
